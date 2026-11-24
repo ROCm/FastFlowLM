@@ -1152,7 +1152,6 @@ class DevKitFamilies(unittest.TestCase):
                      "flm-dev-kit/FLM_DLL/include/buffer.hpp",
                      "flm-dev-kit/FLM_DLL/include/models/nosuch/x.hpp",
                      "flm-dev-kit/FLM_DLL/detail/nosuch/x.cpp",
-                     "flm-dev-kit/FLM_DLL/common/modules/sampler.cpp",
                      "flm-dev-kit/FLM_DLL/cmake/flm_hrx.cmake",
                      "flm-dev-kit/FLM_DLL/build.sh",
                      "flm-dev-kit/FLM_DLL/build_manylinux.sh",
@@ -1560,6 +1559,255 @@ class HrxPin(unittest.TestCase):
         lin = (root / ".github/actions/devkit-build-lib-lin/action.yml").read_text(encoding="utf-8")
         # build_manylinux.sh (which fetches the pin) only in the HRX build.
         self.assertRegex(lin, r"runtime == 'hrx'")
+
+
+REPO = HERE.parents[2]
+DLL = "flm-dev-kit/FLM_DLL/"
+XB = "flm-dev-kit/FLM_Xclbin/"
+
+
+def tracked(*pathspecs: str) -> list[str]:
+    return subprocess.run(["git", "-C", str(REPO), "ls-files", "--", *pathspecs],
+                          capture_output=True, text=True, check=True).stdout.split()
+
+
+class DevKitNoStage(unittest.TestCase):
+    """Dev-kit files no engine or bitstream build reads (DEVKIT_DLL_NO_BUILD,
+    xclbin_no_bitstream) and kernels no catalog model loads
+    (DEVKIT_XCLBIN_UNSTAGED): no engine family, no staging, no bench, so no
+    rebuilt (not byte-reproducible) binary asks for a swap."""
+
+    def out(self, *files: str) -> dict:
+        return changes.decide(list(files)).outputs()
+
+    def assert_unstaged(self, path: str, areas: str) -> None:
+        o = self.out(path)
+        self.assertEqual((o["devkit_areas"], o["devkit_families"], o["devkit_stage"], o["devkit_bench"]),
+                         (areas, "", "false", "false"), path)
+        self.assertEqual(o["run_tests"], "false", path)
+
+    def test_dll_files_no_engine_compiles(self):
+        for path in (f"{DLL}common/modules/sampler.cpp",
+                     f"{DLL}tests/hrx_executable_ownership_test.cpp",
+                     f"{DLL}detail/d3_npu/tools/vision_bench.cpp",
+                     f"{DLL}detail/lfm3_npu/tools/check_goldens.py",
+                     f"{DLL}detail/d3_npu/tools/fixtures/case.json",
+                     f"{DLL}detail/minicpm_ocr_npu/host_ref/compare_engine.py",
+                     f"{DLL}detail/minicpm_ocr_npu/host_ref/Makefile",
+                     f"{DLL}detail/qwen3_asr_npu/audio/test/conv_cache_test.cpp",
+                     f"{DLL}detail/qwen3_asr_npu/audio/test/Makefile",
+                     f"{DLL}detail/qwen3_asr_npu/decoder/test_decoder_goldens.cpp",
+                     f"{DLL}detail/qwen3_asr_npu/decoder/Makefile"):
+            with self.subTest(path=path):
+                # The dll area still builds (devkit-engines; its lin-hrx job runs tests/).
+                self.assert_unstaged(path, "dll")
+
+    def test_dll_files_an_engine_may_compile_still_stage(self):
+        for path, fams in ((f"{DLL}detail/d3_npu/tools/x.hpp", {"d3"}),
+                           (f"{DLL}detail/d3_npu/tools/x.HPP", {"d3"}),
+                           (f"{DLL}detail/d3_npu/tools/x.cuh", {"d3"}),
+                           (f"{DLL}detail/d3_npu/tools/CMakeLists.txt", {"d3"}),
+                           (f"{DLL}detail/qwen3_asr_npu/audio/test/x.hpp", {"r2t2"}),
+                           (f"{DLL}detail/qwen3_asr_npu/decoder/qwen3_asr_cpu_decoder.cpp", {"r2t2"}),
+                           (f"{DLL}detail/qwen3_asr_npu/audio/qwen3_asr_audio_encoder.cpp", {"r2t2"}),
+                           (f"{DLL}detail/d3_npu/d3_npu.cpp", {"d3"})):
+            with self.subTest(path=path):
+                o = self.out(path)
+                self.assertEqual(devkit_families(o), fams)
+                self.assertEqual(o["devkit_stage"], "true")
+        # qwen3_5_omni globs recursively: its tools/ is engine source.
+        self.assertIsNone(changes.DEVKIT_DLL_NO_BUILD.match(f"{DLL}detail/qwen3_5_omni/tools/x.cpp"))
+        # FLM_DLL/common/ only: an engine's own common/ is its source.
+        self.assertEqual(devkit_families(self.out(f"{DLL}detail/qwen3_8mtp_npu/common/layer.cpp")),
+                         {"qwen3.8-mtp", "qwen3.8-dflash2"})
+
+    def test_kernel_host_programs_and_viewers(self):
+        for path in (f"{XB}Dequant_Q4_1_w128x512/host/dequant.cpp",
+                     f"{XB}Dequant_Q4_1_w128x512/visualize.py",
+                     f"{XB}Gemma4/decoding/host/host.cpp"):
+            with self.subTest(path=path):
+                o = self.out(path)
+                self.assertEqual((o["devkit_areas"], o["devkit_stage"], o["devkit_bench"], o["run_tests"]),
+                                 ("", "false", "false", "false"))
+                # devkit-static still runs: the notice check of an added file.
+                self.assertEqual(o["devkit_catalog"], "true")
+        # With a kernel source, the kernel still stages.
+        o = self.out(f"{XB}Dequant_Q4_1_w128x512/host/dequant.cpp", f"{XB}Dequant_Q4_1_w128x512/kernel/x.cc")
+        self.assertEqual((o["devkit_areas"], o["devkit_stage"]), ("xclbin", "true"))
+        # Its bitstream recipe writes and compares these.
+        o = self.out(f"{XB}minicpm_ocr/vision_overlay/host/op_configs.hpp")
+        self.assertEqual((o["devkit_areas"], o["devkit_stage"]), ("xclbin", "true"))
+        # Not a C/C++ source: host.mk -includes host/*.d during make bitstream.
+        self.assertEqual(self.out(f"{XB}Dequant_Q4_1_w128x512/host/host.d")["devkit_stage"], "true")
+
+    def test_host_must_sit_in_the_deepest_unit(self):
+        nb = changes.xclbin_no_bitstream
+        self.assertTrue(nb(f"{XB}MM/host/host.cpp", {"MM"}))
+        # A unit named host, or a host/ inside a unit's sources: kernel source.
+        self.assertFalse(nb(f"{XB}MM/host/kernel/mm.cc", {"MM", "MM/host"}))
+        self.assertFalse(nb(f"{XB}MM/kernel/host/x.cc", {"MM"}))
+        self.assertFalse(nb(f"{XB}MM/sub/visualize.py", {"MM"}))
+        # Outside any unit, or units unknown: kernel source.
+        self.assertFalse(nb(f"{XB}Nope/host/host.cpp", {"MM"}))
+        self.assertFalse(nb(f"{XB}MM/host/host.cpp", None))
+
+    def test_every_tracked_match_is_in_a_unit(self):
+        units = changes.load_build_units(REPO)
+        self.assertIsNotNone(units)
+        shaped = [f for f in tracked(XB) if changes.XCLBIN_NO_BITSTREAM.match(f)]
+        self.assertGreater(len(shaped), 100)
+        self.assertEqual([f for f in shaped if not changes.xclbin_no_bitstream(f, units)], [])
+
+    def test_smolvla_kernels_build_but_stage_nothing(self):
+        self.assert_unstaged(f"{XB}SMOLVLA/expert_attn/Makefile", "xclbin")
+        o = self.out(f"{XB}SMOLVLA/expert_attn/Makefile", f"{XB}Dequant_Q4_1_w128x512/kernel/x.cc")
+        self.assertEqual(o["devkit_stage"], "true")
+
+
+class DevKitNoStageGuards(unittest.TestCase):
+    """What DEVKIT_DLL_NO_BUILD, XCLBIN_NO_BITSTREAM and DEVKIT_XCLBIN_UNSTAGED
+    rely on. A failure here means a build started reading such a file: widen
+    what counts as source (changes.py) before changing the test."""
+
+    def lines(self, path: str):
+        for n, line in enumerate((REPO / path).read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if not line.lstrip().startswith("#"):
+                yield n, line
+
+    def grep(self, pattern: str, *where: str) -> list[str]:
+        return subprocess.run(["git", "-C", str(REPO), "grep", "-nE", pattern, "--", *where],
+                              capture_output=True, text=True).stdout.splitlines()
+
+    ENGINE_BUILD = (f"{DLL}detail/*/CMakeLists.txt", f"{DLL}detail/*/Makefile", f"{DLL}detail/*/*.mk")
+    DLL_BUILD = (f"{DLL}*.mk", f"{DLL}cmake/*", f"{DLL}build*.sh", f"{DLL}build.ps1", f"{DLL}CMakeLists.txt")
+
+    @staticmethod
+    def top(paths: list[str], depth: int) -> list[str]:
+        """Only the files depth directories below FLM_DLL (a pathspec * also
+        matches across "/")."""
+        return [p for p in paths if p[len(DLL):].count("/") == depth]
+
+    def test_engine_globs_do_not_reach_subdirectories(self):
+        # Recursive, or one level down from the engine's own directory
+        # ("*/*.cpp"): either would compile tools/ or host_ref/. Globs into
+        # ../../include/*/ are other directories.
+        bad = []
+        for path in self.top(tracked(*self.ENGINE_BUILD), 2) + self.top(tracked(*self.DLL_BUILD[:1], *self.DLL_BUILD[2:]), 0) \
+                + self.top(tracked(self.DLL_BUILD[1]), 1):
+            if path.startswith(f"{DLL}detail/qwen3_5_omni/"):
+                continue
+            for n, line in self.lines(path):
+                if re.search(r"GLOB_RECURSE|\$\(shell\s+find\b|rwildcard|Get-ChildItem\b.*-Recurse", line) \
+                        or (re.search(r"wildcard|GLOB", line) and re.search(r"""[\s"'(]\*/""", line)):
+                    bad.append(f"{path}:{n}: {line.strip()}")
+        self.assertEqual(bad, [])
+
+    def test_no_engine_library_build_names_the_excluded_dirs(self):
+        # CMakeLists.txt build the Windows libraries: none may name them, not
+        # even as add_subdirectory(tools). A Makefile may in the recipes of
+        # its own opt-in programs (d3_npu, lfm3_npu build tools/ into
+        # $(BIN_DIR)), never in a variable, a prerequisite, or a recipe of the
+        # library or all.
+        excluded = r"\b(tools|host_ref)\b|audio/test\b|\btest_[^/\s]*\.cpp\b"
+        bad = []
+        for path in self.top(tracked(*self.ENGINE_BUILD), 2):
+            cmake = path.endswith("CMakeLists.txt")
+            target = ""
+            for n, line in self.lines(path):
+                if not cmake and not line.startswith("\t") and re.match(r"^[^\s=#][^=]*:(?!=)", line):
+                    target = line.split(":", 1)[0]
+                if not re.search(excluded, line):
+                    continue
+                recipe = line.startswith("\t")
+                library = re.search(r"^all$|\$\((TARGET|LIB\w*)\)|\.(so|dll|a)$", target.strip())
+                if cmake or not recipe or library:
+                    bad.append(f"{path}:{n}: {line.strip()}")
+        self.assertEqual(bad, [])
+
+    def test_nothing_reads_flm_dll_common_or_tests(self):
+        hits = self.grep(r"FLM_DLL\w*\)?\}?/(common|tests)\b", "flm-dev-kit", "src", ".github/workflows",
+                         ".github/actions", "CMakeLists.txt")
+        # From detail/<engine>/, ../(../)common and tests are FLM_DLL's.
+        hits += [h for h in self.grep(r"\.\./(\.\./)*(common|tests)\b", *self.ENGINE_BUILD)
+                 if h.split(":", 1)[0][len(DLL):].count("/") == 2]
+        # FLM_DLL's own build files and scripts, every engine includes or runs.
+        hits += [h for h in self.grep(r"\b(common|tests)\b", *self.DLL_BUILD)
+                 if h.split(":", 1)[0][len(DLL):].count("/") <= 1 and not h.split(":", 1)[0].startswith(f"{DLL}detail/")]
+        # devkit-build-lib-lin compiles and runs tests/ on its own (the dll area keeps running it).
+        hits = [h for h in hits if not h.startswith(".github/actions/devkit-build-lib-lin/")]
+        self.assertEqual(hits, [])
+
+    def test_no_source_includes_an_excluded_file(self):
+        # A quoted #include reaches any directory: no C/C++ source outside the
+        # excluded files includes one (a .cpp is on the allowlist, and
+        # host/*.hpp is excluded).
+        bad = []
+        for path in tracked("flm-dev-kit"):
+            if not re.search(r"\.(c|cc|cpp|cxx|h|hh|hpp|hxx|inl)$", path, re.I) \
+                    or changes.DEVKIT_DLL_NO_BUILD.match(path) or changes.XCLBIN_NO_BITSTREAM.match(path):
+                continue
+            for n, line in enumerate((REPO / path).read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                m = re.match(r"\s*#\s*include\s*[\"<]([^\">]+)", line)
+                if m and re.search(r"(^|/)(tools|host_ref|host)/|audio/test/|(^|/)\.\./(\.\./)*(common|tests)/",
+                                   m.group(1)):
+                    bad.append(f"{path}:{n}: {line.strip()}")
+        self.assertEqual(bad, [])
+
+    def test_only_known_units_reach_host_outside_host_mk(self):
+        # make bitstream parses each unit's Makefile and its makefiles/*.mk.
+        # These name host/ (or -Ihost) outside host.mk, and were checked: the
+        # Hy_* prefill_overlay regs and run.exe targets (no bitstream
+        # prerequisite), and vision_overlay, which XCLBIN_NO_BITSTREAM leaves out.
+        known = {"Hy_MT2_1.8B/prefill_overlay", "Hy_mem_30BA3B/prefill_overlay", "minicpm_ocr/vision_overlay"}
+        seen = set()
+        for path in tracked(f"{XB}**/Makefile", f"{XB}**/*.mk"):
+            unit = path[len(XB):].rsplit("/", 1)[0].removesuffix("/makefiles")
+            if path.endswith("/host.mk"):
+                # Its rules build the host program only, never a kernel.
+                for n, line in self.lines(path):
+                    if not line.startswith("\t") and re.match(r"^[^\s=#][^=]*:(?!=)", line):
+                        self.assertNotRegex(line.split(":", 1)[0], r"(?i)xclbin|bitstream|insts|kernel|mlir",
+                                            f"{path}:{n}")
+                continue
+            if any(re.search(r"(^|[^A-Za-z0-9_])host/|-I\s*(\S*/)?host\b(?!_)", line) for _, line in self.lines(path)):
+                seen.add(unit)
+        self.assertEqual(seen - known, set())
+        # Kernel and IRON sources read no host/ file (a string naming one, or an include).
+        bad = []
+        for path in tracked(f"{XB}**/kernel/*", f"{XB}**/iron/*"):
+            text = (REPO / path).read_text(encoding="utf-8", errors="replace")
+            for n, line in enumerate(text.splitlines(), 1):
+                if re.search(r"""#\s*include\s*["<][^">]*\bhost/|["'][^"'\s]*\bhost/""", line):
+                    bad.append(f"{path}:{n}: {line.strip()}")
+        self.assertEqual(bad, [])
+
+    def test_visualize_runs_only_for_route(self):
+        # visualize.py renders route.json ("make route"): no other target
+        # runs it, and no Python imports it.
+        bad = []
+        for path in tracked(f"{XB}**/Makefile", f"{XB}**/*.mk"):
+            target = ""
+            for n, line in self.lines(path):
+                if not line.startswith("\t") and re.match(r"^[^\s=#][^=]*:(?!=)", line):
+                    target = line.split(":", 1)[0].strip()
+                if "visualize" in line and not (line.startswith("\t") and target in ("route", "viz")):
+                    bad.append(f"{path}:{n}: {line.strip()}")
+        bad += self.grep(r"^\s*(import\s+visualize|from\s+visualize\b)", f"{XB}**/*.py")
+        self.assertEqual(bad, [])
+
+    def test_no_catalog_model_loads_a_smolvla_kernel(self):
+        units = json.loads((REPO / changes.BUILD_UNITS).read_text())["units"]
+        smol = {f"xclbins-{u.replace('/', '_')}" for u in units if u.startswith("SMOLVLA/")}
+        self.assertTrue(smol)
+        assignment = json.loads((REPO / f"{XB}kernel_assignment.json").read_text())["models"]
+        users = sorted(m for m, e in assignment.items()
+                       if any(a == s or a.startswith(s + "_") for a in (e.get("kernels") or {}).values() for s in smol))
+        served_elsewhere = set(json.loads((REPO / changes.DEVKIT_ENGINES).read_text()).get("served_elsewhere") or [])
+        self.assertEqual([m for m in users if m not in served_elsewhere], [])
+        # And no other unit builds from SMOLVLA/.
+        refs = subprocess.run(["git", "-C", str(REPO), "grep", "-ln", "SMOLVLA", "--", f"{XB}*Makefile", f"{XB}*.mk"],
+                              capture_output=True, text=True).stdout.split()
+        self.assertEqual([r for r in refs if not r.startswith(f"{XB}SMOLVLA/")], [])
 
 
 if __name__ == "__main__":

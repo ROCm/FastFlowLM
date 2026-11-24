@@ -97,7 +97,7 @@ from typing import Optional
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
-from changes import DEVKIT_CI, OUTSIDE_BUILD_AND_TEST, SHIPPED_KERNEL  # noqa: E402
+from changes import DEVKIT_CI, OUTSIDE_BUILD_AND_TEST, SHIPPED_KERNEL, xclbin_no_bitstream  # noqa: E402
 from devkit_rtp_lock import LOCK_REL as RTP_LOCK, changed_artifacts  # noqa: E402
 
 XCLBIN = "flm-dev-kit/FLM_Xclbin"
@@ -111,7 +111,8 @@ MODES = ("changed", "assigned", "all")
 # docker/aie-build* select no area (devkit-aie-image.yml checks them), so they
 # add the canary only when another change already runs this plan.
 TOOLCHAIN = re.compile(r"^(docker/aie-build[^/]*|flm-dev-kit/FLM_Xclbin/toolchain\.(lock|image))$")
-# Files under FLM_Xclbin no "make bitstream" reads.
+# Files under FLM_Xclbin no "make bitstream" reads (and changes.py
+# xclbin_no_bitstream: units' host program sources and visualize.py).
 NO_BITSTREAM = re.compile(
     r"^flm-dev-kit/FLM_Xclbin/(.*\.md|(.*/)?\.gitignore|host_common/.*|setup\.sh|build_drivers\.sh"
     r"|dimhelper\.py)$")
@@ -301,7 +302,8 @@ def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
                     plan.add_unit(u)
         elif SHIPPED_KERNEL.match(path):
             add_shipped_kernel(plan, path)
-        elif path.startswith(XCLBIN + "/") and not NO_BITSTREAM.match(path):
+        elif path.startswith(XCLBIN + "/") and not (NO_BITSTREAM.match(path)
+                                                    or xclbin_no_bitstream(path, plan.units)):
             for u in unit_for(path, plan.units, gone):
                 plan.add_unit(u)
 
