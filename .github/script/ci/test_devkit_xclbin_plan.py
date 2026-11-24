@@ -173,6 +173,16 @@ class Changed(unittest.TestCase):
         self.assertEqual(len(plan(files=[f"{X}/Fam/gone/Makefile"], base_units={})["units"]), 3)
         self.assertEqual(xp.unit_for(f"{X}/Fam/gone/x/y.cc", UNITS, {"Fam/gone"}), [])
 
+    def test_host_programs_and_viewers_build_nothing(self):
+        # make bitstream reads neither (changes.xclbin_no_bitstream).
+        for path in (f"{X}/Dequant/host/host.cpp", f"{X}/Dequant/host/sub/x.hpp", f"{X}/Fam/decoding/visualize.py"):
+            with self.subTest(path=path):
+                self.assertEqual(builds(plan(files=[path])), [])
+        # A unit named host is no host program: its kernel source rebuilds it.
+        self.assertEqual(builds(plan(files=[f"{X}/MM/host/kernel/mm.cc"])), [("MM/host", "GENERIC")])
+        # Not a C/C++ source: host.mk -includes host/*.d.
+        self.assertEqual(builds(plan(files=[f"{X}/Dequant/host/host.d"])), [("Dequant", None)])
+
     def test_bench_models_are_source_and_assignment_changes(self):
         # A source change: every user of the rebuilt build.
         r = plan(files=[f"{X}/MM/host/kernel/mm.cc"])

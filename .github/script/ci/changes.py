@@ -85,7 +85,9 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              catalog rules: what src/ ships against the dev kit's JSON)
              reads changed: src/model_list.json, src/xclbins/, src/lib/,
              flm-dev-kit/FLM_DLL/engines.json or FLM_Xclbin/
-             kernel_assignment.{json,md} or build_units.json, or the changed
+             kernel_assignment.{json,md} or build_units.json, a kernel host
+             program or route viewer (XCLBIN_NO_BITSTREAM: for the notice
+             check of an added one), or the changed
              files are unknown. Runs devkit-static (as devkit does) and
              nothing else: no product suite, dev-kit build or staging
   devkit_areas
@@ -96,7 +98,8 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              (src/xclbins/<folder>/<slot>.xclbin), which devkit-xclbins
              rebuilds from its sources to compare (devkit_xclbin_plan.py);
              every area when the changed files are unknown, a changed dev-kit file
-             is in none of them, or the dev-kit CI changed
+             is in none of them, or the dev-kit CI changed. A kernel host
+             program or route viewer (XCLBIN_NO_BITSTREAM) selects none
   devkit_families
              comma-separated catalog families whose dev-kit engines the change
              rebuilds from changed source, whose libraries are staged into
@@ -105,10 +108,12 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              detail/<engine>/ or its include/models/<x>/ headers gives the
              engine's families and those of every engine that uses it; a
              change to anything else that builds into the engines (the
-             shared units, the common headers, common/, cmake/, the build
+             shared units, the common headers, cmake/, the build
              scripts, a src/lib/xrt library they link) or an unknown change
              gives every engine's families. Per-model helper scripts
-             (build_<model>.sh) and model_list*.json give none; an
+             (build_<model>.sh), model_list*.json, FLM_DLL/common/ and
+             tests/, and an engine's tools/ and host_ref/ programs
+             (DEVKIT_DLL_NO_BUILD) give none; an
              engines.json change gives the engines whose entry changed (a
              new engine's). The dev-kit CI gives none: it runs the dev-kit
              builds (every area) to exercise them, but stages nothing, as
@@ -149,8 +154,11 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              kernel_assignment.json, engines.json, the RTP lock and
              toolchain.image), and Build and Test stages something for it to
              bench (devkit_stage). Documentation, images and licence files,
-             the per-model helper scripts and model registries under FLM_DLL
-             (DEVKIT_DLL_NO_BUILD), the kernel build image and its
+             the FLM_DLL files no engine compiles (DEVKIT_DLL_NO_BUILD: the
+             per-model helper scripts, model registries, common/, tests/,
+             engine tools/ and host_ref/), the kernel host programs and
+             route viewers (XCLBIN_NO_BITSTREAM), SmolVLA's kernels
+             (DEVKIT_XCLBIN_UNSTAGED), the kernel build image and its
              toolchain.lock (DEVKIT_ONLY: devkit-aie-image.yml tests those),
              the converter, pybind and launchlib, the product, and CI-only
              changes (.github/, the dev-kit and bench CI included) give
@@ -387,30 +395,107 @@ BUILD_ONLY = re.compile(
 # checks the two agree for every engine both have.
 DEVKIT_DLL = "flm-dev-kit/FLM_DLL/"
 DEVKIT_ENGINES = "flm-dev-kit/FLM_DLL/engines.json"
-# FLM_DLL files that build into no engine library: the per-model dev helpers
-# (CI runs build.sh and build_manylinux.sh) and the model registries.
+# FLM_DLL files that build into no engine library. They keep the dll area
+# (devkit-engines still builds, and its lin-hrx job compiles and runs
+# tests/), but select no engine family, so nothing is staged, benched or
+# swapped for them (engine builds are not byte-reproducible: a rebuild for
+# a file no engine compiles would only churn the committed binaries):
+#   - the per-model dev helpers (CI runs build.sh and build_manylinux.sh) and
+#     the model registries
+#   - common/: no Makefile, CMakeLists.txt or build script reads it
+#     (COMMON_LIB_DIR in the Makefiles is an unused build-output path)
+#   - tests/: compiled and run on its own by devkit-build-lib-lin (HRX), never
+#     into an engine
+#   - an engine's tools/ and host_ref/ and qwen3_asr_npu's audio/test/ and
+#     decoder test programs: own main()s behind opt-in make targets, never in
+#     an engine's "all" or its CMakeLists.txt (whose globs do not reach
+#     subdirectories). An allowlist of file types: a header (or a
+#     CMakeLists.txt) there still counts, as a quoted #include reaches it.
+#     qwen3_5_omni globs recursively (CMakeLists.txt GLOB_RECURSE), so its
+#     subdirectories all count. test_changes.py DevKitNoStageGuards fails
+#     when a build or an #include starts reading any of these
 DEVKIT_DLL_NO_BUILD = re.compile(
     r"^flm-dev-kit/FLM_DLL/(build_(?!manylinux\.sh$)[A-Za-z0-9_]+\.sh|model_list[^/]*\.json"
-    r"|(.*/)?\.gitattributes)$")
+    r"|(.*/)?\.gitattributes|common/.+|tests/.+)$"
+    r"|^flm-dev-kit/FLM_DLL/detail/(?!qwen3_5_omni/)[^/]+/(tools|host_ref)/(.*/)?"
+    r"((?!(?i:CMakeLists\.txt)$)[^/]+\.(?i:cpp|cc|cxx|py|sh|json|md|txt)|Makefile|\.gitignore)$"
+    r"|^flm-dev-kit/FLM_DLL/detail/qwen3_asr_npu/(audio/test/([^/]+\.(?i:cpp|cc|cxx|py|sh|json|md)"
+    r"|Makefile|\.gitignore)|decoder/(test_[^/]*\.cpp|Makefile))$")
+
+# FLM_Xclbin files that "make bitstream" (what devkit-xclbins runs) never
+# reads: a unit's host program sources (host/, built only by "make host",
+# which CI never runs) and its route viewer (visualize.py, "make viz"). They
+# select no dev-kit area and are no kernel source, so no kernel is rebuilt,
+# staged or swapped for them (devkit_xclbin_plan.py maps them to no unit);
+# devkit-static still runs (devkit_catalog) for the copyright-notice check of
+# an added file. Only C/C++ sources: host.mk is parsed by make bitstream and
+# -includes host/*.d. minicpm_ocr/vision_overlay/ is left out: its bitstream
+# recipe writes and compares host/op_configs.hpp and host/overlay_layout.hpp.
+# The regex is the shape; xclbin_no_bitstream() also requires host/ or
+# visualize.py to sit directly in the deepest build unit (build_units.json)
+# holding the file, so a unit named host, or a host/ inside a unit's kernel
+# tree, still counts as kernel source.
+XCLBIN = "flm-dev-kit/FLM_Xclbin/"
+BUILD_UNITS = f"{XCLBIN}build_units.json"
+XCLBIN_NO_BITSTREAM = re.compile(
+    r"^flm-dev-kit/FLM_Xclbin/(?!minicpm_ocr/vision_overlay/)(?:[^/]+/)+"
+    r"(?:host/(?:[^/]+/)*[^/]+\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|inl)|visualize\.py)$")
+
+
+def load_build_units(repo: Path) -> Optional[frozenset]:
+    """The build unit names of build_units.json in repo; None when unreadable."""
+    try:
+        units = json.loads((repo / BUILD_UNITS).read_text(encoding="utf-8"))["units"]
+        return frozenset(u for u in units if isinstance(u, str))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def xclbin_no_bitstream(path: str, units: Optional[Iterable[str]]) -> bool:
+    """Whether path is a kernel host program source or route viewer no
+    bitstream build reads: XCLBIN_NO_BITSTREAM's shape, and host/ or
+    visualize.py directly in the deepest build unit holding it. Unknown
+    units (None): False, so the file counts as kernel source."""
+    if units is None or not XCLBIN_NO_BITSTREAM.match(path):
+        return False
+    rel = path[len(XCLBIN):]
+    unit = max((u for u in units if rel.startswith(u + "/")), key=len, default=None)
+    if unit is None:
+        return False
+    rest = rel[len(unit) + 1:]
+    return rest.startswith("host/") or rest == "visualize.py"
+
+# Kernels only a model outside the NPU catalog loads (kernel_assignment.json
+# smolvla:500m, engines.json served_elsewhere: FLM_Pybind/SmolVLA).
+# devkit_stage.py never stages them, so they select the xclbin area (the
+# devkit-xclbins compile and RTP checks) but are no source to stage: no
+# devkit_stage, so no product build or npu-approve waits for nothing, and no
+# bench. test_changes.py checks no catalog model is assigned one.
+DEVKIT_XCLBIN_UNSTAGED = re.compile(r"^flm-dev-kit/FLM_Xclbin/SMOLVLA/")
 
 # What the dev-kit perf and accuracy benches (devkit-bench.yml) measure: the
 # dev-kit engine and kernel sources and what builds them. Under these
 # prefixes every file counts but documentation (NON_CODE), the FLM_DLL files
-# that build no engine (DEVKIT_DLL_NO_BUILD) and BENCH_NOT_SOURCE.
+# that build no engine (DEVKIT_DLL_NO_BUILD), the kernel host programs and
+# route viewers (xclbin_no_bitstream), SmolVLA's kernels
+# (DEVKIT_XCLBIN_UNSTAGED) and BENCH_NOT_SOURCE.
 DEVKIT_BENCH_SOURCE = re.compile(r"^flm-dev-kit/(FLM_DLL|FLM_Xclbin)/")
 # Figures, rendered pages and licence copies beside the sources: no build
 # reads them.
 BENCH_NOT_SOURCE = re.compile(r"\.(png|jpe?g|gif|svg|pdf|html?)$|(^|/)LICENSE[^/]*$", re.IGNORECASE)
 
 
-def is_bench_source(path: str) -> bool:
+def is_bench_source(path: str, units: Optional[Iterable[str]] = None) -> bool:
     """Whether a changed file is dev-kit engine or kernel source (devkit_bench,
     which also needs Build and Test to build something to bench). The kernel
     build image's files (DEVKIT_ONLY, toolchain.lock included) are not:
     devkit-aie-image.yml tests them, and Build and Test builds nothing for
-    them."""
+    them. Nor are the files DEVKIT_BENCH_SOURCE's comment lists; units are
+    the build units (load_build_units) xclbin_no_bitstream needs, None:
+    a host program counts as source."""
     return bool(DEVKIT_BENCH_SOURCE.match(path)) and devkit_only_areas(path) is None and not (
-        is_non_code(path) or DEVKIT_DLL_NO_BUILD.match(path) or BENCH_NOT_SOURCE.search(path))
+        is_non_code(path) or DEVKIT_DLL_NO_BUILD.match(path) or BENCH_NOT_SOURCE.search(path)
+        or xclbin_no_bitstream(path, units) or DEVKIT_XCLBIN_UNSTAGED.match(path))
 
 
 @dataclass
@@ -917,11 +1002,13 @@ class Decision:
 
         Accepted cost: any such xclbin change counts, before the kernel plan
         is known, so one that rebuilds no catalog model's kernel (an
-        unassigned build unit, SmolVLA only) still makes the product builds
-        wait for the kernel build and asks an untrusted pull request for
-        npu-approve; the staging then stages nothing and the product jobs
-        run as for any other change. Narrowing it would mean running the
-        kernel plan (devkit_xclbin_plan.py) here."""
+        unassigned build unit) still makes the product builds wait for the
+        kernel build and asks an untrusted pull request for npu-approve;
+        the staging then stages nothing and the product jobs run as for any
+        other change. Narrowing it would mean running the kernel plan
+        (devkit_xclbin_plan.py) here. SmolVLA's kernels
+        (DEVKIT_XCLBIN_UNSTAGED) and the files no bitstream build reads
+        (XCLBIN_NO_BITSTREAM) are not counted."""
         return (bool(self.devkit_families and "dll" in self.devkit_areas)
                 or "xclbin" in self.source_areas)
 
@@ -1448,7 +1535,8 @@ def _decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.reasons.append("nothing else changed: product builds, NPU tests and dev-kit jobs skipped")
             return d
 
-    bench = next((f for f in files if is_bench_source(f)), None)
+    units = load_build_units(root)
+    bench = next((f for f in files if is_bench_source(f, units)), None)
     if bench is not None:
         d.bench_source = bench
         d.reasons.append(f"{bench}: dev-kit engine or kernel source (benched when the dev-kit "
@@ -1457,8 +1545,14 @@ def _decide(files: Optional[list[str]], git: Optional[Git] = None,
     # flm-dev-kit/ code selects dev-kit areas only; the product rules below
     # see the other files. Its documentation counts as nothing. The kernel
     # build image (DEVKIT_ONLY) is handled here too and selects no area.
+    no_bitstream = [f for f in files if xclbin_no_bitstream(f, units)]
+    if no_bitstream:
+        d.devkit_catalog = True
+        d.reasons.append(f"{no_bitstream[0]}{f' and {len(no_bitstream) - 1} more' if len(no_bitstream) > 1 else ''}"
+                         ": kernel host program or route viewer, which no bitstream build reads "
+                         "(XCLBIN_NO_BITSTREAM): no dev-kit area; devkit-static only")
     devkit = [f for f in files if (f.startswith(DEVKIT_ROOT) or devkit_only_areas(f) is not None)
-              and not is_non_code(f)]
+              and not is_non_code(f) and f not in no_bitstream]
     for path in devkit:
         only = devkit_only_areas(path)
         if only is not None:
@@ -1476,6 +1570,10 @@ def _decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.source_areas |= ALL_DEVKIT_AREAS
             continue
         d.devkit_areas.add(area)
+        if DEVKIT_DLL_NO_BUILD.match(path) or DEVKIT_XCLBIN_UNSTAGED.match(path):
+            # Built (or compiled and run on its own), but nothing to stage,
+            # and what DEVKIT_ALSO maps a directory to does not build it.
+            continue
         d.source_areas.add(area)
         d.source_areas |= devkit_extra_areas(path)
         extra = devkit_extra_areas(path) - d.devkit_areas
@@ -1487,13 +1585,13 @@ def _decide(files: Optional[list[str]], git: Optional[Git] = None,
         d.reasons.append(f"{len(tree)} changed flm-dev-kit file(s), e.g. {tree[0]}: dev-kit areas "
                          f"{d.devkit_value() or 'none'}; no product build or suite for them")
 
-    in_devkit = set(devkit)
+    in_devkit = set(devkit) | set(no_bitstream)
     code = [f for f in files if not is_non_code(f) and f not in in_devkit]
     add_devkit_families(d, files, code, devkit_engines, git, engine_libs)
     d.suites = set()  # narrowed per file below; None once any file is unscoped
     if not code:
         d.run_tests = False
-        if devkit:
+        if devkit or no_bitstream:
             d.reasons.append("no product code changed: product builds and NPU tests skipped")
         else:
             d.reasons.append(f"all {len(files)} changed file(s) are documentation or non-code")
