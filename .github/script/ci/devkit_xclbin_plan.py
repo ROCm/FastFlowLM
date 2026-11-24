@@ -97,7 +97,7 @@ from typing import Optional
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
-from changes import DEVKIT_CI, SHIPPED_KERNEL  # noqa: E402
+from changes import DEVKIT_CI, OUTSIDE_BUILD_AND_TEST, SHIPPED_KERNEL  # noqa: E402
 from devkit_rtp_lock import LOCK_REL as RTP_LOCK, changed_artifacts  # noqa: E402
 
 XCLBIN = "flm-dev-kit/FLM_Xclbin"
@@ -261,6 +261,11 @@ def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
     # from them finds no Makefile at head).
     gone = set(base_units) - set(plan.units)
     for path in files:
+        if OUTSIDE_BUILD_AND_TEST.match(path):
+            # No Build and Test job uses it (the CI unit tests,
+            # merge_reports.py): changes.py selects no dev-kit area for it,
+            # so it adds no canary here either.
+            continue
         if TOOLCHAIN.match(path) or DEVKIT_CI.match(path):
             if canary:
                 plan.reasons.append(f"{path}: canary builds")

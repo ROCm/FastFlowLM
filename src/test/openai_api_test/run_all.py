@@ -21,6 +21,7 @@ import test_log_privacy
 import test_images
 import test_logprobs
 import test_message_roles
+import test_models
 import test_reasoning
 import test_response_format
 import test_response_shape
@@ -29,7 +30,7 @@ import test_tool_calls
 
 MODULES = [test_response_shape, test_reasoning, test_tool_calls, test_response_format, test_logprobs, test_sampling,
            test_continue_final_message, test_errors, test_images, test_connections, test_http_safety,
-           test_log_privacy, test_message_roles]
+           test_log_privacy, test_models, test_message_roles]
 
 
 def main() -> None:

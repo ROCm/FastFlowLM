@@ -108,6 +108,14 @@ class Changed(unittest.TestCase):
                 # The canary serves m:1b, but nothing of it changed.
                 self.assertEqual((r["touched_models"], r["bench_models"]), (["m:1b"], []))
 
+    def test_ci_no_build_uses_adds_no_canary(self):
+        # changes.py OUTSIDE_BUILD_AND_TEST: no dev-kit area there, no canary here.
+        for path in (".github/script/ci/merge_reports.py", ".github/script/ci/test_changes.py",
+                     ".github/script/ci/check_internal_refs.py"):
+            with self.subTest(path=path):
+                self.assertEqual(builds(plan(files=[path])), [])
+                self.assertEqual(builds(plan(files=[path, f"{X}/Fam/prefill/kernel/k.cc"])), [("Fam/prefill", None)])
+
     def test_assignment_change_builds_exactly_the_changed_models_artifacts(self):
         base = json.loads(json.dumps(ASSIGNMENT))
         base["m:3b"]["kernels"]["layer.xclbin"] = "xclbins-Fam_decoding_C"

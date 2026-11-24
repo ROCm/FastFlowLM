@@ -107,6 +107,9 @@
         "frontend_provider": {
           "$ref": "#/$defs/nonEmptyString"
         },
+        "tools": {
+          "type": "boolean"
+        },
         "default_context_length": {
           "type": "integer",
           "minimum": 1

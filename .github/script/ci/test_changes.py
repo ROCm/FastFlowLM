@@ -133,6 +133,7 @@ class Cli(unittest.TestCase):
                   ".github/dependabot.yml", ".github/actionlint.yaml", ".github/scan_tools_configs/trivy.yml",
                   ".github/script/ci/test_changes.py", ".github/script/ci/test_devkit_check.py",
                   ".github/script/ci/check_internal_refs.py", ".github/script/ci/oga_hipep_tests.ps1",
+                  ".github/script/ci/merge_reports.py",
                   ".github/script/npu_test/tools/make_vision_assets.py",
                   ".github/script/npu_test/tools/build_asr_eval.py",
                   ".github/script/npu_test/assets/test_image2.jpg", ".github/script/assets/d3_goldens_flash.jsonl",
@@ -154,6 +155,9 @@ class Cli(unittest.TestCase):
         out = cli("--files", ".github/workflows/devkit-bench.yml", ".github/workflows/cpu-tests.yml")
         self.assertEqual(out["run_tests"], "false")
         self.assertIn("bench CI and files Build and Test does not use", out["summary"])
+        # merge_reports.py's other side, the harness that writes the reports, runs every suite.
+        self.assertEqual(cli("--files", ".github/script/ci/merge_reports.py",
+                             ".github/script/npu_test/harness.py")["suites"], "all")
         # Beside product code, the product code decides.
         out = cli("--files", ".github/workflows/cpu-tests.yml", "src/lib/xrt/libqwen3_npu.so")
         self.assertEqual((out["run_tests"], out["suites"]), ("true", "chat,prefix_cache"))
@@ -377,7 +381,8 @@ class Cli(unittest.TestCase):
                          ["run_tests", "families", "asr_full", "suites", "hipep",
                           "new_models", "hipep_models", "hipep_families", "devkit", "devkit_catalog",
                           "devkit_areas",
-                          "devkit_families", "devkit_stage", "devkit_bench", "swap_verified", "summary"])
+                          "devkit_families", "devkit_runtimes", "devkit_stage", "devkit_bench", "swap_verified",
+                          "summary"])
 
     def test_suites_scoped_to_the_change(self):
         cases = {
@@ -1456,6 +1461,16 @@ class AfterSwap(unittest.TestCase):
         return self.commit({"src/lib/xrt/gemma_npu.dll": "dll\n", "src/lib/xrt/libgemma_npu.so": "so\n"},
                            "dev kit: swap\n\nDevkit-Swap-Run: 1\nDevkit-Swap-Tested: abc\n")
 
+    def test_a_later_hrx_pin_change_builds_hrx_only(self):
+        self.swap()
+        self.commit({"hrx-integration/hrx-release.env": "TAG=new\n"}, "bump the HRX pin")
+        d = self.decide()
+        self.assertTrue(d.devkit_stage())
+        self.assertEqual(d.devkit_runtimes, ("hrx",))
+        # Engine source after the swap: both runtimes again.
+        self.commit({self.SRC: "int y;\n"}, "engine change")
+        self.assertEqual(self.decide().devkit_runtimes, ("xrt", "hrx"))
+
     def test_before_the_swap_it_stages(self):
         d = self.decide()
         self.assertTrue(d.devkit_stage())
@@ -1484,6 +1499,67 @@ class AfterSwap(unittest.TestCase):
         self.commit({"docs/a.md": "x\n"}, "docs")
         self.assertIsNone(changes.Git(self.tmp, self.base, "HEAD").last_swap())
         self.assertTrue(self.decide().devkit_stage())
+
+
+class HrxPin(unittest.TestCase):
+    """hrx-integration/ (HRX_PIN): only the HRX builds read it, so when
+    nothing else selects the dll area the HRX dev-kit engines alone are
+    built and staged (devkit_runtimes "hrx"). The product suites are not
+    narrowed."""
+
+    def out(self, *files: str) -> dict:
+        return changes.decide(list(files)).outputs()
+
+    def test_pin_alone(self):
+        for path in ("hrx-integration/hrx-release.env", "hrx-integration/fetch-hrx-release.sh",
+                     "hrx-integration/fetch-hrx-release.ps1"):
+            with self.subTest(path=path):
+                o = self.out(path)
+                self.assertEqual((o["devkit_runtimes"], o["devkit_areas"], o["devkit_stage"]), ("hrx", "dll", "true"))
+                # Every engine family; and every product suite and HIPEP, as before.
+                self.assertEqual(devkit_families(o), changes.load_devkit_engines().all_families())
+                self.assertEqual((o["run_tests"], o["suites"], o["hipep"]), ("true", "all", "true"))
+
+    def test_anything_else_selecting_dll_builds_both(self):
+        for other in ("flm-dev-kit/FLM_DLL/detail/qwen2_npu/qwen2_npu.cpp", "flm-dev-kit/FLM_DLL/hrx.mk",
+                      "src/lib/xrt/libaiebu.a", ".github/script/ci/devkit_stage.py",
+                      ".github/windows-deps/xrt_coreutil.def"):
+            with self.subTest(other=other):
+                self.assertEqual(self.out("hrx-integration/hrx-release.env", other)["devkit_runtimes"], "xrt,hrx")
+
+    def test_swapped_xrt_libraries_build_both(self):
+        # A library an earlier swap brought in: rebuilt from the current
+        # source, so a stale one asks for a swap again.
+        for lib in ("src/lib/xrt/libqwen2_npu.so", "src/lib/xrt/qwen2_npu.dll"):
+            with self.subTest(lib=lib):
+                self.assertEqual(self.out("hrx-integration/hrx-release.env", lib)["devkit_runtimes"], "xrt,hrx")
+
+    def test_other_changes_that_do_not_select_dll(self):
+        for other in ("src/server/server.cpp", "flm-dev-kit/FLM_Xclbin/Dequant_Q4_1_w128x512/kernel/x.cc",
+                      "docs/x.md", "hrx-integration/README.md",
+                      # dll-area files that build no engine
+                      "flm-dev-kit/FLM_DLL/build_qwen3.sh", "flm-dev-kit/FLM_DLL/model_list.json"):
+            with self.subTest(other=other):
+                self.assertEqual(self.out("hrx-integration/hrx-release.env", other)["devkit_runtimes"], "hrx")
+
+    def test_no_pin_no_narrowing(self):
+        self.assertEqual(self.out("flm-dev-kit/FLM_DLL/detail/qwen2_npu/qwen2_npu.cpp")["devkit_runtimes"], "xrt,hrx")
+        self.assertEqual(self.out("hrx-integration/.gitignore")["devkit_runtimes"], "xrt,hrx")
+        self.assertEqual(changes.decide(None).outputs()["devkit_runtimes"], "xrt,hrx")
+
+    def test_no_xrt_build_reads_the_pin(self):
+        # What the narrowing relies on: the XRT dev-kit builds never name
+        # hrx-integration (build.sh, and build.ps1 and the engine build files
+        # only under FLM_USE_HRX / -Runtime HRX).
+        hits = subprocess.run(["git", "-C", str(HERE.parents[2]), "grep", "-ln", "hrx-integration", "--",
+                               "flm-dev-kit/FLM_DLL/build.sh", "flm-dev-kit/FLM_DLL/detail/*/Makefile",
+                               "flm-dev-kit/FLM_DLL/detail/*/CMakeLists.txt"],
+                              capture_output=True, text=True).stdout.split()
+        self.assertEqual(hits, [])
+        root = HERE.parents[2]
+        lin = (root / ".github/actions/devkit-build-lib-lin/action.yml").read_text(encoding="utf-8")
+        # build_manylinux.sh (which fetches the pin) only in the HRX build.
+        self.assertRegex(lin, r"runtime == 'hrx'")
 
 
 if __name__ == "__main__":
