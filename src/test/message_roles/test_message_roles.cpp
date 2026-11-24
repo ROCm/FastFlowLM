@@ -192,6 +192,14 @@ void test_normalize() {
     CHECK_EQ(flatten(out)[2]["content"].get<std::string>(),
              "Q2\n<system-reminder>\n" + RULE + "\n</system-reminder>\nQ3");
 
+    // an empty instruction between an assistant turn and a later one is not a user turn: the later one starts
+    // its own turn, with no newline in front of it
+    out = flm::chat::normalize_messages(json::array({msg("user", "Q1"), msg("assistant", "A1"), msg("system", ""),
+                                                     msg("system", RULE), msg("user", "Q2")}),
+                                        strict);
+    CHECK(out.size() == 3);
+    CHECK_EQ(flatten(out)[2]["content"].get<std::string>(), "<system-reminder>\n" + RULE + "\n</system-reminder>\nQ2");
+
     // a text-part array is joined as the server joins it
     out = flm::chat::normalize_messages(
         json::array({msg("user", "Q1"), msg("assistant", "A1"),

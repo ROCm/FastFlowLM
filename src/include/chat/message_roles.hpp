@@ -175,24 +175,34 @@ inline std::vector<bool> place_instruction_messages(nlohmann::ordered_json& mess
         lead_has_developer = lead_has_developer || role == "developer";
     }
     const char* lead_role = support.renders_developer && lead_has_developer ? "developer" : "system";
+    // Whether the last message kept so far is a user turn: an instruction left out is not a message, so the one
+    // after it joins whatever came before it, not the (emptied) turn it was changed into
+    bool after_user = false;
     for (std::size_t i = 0; i < messages.size(); ++i) {
         auto& message = messages[i];
-        if (!message.is_object()) continue;
+        if (!message.is_object()) {
+            after_user = false;
+            continue;
+        }
         const std::string role = message.value("role", "");
-        if (!detail::is_instruction_role(role)) continue;
+        if (!detail::is_instruction_role(role)) {
+            after_user = role == "user";
+            continue;
+        }
         if (i >= lead && !support.accepts_later_system) {
             const std::string text = detail::instruction_text(message, i);
             if (text.empty()) {
                 left_out[i] = true;
             } else {
-                const bool after_user = i > 0 && messages[i - 1].is_object() && messages[i - 1].value("role", "") == "user";
                 message["content"] = detail::wrap_system_reminder(text, after_user);
+                after_user = true;
             }
             message["role"] = "user";
             continue;
         }
         const std::string placed = i < lead ? lead_role : "system";
         if (placed != role && detail::has_no_content(message)) left_out[i] = true;
+        else after_user = false;
         message["role"] = placed;
     }
     return left_out;
