@@ -180,3 +180,12 @@ private:
     bool positional_tool_results = false;
     PromptCache prompt_cache;
 };
+
+///@brief Build the error body for a caught exception, and log the exception itself.
+/// The response never carries the raw exception text: a request fault gets a fixed
+/// "Invalid request" (400), anything else a fixed "Internal error" (500), and a
+/// ModelRequestError keeps its own structured ModelErrorResponse body (its what()
+/// is a model-layer message, not a library exception). request_fault is true when
+/// the failing step was building the request (template/args parsing), false when
+/// it was running it (decode/prefill of a well-formed request).
+json exception_error(const std::string& where, const std::exception& e, bool request_fault = false);

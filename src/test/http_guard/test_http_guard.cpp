@@ -273,6 +273,31 @@ void test_required_fields() {
     CHECK(e["error"]["code"].is_number_integer());
     CHECK(error_body("x", 403)["error"]["param"].is_null());
 }
+
+/// status_for_error_body: what send_response answers a response body with. A numeric
+/// error.code in 400-599 wins; a "server_error" type without one is a 500; every other
+/// error shape (a bare string, an object without a code, a string code) is a 400, not
+/// a 200; no "error" key is a 200.
+void test_error_status() {
+    std::printf("error status\n");
+    CHECK(status_for_error_body(error_body("x", 400)) == 400);
+    CHECK(status_for_error_body(error_body("x", 404, "model")) == 404);
+    CHECK(status_for_error_body(error_body("x", 500, "", "server_error")) == 500);
+    CHECK(status_for_error_body(error_body("x", 503, "", "server_busy")) == 503);
+    // A "server_error" type with no numeric code is still a 500.
+    CHECK(status_for_error_body(ojson{{"error", {{"message", "Internal error"}, {"type", "server_error"}}}}) == 500);
+    // A string code ("invalid_value") is not trusted: 400, not 200.
+    CHECK(status_for_error_body(ojson{{"error", {{"message", "Invalid request"}, {"type", "invalid_request_error"}, {"code", "invalid_value"}}}}) == 400);
+    // A numeric code outside 400-599 does not become the status.
+    CHECK(status_for_error_body(ojson{{"error", {{"message", "x"}, {"code", 200}}}}) == 400);
+    CHECK(status_for_error_body(ojson{{"error", {{"message", "x"}, {"code", 600}}}}) == 400);
+    // Bare-string and codeless object errors are 400, not 200 (the #761 item 1 bug).
+    CHECK(status_for_error_body(ojson{{"error", "Failed to load X model!"}}) == 400);
+    CHECK(status_for_error_body(ojson{{"error", {{"message", "Max length reached"}}}}) == 400);
+    // No error at all: 200, including plain-text bodies.
+    CHECK(status_for_error_body(ojson{{"models", ojson::array()}}) == 200);
+    CHECK(status_for_error_body(ojson("plain text")) == 200);
+}
 }  // namespace
 
 int main() {
@@ -282,6 +307,7 @@ int main() {
     test_hosts();
     test_cors_headers();
     test_required_fields();
+    test_error_status();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

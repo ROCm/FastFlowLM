@@ -285,6 +285,23 @@ inline ojson error_body(const std::string& message, int code, const std::string&
     return ojson{{"error", e}};
 }
 
+/// The HTTP status send_response answers a response body with. A numeric error.code in 400-599
+/// wins; a "server_error" type without one is a 500; every other error shape (a bare string,
+/// an object without a code) is a 400 instead of a 200. No "error" key means 200. `code` can
+/// be a string ("invalid_value") or absent; only a numeric code is trusted.
+inline int status_for_error_body(const ojson& response_data) {
+    if (!response_data.is_object() || !response_data.contains("error")) return 200;
+    const ojson& err = response_data["error"];
+    if (err.is_object()) {
+        if (err.contains("code") && err["code"].is_number_integer()) {
+            const int code = err["code"].get<int>();
+            if (code >= 400 && code <= 599) return code;
+        }
+        if (err.contains("type") && err["type"].is_string() && err["type"].get<std::string>() == "server_error") return 500;
+    }
+    return 400;
+}
+
 /// Missing or not a string -> 400 naming the field.
 inline std::optional<ojson> require_string(const ojson& body, const char* key) {
     if (!body.is_object()) return error_body("The request body must be a JSON object.", 400);

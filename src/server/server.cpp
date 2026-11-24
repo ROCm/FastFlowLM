@@ -410,7 +410,7 @@ void HttpSession::handle_request(bool cors) {
             res_.keep_alive(false);
             res_.result(http::status::internal_server_error);
             res_.set(http::field::content_type, "application/json");
-            res_.body() = dump_error_body(json{ {"error", std::string("Internal server error: ") + e.what()} });
+            res_.body() = dump_error_body(json{ {"error", "Internal server error"} });
             res_.prepare_payload();
         } else {
             close_connection();
@@ -880,17 +880,10 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             auto& response_ref = *res_ptr;
             http::status status = http::status::ok;
 
-            // An OpenAI style error carries its HTTP status as error.code: 400, 404, 500, ...
-            if (response_data.contains("error") &&
-                response_data["error"].contains("code") &&
-                response_data["error"]["code"].is_number_integer())
-            {
-                int code = response_data["error"]["code"].get<int>();
-
-                if (code >= 400 && code <= 599) {
-                    status = static_cast<http::status>(code);
-                }
-            }
+            // The HTTP status for an error body (flm::http_guard::status_for_error_body):
+            // a numeric error.code in 400-599 wins, a "server_error" type is a 500, and
+            // every other error shape is a 400 instead of a 200.
+            status = static_cast<http::status>(flm::http_guard::status_for_error_body(response_data));
 
             // A handler that owns its status (System One: 422 {"detail": ...}) wraps its reply as
             // {"__http_status": code, "__http_body": body}.
@@ -946,12 +939,16 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
 
             const bool bad_body = !json::accept(req_ref.body());
             res_ref.result(bad_body ? http::status::bad_request : http::status::internal_server_error);
+            if (!bad_body) header_print("ERROR", "Handler exception: " + std::string(e.what()));
             res_ref.body() = bad_body
                 ? dump_error_body(json{ {"error", {
                     {"message", "Invalid JSON: " + json_log::what(e)},
                     {"type", "invalid_request_error"},
                     {"code", 400}}} })
-                : dump_error_body(json{ {"error", std::string("Handler exception: ") + e.what()} });
+                : dump_error_body(json{ {"error", {
+                    {"message", "Internal error"},
+                    {"type", "server_error"},
+                    {"code", 500}}} });
             res_ref.set(http::field::content_type, "application/json");
             res_ref.prepare_payload();
 
@@ -964,7 +961,11 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             unregister_active_request(request_id);
 
             res_ref.result(http::status::internal_server_error);
-            res_ref.body() = dump_error_body(json{ {"error", std::string("Handler exception: ") + e.what()} });
+            header_print("ERROR", "Handler exception: " + std::string(e.what()));
+            res_ref.body() = dump_error_body(json{ {"error", {
+                {"message", "Internal error"},
+                {"type", "server_error"},
+                {"code", 500}}} });
             res_ref.set(http::field::content_type, "application/json");
             res_ref.prepare_payload();
 
@@ -1227,7 +1228,8 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
                 try {
                     parts = parse_multipart(req);
                 } catch (const std::exception& e) {   // not a multipart/form-data body: the client's mistake, not a server error
-                    send_response({{"error", {{"message", std::string("the request must be multipart/form-data with a \"file\" field: ") + e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                    header_print("ERROR", "Multipart parse failed: " + std::string(e.what()));
+                    send_response({{"error", {{"message", "the request must be multipart/form-data with a \"file\" field"}, {"type", "invalid_request_error"}, {"code", 400}}}});
                     return;
                 }
                 json request_json;

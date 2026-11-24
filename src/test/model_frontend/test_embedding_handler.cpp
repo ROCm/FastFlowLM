@@ -89,7 +89,9 @@ void test_embedding_handler() {
     auto no_device = request("first:1");
     npu_available = true;
     TEST_REQUIRE(no_device.contains("error"));
-    TEST_REQUIRE(no_device["error"]["message"] == flm::backend::kNoNpuDevice);
+    // #761: the response carries a fixed message, not the raw exception text
+    // (which used to be flm::backend::kNoNpuDevice here).
+    TEST_REQUIRE(no_device["error"]["message"] == "Internal error");
     check("first:1", 0.5f);
     TEST_REQUIRE(request("first", "hello", {{"task", "provider-task"}}).at("data").at(0).at("embedding").at(1) == 4);
     TEST_REQUIRE(request("first", "hello", {{"task", "unknown"}}).at("error").at("code") == 400);
