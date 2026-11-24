@@ -177,3 +177,18 @@ mode, after the lm_head fix above:
   GELU), while each weight mem tile holds only 2 x 20 KB of read-ahead (41 KB of its 512 KB used), so the weight
   stream stops at each step: ~0.18 ms per layer, ~6 ms a token.
 - K/V adds 0.04-0.19 ms; the attention math ~0.05 ms at 1K and ~0.2 ms for a global layer at 4K.
+
+### Weight read-ahead (tried 2026-11-23, not kept)
+
+Idea: more weight buffering in the 4 weight mem tiles (they use 41 of 512 KB), so the shim keeps streaming while the
+proj cores wait between the layer's matrices. Variants as N buffers x S k-steps (today 2 x 1), same bytes and order:
+- 4 x 1: lm_head logits bit-identical; one layer at L 16 1.242 ms (1.246 today), lm_head 7.91 ms (7.99): no gain.
+- 2 x 5 and 4 x 5: deadlock. In each weight half the first core's mem tile channel sends its whole buffer before
+  the second core's channel may start (one lock chain), and all 16 proj cores take x from one broadcast stream that
+  moves only when every core has taken the slice, with 2 slices of room per core. So the first core can be at most
+  2 k-steps ahead of the second: buffers of more than 2 k-steps cannot work in this design.
+
+So read-ahead depth is not what costs ~0.18 ms per layer: the projection path runs in lockstep (one x broadcast,
+chained weight readers), and any wait (the steps between the 4 matrices) stops all 16 cores and the weight stream.
+A fix would be a redesign of the projection data flow (for example x resident per core for a whole matrix, as in
+the old `lm_head.xclbin`, and independent weight readers).
