@@ -19,9 +19,11 @@ name: Build and Test
 # The Windows XRT package also holds the oga-hipep backend, which runs its
 # models on the GPU through hip-ep. Test Windows HIPEP runs the chat, api and
 # shutdown suites on the oga-hipep models from the same zip, on each kind of
-# machine in .github/hipep-machines.json: an STX Halo of its own, beside the
-# NPU tests, and whichever shared NPU runner labelled oga-hipep (STX, Krackan
-# or STX Halo) is free. Test Windows XRT tests the NPU models.
+# machine in .github/hipep-machines.json: whichever shared NPU runner
+# labelled oga-hipep (STX, Krackan or STX Halo) is free, and an STX Halo of
+# its own, beside the NPU tests, on standby: it runs every model nightly, and
+# a pull request only when the shared runners cannot test it (new weights, or
+# a model larger than they hold). Test Windows XRT tests the NPU models.
 # HIPEP runs when every suite does, or when a change reaches an oga-hipep
 # model (the backend, its catalog entries, the frontend of a family that has
 # one, the chat, api and shutdown tests); a change only to the backend or its
@@ -37,10 +39,11 @@ name: Build and Test
 # src/model_info.json, or a raised flm_min_version), is tested whatever its
 # size: the test jobs get 600 minutes, of which the new models' downloads get
 # up to 420 outside the pr tier's 30-minute budget, and one that does not
-# download fails the job. An oga-hipep entry the change adds or edits, new
-# weights or not, is required the same way in Test Windows HIPEP, beside its
-# models of each family, on the kinds of machine that test changed models
-# (the STX Halo). A change that only touches docs builds and tests nothing;
+# download fails the job. An oga-hipep entry with new weights (added,
+# republished, or moved onto the GPU) is required the same way in Test
+# Windows HIPEP, beside its models of each family, on the kinds of machine
+# that test changed models (the STX Halo); one edited without new weights
+# (a capability, a context length) tests its family's one model instead. A change that only touches docs builds and tests nothing;
 # one only under flm-dev-kit/ runs no product suite of its own, the dev-kit
 # checks (devkit-static), and the dev-kit engine builds (devkit-engines) when
 # it selects the dll area and the kernel builds (devkit-xclbins) when it
@@ -203,6 +206,7 @@ jobs:
       source: ${{ steps.detect.outputs.source }}
       hipep: ${{ steps.detect.outputs.hipep }}
       hipep-machines: ${{ steps.hipep.outputs.machines }}
+      hipep-families: ${{ steps.detect.outputs.hipep-families }}
       new-models: ${{ steps.detect.outputs.new-models }}
       # For the dev-kit jobs. flm-dev-kit/ paths select no product suite,
       # only the portable builds their staged files are tested in
@@ -306,7 +310,9 @@ jobs:
           echo "dev-kit full refresh: ${refresh}; base: ${base:-none}"
 
       # One Test Windows HIPEP job per kind of GPU machine, each with the tier
-      # it runs and the changed models it tests. The repository variable
+      # it runs and the changed models it tests. A standby kind (the STX
+      # Halo) runs below the full tier only when the others cannot test the
+      # change: its new weights, or a model larger than they hold. The repository variable
       # FLM_HIPEP_MACHINES names other kinds, or "none", without a commit,
       # e.g. while a kind's only runner is down.
       - name: Pick HIPEP machines
@@ -315,9 +321,11 @@ jobs:
           ONLY: ${{ vars.FLM_HIPEP_MACHINES }}
           TIER: ${{ steps.detect.outputs.tier }}
           CHANGED: ${{ steps.detect.outputs.hipep-models }}
+          FAMILIES: ${{ steps.detect.outputs.hipep-families }}
+          MODELS: ${{ inputs.models }}
         run: |
           python3 .github/script/ci/hipep_machines.py --tier "${TIER}" --changed-models "${CHANGED}" \
-            --only "${ONLY}" --github-output
+            --families "${FAMILIES}" --models "${MODELS}" --only "${ONLY}" --github-output
 
       # Every npu_test run imports every suite, but a change to the shutdown
       # suite or console.py runs Test Windows HIPEP alone. A Windows-only
@@ -1340,7 +1348,8 @@ jobs:
 
   # The XRT zip's oga-hipep models, on the GPU, one job per kind of machine in
   # .github/hipep-machines.json: the STX Halo, whose labels (oga-hipep,
-  # stx-halo) no NPU job asks for, so it runs beside the NPU test jobs, and
+  # stx-halo) no NPU job asks for, so it runs beside the NPU test jobs (on
+  # standby: below the full tier only when the change needs it), and
   # the shared NPU runners also labelled oga-hipep, those whose memory holds
   # the pr tier's models (STX, Krackan and STX Halo, whichever is free), one
   # of which it holds for the job as an NPU test job does. Besides chat, the
@@ -1351,8 +1360,10 @@ jobs:
   # the change touches their family); the full tier tests every one, where
   # the kind's max-tier allows (the shared runners test the pr tier's models
   # nightly).
-  # The models whose catalog entries the change added or edited
-  # (hipep-models) run too, as required models (--required-models), on the
+  # An oga-hipep entry edited without new weights counts its family as
+  # touched (hipep-families), which runs that family's one model; one with
+  # new weights (hipep-models: added, republished or moved onto the GPU)
+  # runs too, as required models (--required-models), on the
   # kinds whose changed-models allows it (the STX Halo, not the shared
   # runners; every kind that runs when none of those does): they download
   # first, with 420 minutes for all of them, a failure if one does not, and
@@ -1431,7 +1442,7 @@ jobs:
           label: windows-hipep-${{ matrix.id }}
           tier: ${{ matrix.tier }}
           suites: chat,api,shutdown
-          families: ${{ needs.changes.outputs.families }}
+          families: ${{ needs.changes.outputs.hipep-families }}
           models: ${{ inputs.models }}
           required-models: ${{ matrix.changed-models }}
           backend: oga-hipep

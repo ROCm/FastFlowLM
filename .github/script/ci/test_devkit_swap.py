@@ -1004,6 +1004,81 @@ class Targets(unittest.TestCase):
             ds.safe_target(tmp / "repo", "src/xclbins/M/a.xclbin")
 
 
+class MainMoved(unittest.TestCase):
+    """main_moved: which commits on main since a run's base make its swap
+    stale (documentation under SOURCE_PATHS does not; code, build inputs and
+    binaries do)."""
+
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(rmtree, tmp)
+        self.repo = Repo(tmp)
+        self.base = self.repo.commit({**DEVKIT_DATA, **OLD}, "base")
+        self.git = ds.Git(self.repo.path)
+
+    def moved(self, files: dict[str, bytes]) -> list[str]:
+        commit = self.repo.commit(files)
+        moved = ds.main_moved(self.git, self.base, "main")
+        self.assertIn(moved, ([], [commit]))
+        return moved
+
+    def test_docs_only_does_not_count(self):
+        # Like a pull request editing only the Markdown under FLM_DLL.
+        self.assertEqual(self.moved({"flm-dev-kit/FLM_DLL/README.md": b"# x\n",
+                                     "flm-dev-kit/FLM_DLL/detail/foo_npu/NOTES.md": b"x\n",
+                                     "flm-dev-kit/FLM_Xclbin/.gitignore": b"build/\n"}), [])
+
+    def test_elsewhere_does_not_count(self):
+        self.assertEqual(self.moved({"src/server/x.cpp": b"//\n", "flm-dev-kit/FLM_Pybind/x.cpp": b"//\n"}), [])
+
+    def test_code_counts(self):
+        for path in ("flm-dev-kit/FLM_DLL/detail/foo_npu/foo.cpp", "flm-dev-kit/FLM_DLL/detail/foo_npu/Makefile",
+                     "flm-dev-kit/FLM_Xclbin/x/gen.py"):
+            with self.subTest(path=path):
+                self.assertEqual(len(self.moved({path: path.encode()})), 1)
+                self.base = self.repo.git("rev-parse", "HEAD")
+
+    def test_docs_beside_code_counts(self):
+        self.assertEqual(len(self.moved({"flm-dev-kit/FLM_DLL/README.md": b"# y\n",
+                                         "flm-dev-kit/FLM_DLL/detail/foo_npu/foo.cpp": b"//\n"})), 1)
+
+    def test_binaries_count(self):
+        # Anything under src/lib and src/xclbins, even a Markdown file.
+        for path, data in ((KERNEL, blob("main-k")), (XRT_LIN, blob("main-so")),
+                           ("src/xclbins/M-NPU2/README.md", b"# x\n"), ("src/lib/xrt/notes.md", b"x\n")):
+            with self.subTest(path=path):
+                self.assertEqual(len(self.moved({path: data})), 1)
+                self.base = self.repo.git("rev-parse", "HEAD")
+
+    def test_merged_side_branch(self):
+        self.repo.git("checkout", "-q", "-b", "side")
+        code = self.repo.commit({"flm-dev-kit/FLM_DLL/detail/foo_npu/foo.cpp": b"//\n"})
+        docs = self.repo.commit({"flm-dev-kit/FLM_DLL/README.md": b"# x\n"})
+        self.repo.git("checkout", "-q", "main")
+        self.repo.commit({"src/server/x.cpp": b"//\n"})
+        self.repo.git("merge", "-q", "--no-ff", "-m", "merge", "side")
+        moved = ds.main_moved(self.git, self.base, "main")
+        self.assertIn(code, moved)
+        self.assertNotIn(docs, moved)
+
+    def test_unknown_or_unrelated_base(self):
+        with self.assertRaisesRegex(ds.SwapError, "not in this clone"):
+            ds.main_moved(self.git, "0" * 40, "main")
+        self.repo.git("checkout", "-q", "--orphan", "other")
+        other = self.repo.commit({"x.txt": b"x\n"})
+        with self.assertRaisesRegex(ds.SwapError, "is not a commit of main"):
+            ds.main_moved(self.git, other, "main")
+
+    def test_non_code_is_changes_pys(self):
+        # verify runs the pull request's code, and changes.py is not in
+        # SWAP_CI_PATHS: main_moved keeps its own copy of NON_CODE, which
+        # must stay equal to changes.py's.
+        import changes
+        self.assertEqual((ds.NON_CODE.pattern, ds.NON_CODE.flags),
+                         (changes.NON_CODE.pattern, changes.NON_CODE.flags))
+        self.assertNotIn("changes", vars(ds))
+
+
 class Wiring(unittest.TestCase):
     """devkit_check.py's swap wiring rule, on this tree and on a broken copy."""
 

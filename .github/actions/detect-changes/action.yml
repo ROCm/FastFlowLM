@@ -51,10 +51,17 @@ outputs:
     value: ${{ steps.changes.outputs.new_models }}
   hipep-models:
     description: >
-      Comma-separated oga-hipep models whose catalog entries the change added
-      or edited (new weights or not): Test Windows HIPEP tests them as
-      required models, downloading them whatever their size.
+      Comma-separated oga-hipep models with weights no runner has yet (added,
+      new download fields or model_info.json hashes, or moved onto the GPU):
+      Test Windows HIPEP tests them as required models, downloading them
+      whatever their size.
     value: ${{ steps.changes.outputs.hipep_models }}
+  hipep-families:
+    description: >
+      Comma-separated families Test Windows HIPEP treats as touched: families,
+      and those of the oga-hipep entries the change edits without new weights,
+      which it tests one model of instead of each edited entry.
+    value: ${{ steps.changes.outputs.hipep_families }}
   devkit:
     description: >
       "true" when a dev-kit job is needed, for the dev-kit jobs: code under

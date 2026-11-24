@@ -5,8 +5,13 @@
     changes.py --files src/server/server.cpp docs/index.md
 
 Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
-  run_tests  false only when every changed file is documentation or otherwise
-             never built or packaged, so no NPU runner is reserved for it
+  run_tests  false only when every changed file is documentation, otherwise
+             never built or packaged, or used by no Build and Test job
+             (OUTSIDE_BUILD_AND_TEST: other workflows, scan configs, the CI
+             unit tests, the src/test programs cpu-tests.yml runs or no CI
+             builds, developer scripts), so no NPU runner is reserved for it.
+             A package or installer input no test observes (BUILD_ONLY)
+             builds the packages with suites "none" and no HIPEP
   families   comma-separated model families (details.family in
              src/model_list.json) whose engine or NPU catalog entry changed;
              the pr tier tests every model in them instead of one per engine
@@ -31,12 +36,21 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              their size, outside the pr tier's download budget, and fail if
              they cannot; only entries an NPU2 (aie2p) runner can run
   hipep_models
-             comma-separated oga-hipep entries (model ids) the change adds or
-             edits in model_list.json or model_info.json, new weights or not
-             (an edit names no family for the GPU, so this is how one gets
-             tested). Test Windows HIPEP requires them, as the NPU jobs do
-             new_models: downloaded whatever their size, and a failure if
-             they cannot be
+             comma-separated oga-hipep entries (model ids) with weights no
+             runner has yet: entries the change adds, whose download fields
+             (DOWNLOAD_FIELDS) or model_info.json hashes it changes, that it
+             moves onto the oga-hipep backend, or that it edits and that have
+             no family to stand for them. Test Windows HIPEP requires
+             them, as the NPU jobs do new_models: downloaded whatever their
+             size, and a failure if they cannot be
+  hipep_families
+             comma-separated families Test Windows HIPEP treats as touched:
+             families, and the families of the oga-hipep entries the change
+             edits without new weights (a capability, a context length).
+             Such an edit tests its family's one model (npu_test PR_GPU), not
+             every edited entry: an edit to many entries at once would
+             otherwise re-verify and test each, holding the one STX Halo for
+             hours
   devkit     true when a change needs a dev-kit job: code under flm-dev-kit/
              (the kernel, engine, converter and pybind sources, built by their
              own jobs), a src/lib/xrt file the dev kit links (libaiebu.a,
@@ -281,7 +295,7 @@ DEVKIT_ONLY = (
 # the product builds (devkit_families, devkit_stage). DEVKIT_ONLY's workflow
 # is not part of it.
 DEVKIT_CI = re.compile(
-    r"^\.github/(workflows/(build-and-test|release|devkit-(?!bench)[^/]+)\.yml$"
+    r"^\.github/(workflows/(build-and-test|devkit-(?!bench)[^/]+)\.yml$"
     r"|actions/(detect-changes|devkit(?!-bench)[^/]*)/|script/ci/)")
 
 # The dev-kit bench CI (devkit-bench.yml, devkit-bench-comment.yml, their
@@ -296,6 +310,50 @@ BENCH_CI = re.compile(
     r"^\.github/(workflows/devkit-bench(-comment)?\.yml$|actions/devkit-bench[^/]*/"
     r"|script/devkit-bench/|script/ci/test_devkit_bench[^/]*\.py$)")
 
+
+# Files no job of a pull request's Build and Test run builds, packages or
+# reads, beyond the changes job's own checks (the CI unit tests,
+# check_internal_refs.py), which run on every event: a change made only of
+# these (and documentation) builds and tests nothing, and they select no
+# dev-kit area. Other workflows test them on the same pull request where
+# they can: cpu-tests.yml builds and runs the src/test and src/tests
+# programs it lists (oga_hipep through oga_hipep_tests.ps1),
+# pr-security-scan.yml reads the scan configs, smolvla-package.yml tests
+# itself. The rest run on a schedule or dispatch (build-container.yml, which
+# builds the root Dockerfile into the image the Linux builds pull; the weekly
+# scan; release.yml, which calls Build and Test, never the other way), or by
+# hand (the engine test harnesses under src/test, the developer scripts).
+# src/test is all of it but NPU_TEST_INPUTS, which a Build and Test job reads.
+NPU_TEST_INPUTS = ("openai_api_test/", "openai_usage/", "d3_video/fixtures/",
+                   "model_extension_gemma4e/", "model_extension_consumer/")
+OUTSIDE_BUILD_AND_TEST = re.compile(
+    r"^(Dockerfile$"
+    r"|\.github/(dependabot\.yml|actionlint\.yaml)$"
+    r"|\.github/scan_tools_configs/"
+    r"|\.github/workflows/(smolvla-package|cpu-tests|pr-security-scan|weekly-security-scan"
+    r"|build-container|release)\.yml$"
+    r"|\.github/script/ci/(test_[^/]*\.py|check_internal_refs\.py|oga_hipep_tests\.ps1)$"
+    r"|\.github/script/npu_test/tools/(build_asr_eval|make_vision_assets)\.py$"
+    r"|\.github/script/npu_test/assets/(test_audio\.mp3|test_image2\.jpg)$"
+    r"|\.github/script/assets/d3_goldens_flash\.jsonl$"
+    r"|src/(home_install\.sh|update_qwen35\.sh|WinSetup\.ps1|CMakeSettings\.json)$"
+    r"|src/inno/(flm\.iss|terms\.txt)$"
+    r"|src/tests/"
+    r"|src/test/(?!(" + "|".join(re.escape(d) for d in NPU_TEST_INPUTS) + r")))")
+
+# Files that go into a package or an installer, or check a built package,
+# but that no NPU or GPU test can observe: the packages build (so a broken
+# one fails the run) and no NPU suite or HIPEP runs for them. The .deb and
+# MSI installers (debian/, src/wix/, the src/inno files src/wix/get_files.bat
+# copies) have install tests of their own, off unless FLM_INSTALL_TESTS is
+# set; the licence texts ship beside the binary.
+BUILD_ONLY = re.compile(
+    r"^(debian/"
+    r"|src/wix/"
+    r"|src/inno/(get_files\.bat|logo\.ico|terms\.rtf)$"
+    r"|(LICENSE_BINARY|LICENSE_RUNTIME|THIRD_PARTY_NOTICES)\.txt$"
+    r"|\.github/actions/(win-msi|remove-package)/"
+    r"|\.github/script/ci/check_no_copyleft_libs\.sh$)")
 
 # The dev-kit engines (flm-dev-kit/FLM_DLL/detail/<engine>) and what they
 # serve: engine -> families, models, uses (the engines whose code it
@@ -488,7 +546,7 @@ SUBSYSTEMS = (
     ("embedding engine", r"src/(common|include)/AutoEmbeddingModel/|src/include/embedding_model\.hpp$",
      ("embed-gemma",)),
     ("decision engine", r"src/(common|include)/(decision|AutoDecisionModel)/"
-     r"|src/include/decision_model\.hpp$|src/test/d3_\w+/", ("d3",)),
+     r"|src/include/decision_model\.hpp$|src/test/d3_video/fixtures/", ("d3",)),
     # src/detail builds the gemma4e engine from source; gemma4e_flash
     # includes it.
     ("gemma4e engine source", r"src/detail/", ("gemma4e", "gemma4e-flash")),
@@ -501,8 +559,10 @@ SUBSYSTEMS = (
 # or without one, a name ending in GPU_SUFFIX (model_list::backend_for_family).
 # No NPU model runs its code (bar the header above) or those entries, so they
 # name no family and run no NPU job: Test Windows HIPEP tests them, on every
-# GPU entry.
-GPU_ONLY = re.compile(r"^(src/(common|include)/oga/|src/test/oga_hipep/)")
+# GPU entry. Its machine matrix (hipep-machines.json, hipep_machines.py) only
+# shapes that job.
+GPU_ONLY = re.compile(r"^(src/(common|include)/oga/"
+                      r"|\.github/(hipep-machines\.json|script/ci/hipep_machines\.py)$)")
 GPU_SUFFIX = "-oga-hipep"
 # An entry's "backend" key (flm::backend::kBackendKey), when present, overrides
 # the suffix rule; GPU_BACKEND is the oga-hipep backend's id.
@@ -515,6 +575,10 @@ GPU_FRONTEND = re.compile(r"^src/(include|common)/AutoModel/")
 GPU_SUITES = {"chat", "api", "shutdown"}
 # Those that test no NPU model, so a change to their tests runs no NPU job.
 GPU_ONLY_SUITES = {"shutdown"}
+
+# The extension bundle's own sources: Test Windows HIPEP never builds or loads
+# it, so they run chat (and the extension jobs) without HIPEP.
+EXTENSION_TESTS = re.compile(r"^src/test/model_extension_(gemma4e|consumer)/")
 
 # Tests of shared code kept in an engine's test directory, which name no family:
 # test_model_downloader tests src/pull, beside the phi4 corelib tests it came
@@ -532,7 +596,6 @@ ASR_ONLY = re.compile(
     r"|src/(common|include)/AutoModel/modeling_qwen3_asr[^/]*\.(cpp|hpp)$"
     r"|src/xclbins/Confucius4-R2T2-NPU2/"
     r"|src/lib/(xrt|hrx)/[^/]*qwen3_asr_npu"
-    r"|src/test/qwen3_asr[^/]*/"
     r"|src/(common|include)/audio_process_utils/"
     r"|src/(common|include)/audio/"
     r"|src/common/AutoModel/[^/]*_audio\.cpp$"
@@ -540,9 +603,7 @@ ASR_ONLY = re.compile(
     r"|src/include/(pocketfft|dr_libs)/"
     r"|src/cmake/FlmAudioCodecs\.cmake$"
     r"|src/server/multipart\.(cpp|hpp)$"
-    r"|src/test/whisper_npu/"
     r"|\.github/script/npu_test/suites/(asr|whisper)[^/]*\.py$"
-    r"|\.github/script/npu_test/tools/build_asr_eval\.py$"
     r"|\.github/script/npu_test/assets/asr_eval/)")
 # These host /v1/audio/transcriptions but also every other endpoint, so they
 # count only when a changed line is about audio or speech.
@@ -560,12 +621,11 @@ TEST_SCOPES = (
     (r"\.github/script/npu_test/suites/(\w+)\.py$", None),  # the suite itself
     (r"\.github/script/npu_test/console\.py$", {"shutdown"}),
     (r"\.github/script/npu_test/assets/d3_goldens[^/]*\.jsonl$", {"decision"}),
-    (r"\.github/script/npu_test/assets/vision/|\.github/script/npu_test/tools/make_vision_assets\.py$",
-     {"chat"}),
+    (r"\.github/script/npu_test/assets/(vision/|test_image1\.jpg$)", {"chat"}),
     (r"src/test/(openai_api_test|openai_usage)/", {"api"}),
-    # The model-extension contracts run in cpu-tests.yml on every change; the
-    # Gemma4-open bundle and its NPU tests run with chat.
-    (r"src/test/(model_frontend|model_backend|model_list_platform|model_extension_\w+)/"
+    # The Gemma4-open bundle and its NPU tests run with chat (the model-
+    # extension contracts are OUTSIDE_BUILD_AND_TEST: cpu-tests.yml).
+    (r"src/test/model_extension_(gemma4e|consumer)/"
      r"|src/schemas/|src/cmake/FastFlowLMModelExtension[^/]*\.cmake(\.in)?$", {"chat"}),
 )
 
@@ -653,9 +713,12 @@ class Decision:
     hipep: bool = False
     # NPU catalog entries no runner has yet (see new_downloads).
     new_models: list = field(default_factory=list)
-    # The oga-hipep entries added or edited in the head catalog, which include
-    # those with new weights (new_downloads' GPU half).
+    # The oga-hipep entries with weights no runner has yet (new_downloads'
+    # GPU half, and entries moved onto the GPU).
     gpu_models: set = field(default_factory=set)
+    # The families of the oga-hipep entries edited without new weights:
+    # Test Windows HIPEP tests one model of each (hipep_families).
+    gpu_edit_families: set = field(default_factory=set)
     # Dev-kit areas (DEVKIT_AREAS) a changed flm-dev-kit/ file needs.
     devkit_areas: set = field(default_factory=set)
     # The areas something other than the dev-kit CI or a shipped kernel
@@ -672,6 +735,10 @@ class Decision:
     bench_source: Optional[str] = None
     # Changed bench CI files (BENCH_CI), which Build and Test leaves alone.
     bench_ci: list = field(default_factory=list)
+    # Changed files no Build and Test job uses (OUTSIDE_BUILD_AND_TEST).
+    outside: list = field(default_factory=list)
+    # Changed package and installer files no test observes (BUILD_ONLY).
+    build_only: list = field(default_factory=list)
     # A file the dev-kit catalog check reads changed (DEVKIT_CATALOG).
     devkit_catalog: bool = False
     # Only shipped kernels (SHIPPED_KERNEL) selected the xclbin area.
@@ -706,6 +773,7 @@ class Decision:
         self.hipep = False
         self.new_models = []
         self.gpu_models = set()
+        self.gpu_edit_families = set()
         self.devkit_areas = set()
         self.source_areas = set()
         self.devkit_families = set()
@@ -787,15 +855,26 @@ class Decision:
                 return f"flm-dev-kit only: {what}{devkit}"
             if self.image_only:
                 return "kernel build image only (devkit-aie-image.yml): NPU tests and dev-kit jobs skipped"
+            if self.bench_ci and self.outside:
+                return ("bench CI and files Build and Test does not use: NPU tests, HIPEP, "
+                        "dev-kit jobs and benches skipped")
             if self.bench_ci:
                 return ("bench CI only (devkit-bench.yml, called for engine or kernel source only): "
                         "NPU tests, dev-kit jobs and benches skipped")
+            if self.outside:
+                return ("files Build and Test does not use (other workflows, CPU tests, scan configs, "
+                        "developer scripts): NPU tests, HIPEP and dev-kit jobs skipped")
             return "documentation only: NPU tests skipped" + devkit
         return self._product_summary() + devkit
 
     def _product_summary(self) -> str:
         hipep = "HIPEP: " + ("runs" if self.runs_hipep() else "skipped")
         if self.suites_value() == "none":
+            if self.build_only and not self.runs_hipep():
+                if self.devkit_stage():
+                    return ("packaging only: packages build with the dev-kit files staged, "
+                            "NPU-tested for them; HIPEP skipped")
+                return "packaging only: packages build, NPU tests and HIPEP skipped"
             return f"oga-hipep only: NPU tests skipped; {hipep}"
         parts = ["NPU tests run"]
         parts.append("families in full: " + (", ".join(sorted(self.families)) or "none"))
@@ -805,14 +884,16 @@ class Decision:
             parts.append("new models: " + ", ".join(self.new_models))
         parts.append(hipep)
         if self.gpu_models:
-            parts.append("GPU models added or edited: " + ", ".join(sorted(self.gpu_models)))
+            parts.append("GPU models with new weights: " + ", ".join(sorted(self.gpu_models)))
+        if self.gpu_edit_families:
+            parts.append("GPU families edited: " + ", ".join(sorted(self.gpu_edit_families)))
         return "; ".join(parts)
 
     def suites_value(self) -> str:
         if self.suites is None:
             return "all"
         if not self.suites:
-            return "none" if self.hipep else "all"
+            return "none" if self.hipep or self.build_only else "all"
         return ",".join(s for s in SUITES if s in self.suites)
 
     def outputs(self) -> dict[str, str]:
@@ -826,6 +907,7 @@ class Decision:
                 "hipep": str(self.runs_hipep()).lower(),
                 "new_models": ",".join(self.new_models),
                 "hipep_models": ",".join(sorted(self.gpu_models)),
+                "hipep_families": ",".join(sorted(self.families | self.gpu_edit_families)),
                 "devkit": str(bool(self.devkit_areas)).lower(),
                 "devkit_catalog": str(self.devkit_catalog).lower(),
                 "devkit_areas": self.devkit_value(),
@@ -892,7 +974,8 @@ RUNNER_PLATFORMS = {"aie2p"}
 # no runner has yet. A raised flm_min_version marks a downloaded copy outdated
 # (model_downloader.cpp), so flm pull fetches the files again; that and new
 # model_info.json hashes are how republished weights ship.
-DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version")
+# model_info_key points the entry at other hashes in model_info.json.
+DOWNLOAD_FIELDS = ("name", "url", "file_url", "files", "flm_min_version", "model_info_key")
 
 
 def split_downloads(ids: Iterable[str], head: dict[str, dict]) -> tuple[list, list]:
@@ -919,6 +1002,13 @@ def new_downloads(base: dict[str, dict], head: dict[str, dict]) -> tuple[list, l
         (mid for mid, entry in head.items()
          if base.get(mid) is None
          or any(base[mid].get(k) != entry.get(k) for k in DOWNLOAD_FIELDS)), head)
+
+
+def moved_onto_gpu(base: dict[str, dict], head: dict[str, dict]) -> list:
+    """Entries in both catalogs that only the head runs on the GPU: weights
+    no HIPEP machine has tested, whatever their download fields."""
+    return sorted(mid for mid, entry in head.items()
+                  if mid in base and runs_on_gpu(mid, entry) and not runs_on_gpu(mid, base[mid]))
 
 
 def split_entry(mid: str, sides: list, fams: set, gpu: list) -> None:
@@ -967,8 +1057,10 @@ def model_info_diff(base_text: Optional[str], head_text: Optional[str],
 def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
                        catalog: dict[str, dict], neither: str) -> None:
     """A catalog file's changed entries: their NPU families in full, and Test
-    Windows HIPEP for GPU entries, which also tests those the head catalog
-    still runs on the GPU. A change to neither is not scoped."""
+    Windows HIPEP for GPU entries, which tests one model of the family of
+    each the head catalog still runs on the GPU (the entries with new
+    weights are required on their own, through add_new_downloads). A change
+    to neither is not scoped."""
     d.families |= fams
     if fams:
         d.add_suites(family_suites(fams, catalog))
@@ -977,7 +1069,10 @@ def add_catalog_change(d: Decision, path: str, fams: set, gpu: list,
     what = ", ".join(sorted(fams)) or ("no NPU family" if gpu else neither)
     if gpu:
         d.hipep = True
-        d.gpu_models |= {mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])}
+        edited = [mid for mid in gpu if mid in catalog and runs_on_gpu(mid, catalog[mid])]
+        d.gpu_edit_families |= {family_of(catalog[mid]) for mid in edited} - {""}
+        # An entry with no family has no family model to stand for it.
+        d.gpu_models |= {mid for mid in edited if not family_of(catalog[mid])}
         what += (f"; {len(gpu)} oga-hipep entr{'y' if len(gpu) == 1 else 'ies'}, e.g. {gpu[0]},"
                  " which only Test Windows HIPEP runs")
     d.reasons.append(f"{path}: entries changed in {what}")
@@ -1204,6 +1299,18 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             d.reasons.append("bench CI only: product builds, NPU tests and dev-kit jobs skipped")
             return d
 
+    outside = [f for f in files if OUTSIDE_BUILD_AND_TEST.match(f) and not is_non_code(f)]
+    if outside:
+        d.outside = outside
+        files = [f for f in files if not OUTSIDE_BUILD_AND_TEST.match(f)]
+        d.reasons.append(f"{len(outside)} file(s) no Build and Test job uses, e.g. {outside[0]}: "
+                         "nothing built or tested for them here (OUTSIDE_BUILD_AND_TEST)")
+        if not [f for f in files if not is_non_code(f)]:
+            d.run_tests = False
+            d.suites = set()
+            d.reasons.append("nothing else changed: product builds, NPU tests and dev-kit jobs skipped")
+            return d
+
     bench = next((f for f in files if is_bench_source(f)), None)
     if bench is not None:
         d.bench_source = bench
@@ -1259,7 +1366,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
     # Product files the dev kit builds from, and the CI that runs it, also
     # select dev-kit areas; their product rules below are unchanged.
     for path in code:
-        if DEVKIT_CI.match(path):
+        if DEVKIT_CI.match(path) and not (BUILD_ONLY.match(path) or GPU_ONLY.match(path)):
             new = ALL_DEVKIT_AREAS - d.devkit_areas
             d.devkit_areas |= ALL_DEVKIT_AREAS
             if new:
@@ -1286,6 +1393,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
 
     gpu_code = []
     for path in code:
+        if BUILD_ONLY.match(path):
+            d.build_only.append(path)
+            d.reasons.append(f"{path}: packaged or checks a package, which no NPU or GPU test "
+                             "observes: packages build, no suite for it")
+            continue
         hit = None if SHARED_TESTS.match(path) else engine_families(path, xclbin_families)
         if hit is None:
             hit = next(((why, fams) for why, pattern, fams in SUBSYSTEMS
@@ -1311,7 +1423,7 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
                 scope = names if names is not None else (
                     {m.group(1)} if m.group(1) in SUITES else None)
                 break
-        if scope and scope & GPU_SUITES:
+        if scope and scope & GPU_SUITES and not EXTENSION_TESTS.match(path):
             d.reach_hipep(f"{path}: tests the {', '.join(sorted(scope & GPU_SUITES))} suite,"
                           " which Test Windows HIPEP runs")
         if scope:
@@ -1342,6 +1454,11 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
             add_catalog_change(d, MODEL_LIST, *catalog_diff(base, head_catalog), head_catalog,
                                "no family (top-level fields only)")
             d.add_new_downloads(MODEL_LIST, *new_downloads(base, head_catalog))
+            moved = moved_onto_gpu(base, head_catalog)
+            if moved:
+                d.gpu_models |= set(moved)
+                d.reasons.append(f"{MODEL_LIST}: moved onto the oga-hipep backend, tested whatever "
+                                 "their size: " + ", ".join(moved))
     if MODEL_INFO in code:
         diff = None
         if git:

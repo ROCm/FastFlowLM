@@ -269,16 +269,17 @@ struct SmolVLA_expert_self_attn_block {
         // the rows are re-spaced on the way in.
         _copy_rows_padded(k_layers[slot].data(), vlm_k, P, DK, pDK);
         _copy_rows_padded(v_layers[slot].data(), vlm_v, P, DV, pDV);
-        // Rows [P, tail) round the prefix up to the block the mha reads in. They
-        // are zero at construction, but a second prepare over a shorter prefix
-        // would otherwise leave the previous one's rows exposed there, so clear
-        // them rather than rely on the last-block masking to skip them.
-        memset(k_layers[slot].data() + (size_t)P * pDK, 0, (size_t)(tail - P) * pDK * sizeof(bf16));
-        memset(v_layers[slot].data() + (size_t)P * pDV, 0, (size_t)(tail - P) * pDV * sizeof(bf16));
-        // Only the prefix rows changed, so only they go to the device. The tail
-        // rows are pushed per step by forward().
-        _sync_rows_to_device(k_layers[slot], 0, tail, pDK);
-        _sync_rows_to_device(v_layers[slot], 0, tail, pDV);
+        // Rows [P, tail) round the prefix up to the block the mha reads in, and the 64 rows after them hold the
+        // expert's own K/V (L rows written per step, the rest of the block is padding). They are zero at
+        // construction, but a second prepare over a different prefix would otherwise leave the previous
+        // one's rows exposed there, so clear them rather than rely on the last-block masking to skip them.
+        const int clear_to = std::min(tail + 64, EXPERT_MAX_KV);
+        memset(k_layers[slot].data() + (size_t)P * pDK, 0, (size_t)(clear_to - P) * pDK * sizeof(bf16));
+        memset(v_layers[slot].data() + (size_t)P * pDV, 0, (size_t)(clear_to - P) * pDV * sizeof(bf16));
+        // Only these rows changed, so only they go to the device. The expert's own rows are pushed per step by
+        // forward().
+        _sync_rows_to_device(k_layers[slot], 0, clear_to, pDK);
+        _sync_rows_to_device(v_layers[slot], 0, clear_to, pDV);
 
         prepared_P = P;
         tail_row   = tail;
@@ -555,17 +556,19 @@ struct SmolVLA_expert_cross_attn_block {
         const int pDK = (int)def->pDK, pDV = (int)def->pDV;
 
         // The VLM cache is packed [P, DK]; the mm reads a padded row stride, so
-        // the rows are re-spaced into k_cat/v_cat on the way in. Rows past P keep
-        // the zeros from construction, and the mha never reads them (its sequence
-        // is built for exactly P).
+        // the rows are re-spaced into k_cat/v_cat on the way in.
         _copy_rows_padded(k_cat.data(), vlm_k, P, DK, pDK);
         _copy_rows_padded(v_cat.data(), vlm_v, P, DV, pDV);
-        // only the P prefix rows were rewritten; the rows past them are never read
-        // (the mha is built for exactly P), so the rest of the buffer stays put.
+        // The mha reads whole 64-row blocks, so rows [P, tail) are visible to it. A previous, longer
+        // prefix left its rows there: clear them so the output does not depend on the call history.
+        const int tail = ((P + 63) / 64) * 64;
+        memset(k_cat.data() + (size_t)P * pDK, 0, (size_t)(tail - P) * pDK * sizeof(bf16));
+        memset(v_cat.data() + (size_t)P * pDV, 0, (size_t)(tail - P) * pDV * sizeof(bf16));
+        // rows past the last block are never read, so the rest of the buffer stays put.
         static const bool cached = [](){ const char* e = std::getenv("SMOLVLA_XPREP_CACHE"); return !(e && e[0] == '0'); }();
         if (cached) {
-            _sync_rows_to_device(k_cat, 0, P, pDK);
-            _sync_rows_to_device(v_cat, 0, P, pDV);
+            _sync_rows_to_device(k_cat, 0, tail, pDK);
+            _sync_rows_to_device(v_cat, 0, tail, pDV);
             // one two-run list per cross layer, built once for the layer's weight buffer
             if (prep_rl.size() <= slot) { prep_rl.resize(slot + 1); prep_w.resize(slot + 1, nullptr); }
             if (prep_w[slot] != weights.data()) {
