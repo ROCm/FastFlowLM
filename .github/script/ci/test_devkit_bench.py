@@ -559,6 +559,15 @@ class Resolve(unittest.TestCase):
         p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A, "skipped"))
         self.assertEqual(p["builds"]["win-xrt"], {"ok": True, "package": f"fastflowlm-windows-{SHA_B}", "libs": ""})
         self.assertEqual(p["builds"]["lin-xrt"]["libs"], "")
+        # The XRT engine jobs skipped (an HRX pin change): its packages bench as built.
+        built = resolve.engines_built([{"name": "devkit-engines / lin-xrt", "conclusion": "skipped"},
+                                       {"name": "devkit-engines / lin-hrx", "conclusion": "success"},
+                                       {"name": "devkit-engines / win-hrx", "conclusion": "success"}])
+        self.assertEqual(built, {"lin-hrx", "win-hrx"})
+        self.assertIsNone(resolve.engines_built([{"name": "devkit-engines", "conclusion": "success"}]))
+        p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A, "success", built))
+        self.assertEqual(p["builds"]["win-xrt"], {"ok": True, "package": f"fastflowlm-windows-{SHA_B}", "libs": ""})
+        self.assertEqual(p["builds"]["lin-xrt"]["libs"], "")
         # Engines failed: nothing benches, as write_plan.
         p = resolve.parse_plan(resolve.plan_from_artifacts(index, SHA_A, "failure"))
         self.assertFalse(any(b["ok"] for b in p["builds"].values()))

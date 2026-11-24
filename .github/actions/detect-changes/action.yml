@@ -97,6 +97,12 @@ outputs:
       CI alone), whose libraries are staged into the product builds. Empty
       when no dev-kit engine is touched.
     value: ${{ steps.changes.outputs.devkit_families }}
+  devkit-runtimes:
+    description: >
+      Comma-separated runtimes whose dev-kit engines devkit-engines builds and
+      devkit-stage stages: "xrt,hrx", or "hrx" when only the pinned HRX package
+      (hrx-integration/) selects the dll area.
+    value: ${{ steps.changes.outputs.devkit_runtimes }}
   devkit-stage:
     description: >
       "true" when a pull request's run stages dev-kit files into its product

@@ -219,6 +219,36 @@ class Engines(StageCase):
         self.assertEqual(code, 1)
         self.assertIn("linux hrx: engines to stage (mha, qwen3_npu) but no dev-kit libraries", text)
 
+    def test_hrx_runtime_only(self):
+        # Only the pinned HRX package changed (changes.py devkit_runtimes):
+        # devkit-engines built no XRT library, and none is staged.
+        shutil.rmtree(self.libs / "devkit-libs-lin-xrt")
+        shutil.rmtree(self.libs / "devkit-libs-win-xrt")
+        code, text, out = self.stage("--runtimes", "hrx")
+        self.assertEqual(code, 0, text)
+        self.assertEqual(out["staged"], "true")
+        self.assertEqual(self.tree("lin", "xrt"), {})
+        self.assertEqual(self.tree("win", "xrt"), {})
+        self.assertEqual(sorted(self.tree("lin", "hrx")), ["src/lib/hrx/libmha.so", "src/lib/hrx/libqwen3_npu.so"])
+        self.assertIn("hrx runtime(s) only", text)
+        # The swap: every manifest is there, the XRT ones empty.
+        manifests = {k: self.manifest(*k) for k in ds.TEST_JOBS}
+        self.assertEqual([k for k, m in manifests.items() if m.files], [("linux", "hrx"), ("windows", "hrx")])
+        entries, _, errors = ds.plan_swap(manifests, "100", HEAD)
+        self.assertEqual((errors, len(entries)), ([], 6))
+        self.assertTrue(all(p.startswith("src/lib/hrx/") for p in entries))
+        # Without --runtimes, the missing XRT libraries are an error, as before.
+        code, text, _ = self.stage()
+        self.assertEqual(code, 1)
+        self.assertIn("linux xrt: engines to stage (mha, qwen3_npu) but no dev-kit libraries", text)
+
+    def test_runtimes_argument(self):
+        for bad in ("", "xrt,gpu", "XRT"):
+            with self.subTest(bad=bad), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.stage("--runtimes", bad)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.stage("--runtimes", "hrx", "--full-refresh")
+
     def test_not_a_library(self):
         (self.libs / "devkit-libs-lin-xrt" / "libqwen3_npu.so").write_bytes(b"MZ not an ELF")
         (self.libs / "devkit-libs-win-xrt" / "qwen3_npu.lib").write_bytes(b"MZ not an archive")

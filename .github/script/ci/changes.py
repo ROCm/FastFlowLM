@@ -116,6 +116,12 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              would be noise, and no verified swap can come with a change
              to the CI that checks it). Empty when no dev-kit engine is
              touched
+  devkit_runtimes
+             comma-separated runtimes whose dev-kit engines devkit-engines
+             builds and devkit-stage stages: "xrt,hrx", or "hrx" when the
+             dll area is selected only by the pinned HRX package
+             (hrx-integration/, HRX_PIN), which no XRT build reads. Product
+             builds and suites are not narrowed by it
   devkit_stage
              true when a pull request's run (and the dev-kit full refresh)
              stages dev-kit files into its product builds (build-and-test.yml
@@ -262,6 +268,16 @@ DEVKIT_FROM_PRODUCT = (
     # cache on them.
     (re.compile(r"^\.github/windows-deps/"), {"dll"}),
 )
+
+# The pinned HRX package (hrx-integration/: hrx-release.env and the fetch
+# scripts). Only the HRX builds read it: the dev-kit engines through
+# build_manylinux.sh, build.ps1 -Runtime HRX, hrx.mk and cmake/flm_hrx.cmake,
+# never the XRT ones (build.sh, build.ps1 -Runtime XRT). When nothing else
+# selects the dll area, devkit-engines builds and devkit-stage stages the HRX
+# engines alone (devkit_runtimes "hrx"): a rebuilt XRT library, not byte for
+# byte the committed one, would only ask for a swap of src/lib/xrt. The
+# product suites stay as they are (every suite, every package).
+HRX_PIN = re.compile(r"^hrx-integration/")
 
 # The files devkit_check.py's catalog rules read: what the product ships
 # (src/model_list.json, src/xclbins, src/lib) and the dev-kit JSON describing
@@ -808,6 +824,9 @@ class Decision:
     devkit_families: set = field(default_factory=set)
     # Changed kernel build image files (DEVKIT_ONLY).
     image_only: list = field(default_factory=list)
+    # The runtimes whose dev-kit engines devkit-engines builds and
+    # devkit-stage stages (devkit_runtimes; HRX_PIN).
+    devkit_runtimes: tuple = ("xrt", "hrx")
     # The first changed dev-kit engine or kernel source (is_bench_source), or
     # a reason for benching when the changed files are unknown; None: no
     # source changed. The benches run only when Build and Test also builds
@@ -992,6 +1011,7 @@ class Decision:
                 "devkit_catalog": str(self.devkit_catalog).lower(),
                 "devkit_areas": self.devkit_value(),
                 "devkit_families": ",".join(sorted(self.devkit_families)),
+                "devkit_runtimes": ",".join(self.devkit_runtimes),
                 "devkit_stage": str(self.devkit_stage()).lower(),
                 "devkit_bench": str(self.bench()).lower(),
                 "swap_verified": str(self.swap_verified).lower(),
@@ -1333,6 +1353,33 @@ def decide(files: Optional[list[str]], git: Optional[Git] = None,
            devkit_engines: Optional[DevkitEngines] = None,
            engine_libs: Optional[frozenset] = None,
            repo: Optional[Path] = None) -> Decision:
+    """The decision for a list of changed files (None: git could not tell);
+    see _decide. devkit_runtimes is "hrx" alone when the HRX pin (HRX_PIN)
+    changed and the rest, decided on its own, would build no XRT engine: it
+    stages none (no engine family) and holds neither dev-kit CI (which
+    builds every area to exercise it) nor a src/lib/xrt file (a library an
+    earlier swap brought in: the XRT engines are rebuilt from the current
+    source, so a stale one asks for a swap again)."""
+    d = _decide(files, git, head_catalog_text, devkit_engines, engine_libs, repo)
+    if files is None or "dll" not in d.devkit_areas:
+        return d
+    pin = [f for f in files if HRX_PIN.match(f) and not is_non_code(f)]
+    if not pin:
+        return d
+    rest = [f for f in files if f not in pin]
+    other = _decide(rest, git, head_catalog_text, devkit_engines, engine_libs, repo)
+    if not (other.devkit_families or any(DEVKIT_CI.match(f) or f.startswith("src/lib/xrt/") for f in rest)):
+        d.devkit_runtimes = ("hrx",)
+        d.reasons.append(f"{pin[0]}: the pinned HRX package, which only the HRX builds read, and nothing "
+                         "else selects the dll area -> the HRX dev-kit engines alone are built and staged")
+    return d
+
+
+def _decide(files: Optional[list[str]], git: Optional[Git] = None,
+           head_catalog_text: Optional[str] = None,
+           devkit_engines: Optional[DevkitEngines] = None,
+           engine_libs: Optional[frozenset] = None,
+           repo: Optional[Path] = None) -> Decision:
     """The decision for a list of changed files (None: git could not tell).
 
     git supplies the changed lines and the base and head versions of the
@@ -1611,6 +1658,12 @@ def after_swap(d: Decision, git, head_catalog_text: Optional[str],
     since = decide(files, None, head_catalog_text, engines, engine_library_files(engines, repo), repo)
     if not since.devkit_stage():
         d.keep_swap(swap, since)
+    elif since.devkit_runtimes == ("hrx",) and d.devkit_runtimes != ("hrx",):
+        # Only the HRX pin (and nothing an XRT build reads) changed since the
+        # swap: its XRT libraries stay what its run tested.
+        d.devkit_runtimes = ("hrx",)
+        d.reasons.append(f"since swap commit {swap[:10]} only the HRX pin changed for the XRT builds: "
+                         "the HRX dev-kit engines alone are rebuilt and staged")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
