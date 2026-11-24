@@ -87,9 +87,10 @@
                     "model.q4nx",
                     "tokenizer.json",
                     "tokenizer_config.json",
-                    "chat_template.jinja"
+                    "chat_template.jinja",
+                    "vision_weight.q4nx"
                 ],
-                "vlm": false,
+                "vlm": true,
                 "asr": false,
                 "details": {
                     "format": "NPU2",
@@ -100,6 +101,7 @@
                     "quantization_level": "Q4_K"
                 },
                 "label": [
+                    "vision",
                     "reasoning",
                     "tool-calling"
                 ],
