@@ -101,7 +101,7 @@ __attribute__((noinline)) static void qk_chunk(bf16 *__restrict q, const uint8_t
                                                const aie::vector<int, 16> &idx, int remaining, bool is_first) {
     float *c = (float *)(s + 2 * 16);
     aie::mask<16> mask = aie::le(idx, (remaining < CHUNK_KEYS) ? remaining : CHUNK_KEYS);
-#ifndef FLM_STUB
+#if !defined(FLM_STUB) && !defined(PROBE_NO_QK_MATH)
     _attn_qk_bfp16<DH / 8>(q, k, s, m, c_local, mask, is_first);
 #endif
     aie::vector<float, 8> c_vec = aie::load_v<8>(c_local);

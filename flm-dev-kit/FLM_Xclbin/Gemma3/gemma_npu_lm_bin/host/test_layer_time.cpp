@@ -148,7 +148,8 @@ int main(int argc, char** argv) {
         l.rope.sync_to_device();
         l.kv.sync_to_device();
 
-        const std::vector<uint32_t> lengths = {16, 1088, 4160};
+        const std::vector<uint32_t> lengths = sliding ? std::vector<uint32_t>{16, 1088, 4160}
+                                                      : std::vector<uint32_t>{16, 1088, 4160, 8192};
         for (uint32_t L : lengths) {
             sequence.gen_layer_seq(l.app.seq(), L, sliding);
             auto run = l.app.create_run(l.x, l.w, l.rms, l.rope, l.kv);

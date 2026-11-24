@@ -138,7 +138,7 @@ __attribute__((noinline)) static void pack_vt_tail(const bf16 *__restrict keys_0
 
 __attribute__((noinline)) static void kv_chunk(bf16 *__restrict s, const uint8_t *__restrict v, y_acc_dtype *__restrict y, float *__restrict l) {
     float *c = (float *)(s + 2 * 16);
-#ifndef FLM_STUB
+#if !defined(FLM_STUB) && !defined(PROBE_NO_KV_MATH)
     calculate_l(s, c, l);
     attn_fv_bfp16<DH / 8>(s, v, y, c);
 #endif

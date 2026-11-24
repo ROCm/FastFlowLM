@@ -192,3 +192,18 @@ So read-ahead depth is not what costs ~0.18 ms per layer: the projection path ru
 chained weight readers), and any wait (the steps between the 4 matrices) stops all 16 cores and the weight stream.
 A fix would be a redesign of the projection data flow (for example x resident per core for a whole matrix, as in
 the old `lm_head.xclbin`, and independent weight readers).
+
+## Attention math (2026-11-23)
+
+Timing probes `make bitstream PROBE=NO_QK_MATH` / `PROBE=NO_KV_MATH` skip the Q.K / P.V math (data still moves);
+`test_layer_time`, median of 20, ms:
+
+| Layer | normal | no Q.K math | no P.V math |
+|---|---|---|---|
+| global, L 1,088 | 1.339 | 1.335 | 1.288 |
+| global, L 4,160 | 1.632 | 1.620 | 1.439 |
+| global, L 8,192 | 2.039 | 2.018 | 1.639 |
+| sliding, ring full | 1.337-1.358 | 1.330-1.336 | 1.289 |
+
+Q.K costs at most 0.02 ms (so converting Q once per call instead of per chunk would not pay); P.V costs ~0.19 ms per
+global layer at 4K and ~0.40 ms at 8K, ~0.05 ms per sliding layer.
