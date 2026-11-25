@@ -12,7 +12,7 @@ CI build each comes from: `xclbins-<unit, / as _>[_<MODEL_TYPE>]`, a folder of t
 
 | Kernels | Artifacts | Compiler |
 |---|---|---|
-| slot file | CI build (folder in `devkit-xclbins-shard-<i>`) | compiler |
+| slot file (`.xclbin` or `.switches`) | CI build (folder in `devkit-xclbins-shard-<i>`) | compiler |
 
 ## How to Test Your Kernel Code
 
@@ -23,7 +23,7 @@ assemble them per model. To try them on your machine:
 
 1. Download the `devkit-xclbins` artifact from that run (the run's page, or
    `gh run download <run id> -R ROCm/FastFlowLM -n devkit-xclbins -D <dir>`). It is laid out as
-   FastFlowLM's xclbins tree: `<model folder>/<slot>.xclbin`, the folders and slots of the
+   FastFlowLM's xclbins tree: `<model folder>/<slot>` (`.xclbin`, or a `.switches` file), the folders and slots of the
    tables below. A model only some of whose kernels the change rebuilt gets only those.
 2. Copy the model folders you want over the installed ones, keeping the file names:
    - **Linux:** `<install dir>/opt/fastflowlm/share/flm/xclbins/`
@@ -884,6 +884,28 @@ that model's two vision kernels; no kernel is built for it.
 `d3.switches` is not a kernel: it packs the aie2p-launchlib control-packet switches that let attention (from 512 tokens) and conv1d (from 1,536 rows)
 run in the hardware context of `mm_rtm2_glu.xclbin` (about 0.12 ms per switch instead of 2.2-2.8 ms for a second context); see `d3_switches/README.md`.
 The engine uses it when it is in the folder and `mm_rtm2_glu.xclbin` is the mm kernel; `D3_NO_SWITCH=1` turns it off.
+
+### Inkling
+
+#### `inkling-2:mini` → `Inkling-2-Mini-NPU2`
+
+Thinking Machines Inkling-2-Mini (MoE). Prefill and decode do not load one xclbin per kernel: each
+phase is a set of aie2p-launchlib apps, switched between by control packets, so the slots hold
+`.switches` files (`switches` and `decode_switches` build them, with the xclbin each is made for)
+next to the xclbins. `mm_rtm2_glu.xclbin` and `prefill_attn.xclbin` are the base contexts of
+the prefill matmul and attention apps; `decode.xclbin` the decode overlay. The vision tower
+(`vision_mm.xclbin`, `vision_attn.xclbin`) is the Qwen3-VL-4B one (same 1,024 width, 16 x 64 heads):
+no kernel is built for it.
+
+| Kernels | Artifacts | Compiler |
+|---|---|---|
+| `decode.xclbin` | `xclbins-Inkling2_decode_switches` | Peano |
+| `inkling2.switches` | `xclbins-Inkling2_switches` | Peano |
+| `inkling2_decode.switches` | `xclbins-Inkling2_decode_switches` | Peano |
+| `mm_rtm2_glu.xclbin` | `xclbins-Inkling2_prefill_moe` | Peano |
+| `prefill_attn.xclbin` | `xclbins-Inkling2_prefill_attention` | Peano |
+| `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_4B-VISION-ATTENTION` | Peano |
+| `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_QWEN3_4B-VISION-MM` | Peano |
 
 ### SmolVLA
 

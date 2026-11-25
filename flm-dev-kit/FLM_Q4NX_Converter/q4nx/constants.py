@@ -37,6 +37,7 @@ class ModelArch(IntEnum):
     DFLASH = auto()
     QWEN38_DFLASH2 = auto()
     QWEN3_ASR = auto()
+    INKLING2_LOOP = auto()
 
 
 ModelArchNames: dict[ModelArch, list[str]] = {
@@ -84,6 +85,7 @@ ModelArchNames: dict[ModelArch, list[str]] = {
     ModelArch.DFLASH: ["dflash"],
     # Read from the HF safetensors by convert_dflash2.py, never detected from a GGUF.
     ModelArch.QWEN38_DFLASH2: [],
+    ModelArch.INKLING2_LOOP: ["inkling2_loop", "inkling-2", "inkling2"],
 }
 
 ModelArchConfigs: dict[ModelArch, str] = {
@@ -116,4 +118,5 @@ ModelArchConfigs: dict[ModelArch, str] = {
     ModelArch.DFLASH: "dflash.json",
     ModelArch.QWEN38_DFLASH2: "qwen3.8_dflash2.json",
     ModelArch.QWEN3_ASR: "qwen3_asr.json",
+    ModelArch.INKLING2_LOOP: "inkling2_loop.json",
 }

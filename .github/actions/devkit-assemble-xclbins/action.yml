@@ -4,7 +4,7 @@
 name: Dev-kit xclbin assembly
 description: >
   Downloads a run's devkit-xclbins-shard-* artifacts and lays their kernels
-  out per model, <model folder>/<slot>.xclbin as kernel_assignment.json
+  out per model, <model folder>/<slot> (.xclbin or .switches) as kernel_assignment.json
   assigns them (the layout of FastFlowLM's xclbins/ tree), with
   .github/script/ci/devkit_assemble_xclbins.py, then uploads the tree as
   devkit-xclbins. A model some of whose kernels were not built gets the ones
