@@ -119,7 +119,7 @@ public:
         if (include_usage) {
             response["usage"] = nullptr;
         }
-        send_event("data: " + response.dump() + "\n\n", false);
+        send_event("data: " + flm::error_model::dump_json(response) + "\n\n", false);
     }
 
     void on_end(const chat_turn_end& end) override {
@@ -233,7 +233,7 @@ private:
             // with no choices carries the usage of the whole request
             final_response["usage"] = nullptr;
         }
-        send_event("data: " + final_response.dump() + "\n\n", false);
+        send_event("data: " + flm::error_model::dump_json(final_response) + "\n\n", false);
         if (include_usage) {
             json usage_response = {
                 {"id", stream_id},
@@ -244,11 +244,11 @@ private:
                 {"choices", json::array()},
                 {"usage", usage}
             };
-            send_event("data: " + usage_response.dump() + "\n\n", false);
+            send_event("data: " + flm::error_model::dump_json(usage_response) + "\n\n", false);
         }
         // the server log shows the usage whether or not the client asked for it
-        std::cout << "ChatCompletionChunk: " << final_response << std::endl;
-        std::cout << "Usage: " << usage << std::endl;
+        std::cout << "ChatCompletionChunk: " << flm::error_model::dump_json(final_response) << std::endl;
+        std::cout << "Usage: " << flm::error_model::dump_json(usage) << std::endl;
         // Send the [DONE] message
         send_event("data: [DONE]\n\n", true);
     }

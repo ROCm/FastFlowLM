@@ -235,17 +235,20 @@ def _raw_request(api: Api, method: str, path: str, body: bytes | None = None, *,
                  content_type: str | None = "application/json",
                  content_length: int | None = None) -> tuple[int, dict[str, str], Any]:
     u = urllib.parse.urlparse(api.url)
-    conn = http.client.HTTPConnection(u.hostname or "127.0.0.1", u.port or 80, timeout=15)
+    base_path = u.path.removesuffix("/v1/chat/completions").rstrip("/")
+    req_path = f"{base_path}{path}" if base_path else path
+    conn_cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    conn = conn_cls(u.hostname or "127.0.0.1", u.port, timeout=api.timeout)
     try:
         if content_length is not None:
-            conn.putrequest(method, path)
+            conn.putrequest(method, req_path)
             if content_type:
                 conn.putheader("Content-Type", content_type)
             conn.putheader("Content-Length", str(content_length))
             conn.endheaders()
         else:
             headers = {"Content-Type": content_type} if content_type is not None else {}
-            conn.request(method, path, body=body, headers=headers)
+            conn.request(method, req_path, body=body, headers=headers)
         resp = conn.getresponse()
         raw = resp.read().decode("utf-8", "replace")
         hdrs = {k.lower(): v for k, v in resp.getheaders()}

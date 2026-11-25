@@ -567,7 +567,11 @@ void HttpSession::write_streaming_response(const json& data, bool is_final) {
     if (stream_finished_.load()) {
         return;
     }
-    if (!is_streaming_.exchange(true)) {
+    if (!is_streaming_.load()) {
+        if (!try_begin_response()) {
+            return;
+        }
+        is_streaming_.store(true);
         // Initialize streaming response headers
         res_.result(http::status::ok);
         res_.set(http::field::content_type, "application/x-ndjson");

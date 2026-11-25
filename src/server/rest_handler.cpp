@@ -1271,8 +1271,7 @@ void RestHandler::handle_models(const json& request,
         json models = supported_models.get_all_models_ollama();
         send_response(models);
     } catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
-        send_response(error_response);
+        send_response(flm::error_model::make_error(500, e.what()));
     }
 }
 
@@ -1556,6 +1555,10 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 return;
             }
         }
+        if (current_messages.empty()) {
+            bad_request("'messages' must contain at least one non-empty message", "messages");
+            return;
+        }
         if (positional_tool_results) {
             if (auto error = flm::chat::order_parallel_tool_results(current_messages, original_indices)) {
                 bad_request(error->message, error->param);
@@ -1722,6 +1725,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                     this->prompt_cache.reset();
                     return;
                 }
+            } catch (const ModelRequestError& error) {
+                sink.on_error(model_error(error));
+                if (error.session_cleared()) {
+                    this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
+                }
+                return;
             } catch (const std::exception& e) {
                 sink.on_error(exception_error(e));
                 this->auto_chat_engine->clear_context();
@@ -1795,6 +1805,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                     this->prompt_cache.reset();
                     return;
                 }
+            } catch (const ModelRequestError& error) {
+                sink.on_error(model_error(error));
+                if (error.session_cleared()) {
+                    this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
+                }
+                return;
             } catch (const std::exception& e) {
                 sink.on_error(exception_error(e));
                 this->auto_chat_engine->clear_context();
@@ -1812,6 +1829,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             try {
                 response_text = auto_chat_engine->generate(meta_info, length_limit, out, [&] { return cancellation_token->cancelled(); });
                 out.flush();
+            } catch (const ModelRequestError& error) {
+                sink.on_error(model_error(error));
+                if (error.session_cleared()) {
+                    this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
+                }
+                return;
             } catch (const std::exception& e) {
                 sink.on_error(exception_error(e));
                 this->auto_chat_engine->clear_context();
