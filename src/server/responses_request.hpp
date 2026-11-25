@@ -51,11 +51,14 @@ inline json to_chat_request(const json& req) {
     for (auto key : {"previous_response_id", "conversation", "background"})
         if (req.contains(key)) throw request_error(key, "not supported; send the complete history in input");
 
-    json chat = {{"model", member(req, "model", "", json::value_t::string)}};
+    // A final chat_msg groups all text ahead of calls and loses their emission order.
+    // Consume the core's ordered deltas for both wire modes; only the sink decides
+    // whether to send them now or return the assembled items as one response.
+    json chat = {{"model", member(req, "model", "", json::value_t::string)}, {"stream", true}};
     for (auto key : {"stream", "store", "parallel_tool_calls"}) {
         if (!provided(req, key)) continue;
         member(req, key, "", json::value_t::boolean);
-        if (std::string_view(key) != "store") chat[key] = req[key];
+        if (std::string_view(key) == "parallel_tool_calls") chat[key] = req[key];
     }
     if (provided(req, "max_output_tokens")) {
         const auto& n = req.at("max_output_tokens");
@@ -96,7 +99,10 @@ inline json to_chat_request(const json& req) {
             if (member(tools[i], "type", p, json::value_t::string) != "function")
                 throw request_error(p + "type", "only client-executed function tools are supported");
             auto fn = tools[i];
-            member(fn, "name", p, json::value_t::string);
+            if (member(fn, "name", p, json::value_t::string).get_ref<const std::string&>().empty())
+                throw request_error(p + "name", "expected a non-empty function name");
+            if (provided(fn, "strict")) member(fn, "strict", p, json::value_t::boolean);
+            else fn.erase("strict"); // null selects the chat core's default
             if (fn.contains("parameters") && !fn["parameters"].is_null())
                 member(fn, "parameters", p, json::value_t::object);
             fn.erase("type");
@@ -153,7 +159,14 @@ inline json to_chat_request(const json& req) {
                     auto raw = text_parts(item["content"], p + "content", "reasoning_text");
                     if (!raw.empty()) reasoning = std::move(raw);
                 }
-                if (!reasoning.empty()) assistant()["reasoning_content"] = std::move(reasoning);
+                if (!reasoning.empty()) {
+                    if (!waiting_for_results && !messages.empty() && messages.back()["role"] == "assistant" &&
+                        messages.back()["content"] != "")
+                        messages.push_back({{"role","assistant"},{"content",""}});
+                    auto& turn = assistant();
+                    if (!turn.contains("reasoning_content")) turn["reasoning_content"] = "";
+                    turn["reasoning_content"].get_ref<std::string&>() += reasoning;
+                }
             } else if (type == "function_call" || type == "function_call_output") {
                 const auto id = member(item, "call_id", p, json::value_t::string).get<std::string>();
                 if (id.empty()) throw request_error(p + "call_id", "expected a non-empty call ID");

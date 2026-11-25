@@ -404,7 +404,7 @@ int main(int argc, char* argv[]) {
         // Feed the same ordered text and tool fragments to the streaming sink, then
         // compare the terminal object with the one-shot output (IDs vary per request).
         {
-            json request = {{"model","m"}}, final;
+            json request = {{"model","m"},{"stream",true}}, final;
             std::vector<json> frames;
             int last_count = 0;
             auto stream = [&](const json& raw, bool last) {
@@ -421,13 +421,17 @@ int main(int argc, char* argv[]) {
             m.reasoning = "why"; m.content = "answer"; m.tool_calls = {{"call_A","read","{\"x\":1}"}};
             chat_turn_end end; end.message = &m; end.finish = chat_finish::TOOL_CALLS;
             flm::responses::sink streamed(request, [&](const json& j) { final = j; }, stream);
-            streamed.on_begin({"m",true}); streamed.on_start({});
-            chat_msg_delta d; d.reasoning = m.reasoning; streamed.on_delta(d);
-            d = {}; d.content = m.content; streamed.on_delta(d);
-            d = {}; d.tool_index = 0; d.tool_id = "call_A"; d.tool_name = "read"; d.tool_arguments = "{\"x\":";
-            streamed.on_delta(d);
-            d = {}; d.tool_index = 0; d.tool_arguments = "1}"; streamed.on_delta(d);
-            streamed.on_end(end); streamed.on_error({}); // no second terminal frame
+            auto generate = [&](flm::responses::sink& target) {
+                target.on_begin({"m",true}); target.on_start({});
+                chat_msg_delta d; d.reasoning = m.reasoning; target.on_delta(d);
+                d = {}; d.content = m.content; target.on_delta(d);
+                d = {}; d.tool_index = 0; d.tool_id = "call_A"; d.tool_name = "read"; d.tool_arguments = "{\"x\":";
+                target.on_delta(d);
+                d = {}; d.tool_index = 0; d.tool_arguments = "1}"; target.on_delta(d);
+                d = {}; d.content = "after call"; target.on_delta(d);
+                target.on_end(end);
+            };
+            generate(streamed); streamed.on_error({}); // no second terminal frame
             auto items = frames.back().at("response").at("output");
             failures += check("responses terminal", frames.back()["type"].dump(), "\"response.completed\"");
             failures += check("one final frame", std::to_string(last_count), "1");
@@ -440,8 +444,10 @@ int main(int argc, char* argv[]) {
                 }
             }
             failures += check("reconstructed arguments", arguments, m.tool_calls[0].arguments);
-            flm::responses::sink one(request, [&](const json& j) { final = j; }, stream);
-            one.on_begin({"m",false}); one.on_end(end);
+            json nonstream = {{"model","m"}};
+            flm::responses::sink one(nonstream, [&](const json& j) { final = j; }, stream);
+            generate(one);
+            failures += check("text after call", items.back().at("content")[0].at("text").dump(), "\"after call\"");
             for (auto& it : items) it.erase("id");
             for (auto& it : final.at("output")) it.erase("id");
             failures += check("stream/one-shot item parity", items.dump(), final.at("output").dump());
@@ -449,7 +455,7 @@ int main(int argc, char* argv[]) {
                 frames.clear(); last_count = 0;
                 flm::responses::sink partial(request, [&](const json& j) { final = j; }, stream);
                 partial.on_begin({"m",true}); partial.on_start({});
-                d = {}; d.content = "partial"; partial.on_delta(d);
+                chat_msg_delta d; d.content = "partial"; partial.on_delta(d);
                 d = {}; d.tool_index = 0; d.tool_name = "read"; d.tool_id = "call_A";
                 d.tool_arguments = "{\"x\":"; partial.on_delta(d);
                 if (error) partial.on_error({503,"model_error","busy","",true});
@@ -464,6 +470,13 @@ int main(int argc, char* argv[]) {
                                   error ? "response.failed" : "response.incomplete");
                 failures += check("partial item",frames.back()["response"]["output"][0]["status"].dump(),"\"incomplete\"");
             }
+            frames.clear();
+            flm::responses::sink cancelled(request, [&](const json& j) { final = j; }, stream);
+            cancelled.on_begin({"m",true}); end.finish = chat_finish::CANCEL; end.generated = false;
+            cancelled.on_end(end);
+            failures += check("cancel start clean", frames[0]["response"]["error"].dump(), "null");
+            failures += check("cancel start no usage", frames[0]["response"]["usage"].dump(), "null");
+            failures += check("cancel terminal", frames.back()["type"].dump(), "\"response.failed\"");
         }
 
         const auto simple = flm::responses::to_chat_request(json::parse(R"({
@@ -480,13 +493,19 @@ int main(int argc, char* argv[]) {
             "top_p":null,"max_output_tokens":null,"reasoning":{"effort":null}
         })"));
         failures += check("nullable generation controls", defaults.dump(),
-                          R"({"model":"m","messages":[{"role":"user","content":"x"}]})");
+                          R"({"model":"m","stream":true,"messages":[{"role":"user","content":"x"}]})");
         const auto replay = flm::responses::to_chat_request(json::parse(R"({
             "model":"m","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"why"}]},
             {"role":"assistant","content":[{"type":"input_text","text":"answer"}]},
             {"role":"user","content":"next"}]})")).at("messages");
         failures += check("explicit assistant history", replay[0].dump(),
                           R"({"role":"assistant","content":"answer","reasoning_content":"why"})");
+        const auto turns = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"r1"}]},
+            {"role":"assistant","content":"first"},{"type":"reasoning","summary":[{"type":"summary_text","text":"r2"}]},
+            {"role":"assistant","content":"second"}]})")).at("messages");
+        failures += check("distinct reasoning turns", turns[0].at("reasoning_content").dump() +
+                          turns[1].at("reasoning_content").dump(), "\"r1\"\"r2\"");
 
         // Function result IDs, not the order of the results, bind them to calls.
         const auto history = json::parse(R"({

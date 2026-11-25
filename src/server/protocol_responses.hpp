@@ -15,7 +15,7 @@ public:
         : request_(request), send_(std::move(send)), send_stream_(std::move(send_stream)) {}
 
     void on_begin(const chat_turn_begin& begin) override {
-        stream_ = begin.stream;
+        stream_ = provided(request_, "stream") && request_["stream"].get<bool>();
         const auto suffix = chat_new_tool_call_id().substr(5);
         response_ = {{"id","resp_" + suffix},{"object","response"},{"created_at",std::time(nullptr)},
             {"model",begin.model},{"status","in_progress"},{"output",json::array()},
@@ -27,7 +27,7 @@ public:
     }
 
     void on_start(const chat_turn_start&) override {
-        if (stream_) {
+        if (stream_ && !started_) {
             started_ = true;
             emit("response.created", {{"response",response_}});
             emit("response.in_progress", {{"response",response_}});
@@ -35,6 +35,7 @@ public:
     }
 
     void on_delta(const chat_msg_delta& d) override {
+        if (stream_ && !started_) on_start({});
         if (d.is_tool_call()) {
             auto it = calls_.find(d.tool_index);
             if (it == calls_.end()) {
@@ -57,13 +58,7 @@ public:
 
     void on_end(const chat_turn_end& end) override {
         if (terminal_) return;
-        if (!stream_ && end.generated && end.message) {
-            const auto& m = *end.message;
-            if (!m.reasoning.empty()) append_text(true, m.reasoning);
-            if (!m.content.empty()) append_text(false, m.content);
-            for (const auto& c : m.tool_calls)
-                add("fc", {{"type","function_call"},{"name",c.name},{"call_id",c.id},{"arguments",c.arguments}});
-        }
+        if (stream_ && !started_) on_start({}); // cancellation during prefill
         response_["usage"] = {{"input_tokens",end.prompt_tokens},{"output_tokens",end.generated_tokens},
             {"total_tokens",end.prompt_tokens + end.generated_tokens},
             {"input_tokens_details",{{"cached_tokens",end.cached_prompt_tokens}}},
@@ -169,10 +164,9 @@ private:
     }
 
     void finish(const std::string& status) {
-        if (stream_ && !started_) on_start({}); // cancelled during prefill
+        terminal_ = true;
         for (size_t i = 0; i < output().size(); ++i) done(i, status);
         response_["status"] = status;
-        terminal_ = true;
         if (stream_) emit("response." + status, {{"response",response_}}, true);
         else send_(response_);
     }
