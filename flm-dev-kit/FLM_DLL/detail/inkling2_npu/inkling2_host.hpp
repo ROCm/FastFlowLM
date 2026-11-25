@@ -307,14 +307,6 @@ public:
                            const float* G, const bf16_rows* Gb, float* O, const std::function<void()>& packed) {
         return false;
     }
-    /// \brief decode (one token): how many of a token's TOPK experts the device takes (0: none); the host runs the rest
-    ///        meanwhile
-    virtual int dec_experts() const { return 0; }
-    /// \brief start experts ex[0 .. n) of layer il on the device: kind 0 gate_up of in = x [D], kind 1 down of
-    ///        in = [n][FF_PAD] activations
-    virtual void dec_start(int il, int kind, const int* ex, int n, const float* in) {}
-    /// \brief wait for dec_start: kind 0 out [n][2 FF] (gate, then up), kind 1 out [n][D]
-    virtual void dec_wait(float* out) {}
 };
 
 /// \brief the model.q4nx tensors, located in place (safetensors container)

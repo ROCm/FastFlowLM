@@ -939,46 +939,6 @@ void moe(float* out, const float* x, int T, const layer_weights& L, int il, mm_o
         token_of[r] = i / TOPK;
     }
     prof_lap(tp, P_ROUTER);
-    if (T == 1 && offload && offload->dec_experts() > 0) {
-        // the first nd of the token's experts on the device, the rest on the host meanwhile
-        const int nd = std::min(offload->dec_experts(), TOPK);
-        const int* ex = sel.data();
-        static thread_local std::vector<float> GU_buf((size_t)TOPK * 2 * FF), A_buf((size_t)TOPK * FF_PAD, 0.0f),
-            Z_buf((size_t)TOPK * D);
-        float* GU = GU_buf.data();
-        float* A = A_buf.data();
-        float* Z = Z_buf.data();
-        constexpr int rb_per_expert = D / QROWS;
-        auto act = [&](int k0, int k1) {
-            #pragma omp parallel for schedule(static)
-            for (int i = k0 * (FF / 16); i < k1 * (FF / 16); i++) {
-                const int k = i / (FF / 16), c = i % (FF / 16) * 16;
-                const float* gu = GU + (size_t)k * 2 * FF;
-                _mm512_storeu_ps(A + (size_t)k * FF_PAD + c, situ16(_mm512_loadu_ps(gu + c), _mm512_loadu_ps(gu + FF + c)));
-            }
-        };
-        offload->dec_start(il, 0, ex, nd, x);
-        std::vector<mm_job> jobs;
-        for (int k = nd; k < TOPK; k++)
-            jobs.push_back({L.gate_up.rows(ex[k] * rb_per_expert, 2 * FF), x, D, 1, GU + (size_t)k * 2 * FF, 2 * FF});
-        qmm(jobs);
-        offload->dec_wait(GU);
-        act(0, nd);
-        offload->dec_start(il, 1, ex, nd, A);
-        act(nd, TOPK);
-        jobs.clear();
-        for (int k = nd; k < TOPK; k++)
-            jobs.push_back({L.down.rows(ex[k] * rb_per_expert, D), A + (size_t)k * FF_PAD, FF_PAD, 1, Z + (size_t)k * D, D});
-        qmm(jobs);
-        offload->dec_wait(Z);
-        for (int c = 0; c < D; c += 16) {
-            __m512 o = _mm512_setzero_ps();
-            for (int k = 0; k < TOPK; k++) o = _mm512_fmadd_ps(_mm512_set1_ps(wsel[k]), _mm512_loadu_ps(Z + (size_t)k * D + c), o);
-            _mm512_storeu_ps(out + c, o);
-        }
-        prof_lap(tp, P_EXPERT);
-        return;
-    }
     if (offload && offload->experts(il, x, T, token_of.data(), count.data(), start.data(), slot_of.data(), wsel.data(), out)) {
         prof_lap(tp, P_EXPERT);
         return;

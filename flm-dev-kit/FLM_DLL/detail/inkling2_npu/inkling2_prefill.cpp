@@ -130,24 +130,10 @@ void inkling2_prefill::report() const {
     const char* names[19] = {"attn in", "attn out", "expert pack", "gate_up start", "situ+down start", "gate_up wait", "down wait", "unpack", "down build wait", "experts total", "attention pack", "attention run", "attention unpack", "proj pack", "proj run", "proj unpack", "gu npu (serial)", "dn npu (serial)", "idle work in experts"};
     for (int i = 0; i < 18; i++) std::fprintf(stderr, "inkling2 npu prefill %-16s %8.3f s\n", names[i], this->t[i]);
     std::fprintf(stderr, "inkling2 npu prefill %ld expert calls, %ld runs\n", this->calls, this->runs);
-    if (this->dec)
-        std::fprintf(stderr, "inkling2 npu decode experts: %ld dispatches, start %.3f s, wait %.3f s\n", this->dec->calls,
-                     this->dec->t_start, this->dec->t_wait);
     const char* kinds[5] = {"attn_in 1x", "attn_in 3x", "attn_out", "attention swa", "attention global"};
     for (int i = 0; i < 5; i++) std::fprintf(stderr, "inkling2 npu kind %-16s %8.3f s %ld calls\n", kinds[i], this->npu_t[i], this->npu_n[i]);
     const char* skinds[7] = {"attn_in 1x", "attn_in 3x", "attn_out", "attention swa", "attention global", "expert gate_up", "expert down"};
     for (int i = 0; i < 7; i++) std::fprintf(stderr, "inkling2 npu submit %-16s %8.4f s %ld runs\n", skinds[i], this->npu_s[i], this->npu_sn[i]);
-}
-
-void inkling2_prefill::set_decode(const std::string& xclbin, int n) {
-    if (n <= 0 || !std::filesystem::exists(xclbin)) return;
-    this->dec = std::make_unique<inkling2_decode>(this->npu, xclbin);
-    this->dec_n = std::min(n, inkling2_decode::MAX_N);
-}
-
-void inkling2_prefill::dec_start(int il, int kind, const int* ex, int n, const float* in) {
-    layer_buf& B = this->layers[il];
-    this->dec->start(kind, B.w, kind == 0 ? B.gate_up : B.down, ex, n, in);
 }
 
 size_t inkling2_prefill::expert_rows(int T) {

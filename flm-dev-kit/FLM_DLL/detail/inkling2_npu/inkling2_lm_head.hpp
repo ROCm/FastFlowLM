@@ -55,13 +55,6 @@ private:
     npu_app app;
     xrt::run run_;
     buffer<uint16_t> y, x;
-    // INKLING2_LMH_HUGE=1: the weights in 2 MB pages (user memory, MADV_HUGEPAGE) instead of a 4 KB-page BO
-    struct huge_mem {
-        void* p = nullptr;
-        size_t n = 0;
-        ~huge_mem();
-    } huge;
-    std::unique_ptr<xrt::bo> huge_bo;
     buffer<uint8_t> wb;
 };
 #endif   // !FLM_USE_HRX
