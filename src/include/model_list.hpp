@@ -467,6 +467,75 @@ class model_list {
             return all_tags.find(tag) != all_tags.end();
         }
 
+        /// \brief the folders of the shipped NPU models of one family
+        /// \param family details.family
+        /// \return the entries' "name" (the folder the weights and the xclbins are
+        ///         filed under), each once, local models left out
+        /// \note The NPU kernels are looked up under that name, so a model folder
+        ///       of another name borrows the kernels of one of these.
+        std::vector<std::string> npu_folders_of_family(const std::string& family) const {
+            std::vector<std::string> folders;
+            for (const auto& [model_type, subset] : this->config.at("models").items()) {
+                for (const auto& [size, info] : subset.items()) {
+                    if (info.value("local", false)) continue;
+                    if (info.value(flm::backend::kBackendKey, std::string()) != flm::backend::kFlmBackendId) continue;
+                    if (info.value("details", nlohmann::json::object()).value("family", std::string()) != family) continue;
+                    const std::string name = info.value("name", std::string());
+                    if (!name.empty() && std::find(folders.begin(), folders.end(), name) == folders.end()) {
+                        folders.push_back(name);
+                    }
+                }
+            }
+            return folders;
+        }
+
+        /// \brief add one model that lives in a folder the user named
+        /// \param model_type the part of the tag before ':'
+        /// \param size the part of the tag after ':'
+        /// \param entry the catalog entry; "name" is the model folder's absolute
+        ///        path, which get_model_path hands back as it is
+        /// \throws std::runtime_error if the tag is taken, or this build cannot
+        ///         run the entry's family on its backend
+        /// \note The entry goes through the same checks a shipped entry does
+        ///       (the build links its backend, and a family has a provider for
+        ///       it) but is kept out of apply_support_filter, which has already
+        ///       run: running it twice would read the provider key it wrote the
+        ///       first time as a choice the entry made.
+        void add_local_model(const std::string& model_type, const std::string& size,
+                             nlohmann::json entry) {
+            const std::string tag = model_type + ":" + size;
+            auto& models = this->config["models"];
+            if (models.contains(model_type) && models[model_type].contains(size)) {
+                throw std::runtime_error("model tag already exists: " + tag);
+            }
+            const std::string family = entry.at("details").at("family").get<std::string>();
+            const std::string backend = entry.value(
+                flm::backend::kBackendKey, backend_for_family(model_type));
+            const std::string provider = entry.value(
+                flm::backend::kBackendProviderKey,
+                std::string(flm::backend::kBuiltinProviderId));
+            // An NPU package names the generation it was built for; a shipped
+            // entry on the wrong silicon is dropped, a local one is refused.
+            if (!this->entry_supports(entry, tag)) {
+                throw std::runtime_error("this model folder is for another NPU than this machine's (" +
+                                         this->platform_ + ")");
+            }
+            entry.erase("supported_platforms");
+            if (!this->build_has(backend)) {
+                throw std::runtime_error("this build has no '" + backend +
+                                         "' backend (it links: " + this->backend_summary() + ")");
+            }
+            if (!this->backend_providers_.empty() &&
+                !this->build_has_provider(family, backend, provider)) {
+                throw std::runtime_error("this build has no '" + backend +
+                                         "' implementation for family '" + family + "'");
+            }
+            entry[flm::backend::kBackendKey] = backend;
+            entry[flm::backend::kBackendProviderKey] = provider;
+            models[model_type][size] = std::move(entry);
+            this->rebuild_tags();
+        }
+
         /// \brief pin which source get_model_info resolves a tag to
         /// \param tag the tag of the model
         /// \param preferred true for the preferred source, false for the entry's

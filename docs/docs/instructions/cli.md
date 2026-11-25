@@ -303,6 +303,38 @@ flm run  qwen3.5-oga-hipep:9b
 
 ---
 
+### 📁 Run a Model Folder Without a Catalog Entry (GPU or NPU)
+
+Run a model package that is already on disk, and is not in `model_list.json`, with `--model-dir` and `--family`:
+
+```shell
+# an OGA package on the GPU
+flm serve --model-dir C:\models\Qwen3.8-27B --family qwen3.5 --ctx-len 32768
+flm run   --model-dir C:\models\Qwen3.8-27B --family qwen3.5
+
+# an NPU package
+flm serve --model-dir C:\models\Qwen3-VL-4B-NPU2 --family qwen3vl
+```
+
+- **The files say which one it is.** `genai_config.json` marks an OGA package (backend `oga-hipep`, GPU); `model.q4nx` marks an NPU package (backend `flm`, NPU). A folder with both, or with neither, is refused.
+- **`--family`** names the model family FLM runs the package with (`qwen3.5`, `qwen3.6` and `qwen3.8` OGA packages use `qwen3.5`; `Qwen3-VL-4B-Instruct-NPU2` uses `qwen3vl`). It is required with `--model-dir`, and the other way round. If the family cannot run a folder in this build, FLM lists the families that can for that backend.
+- **What FLM checks.**
+  - *OGA:* `genai_config.json`, `config.json`, `tokenizer.json`, and every model file `genai_config.json` names (`.onnx` and `.onnx.data`); `tokenizer_config.json`, `chat_template.jinja` and `processor_config.json` are used when present.
+  - *NPU:* `config.json`, `model.q4nx`, `tokenizer.json`; `tokenizer_config.json`, `chat_template.jinja` and `vision_weight.q4nx` (a vision-language model) are used when present. Other files in the folder, such as `.xclbin` files and the README, are not read.
+  - FLM lists every missing file at once and starts nothing.
+- **How it runs.** FLM builds a catalog entry in memory from the folder. The tag is `<folder name>:local` for an NPU package and `<folder name>-oga-hipep:local` for an OGA one (lower case, other characters become `-`). Vision comes from `genai_config.json` or `vision_weight.q4nx`; thinking and tools come from the chat template (`chat_template.jinja`, or `chat_template` in `tokenizer_config.json`). `/v1/models` and `/api/tags` list that tag; send it as `model`. `--ctx-len` and `--port` keep their usual defaults (the context length is the package's own limit, at most 32768).
+- **NPU kernels.** The `.xclbin` kernels are not read from the model folder: FLM runs its own, filed under `xclbins/<model name>`, one folder per shipped model. A folder named like a shipped model (for example `Qwen3-VL-4B-Instruct-NPU2`) uses that model's kernels. Under another name, FLM uses the kernels of the one shipped model of the `--family` and says so; when the family has several (`qwen3.5` has four sizes), name one with `--xclbin-folder`:
+
+  ```shell
+  flm serve --model-dir C:\models\my-qwen35-npu --family qwen3.5 --xclbin-folder Qwen3.5-9B-NPU2
+  ```
+
+  Nothing checks that a package matches the kernels it is given; a mismatch gives wrong output or a hang, not an error. An NPU package is built for one NPU generation, and FLM takes it to be this machine's.
+- **Nothing is downloaded or changed.** FLM never pulls, verifies, repairs or deletes files in a `--model-dir` folder, and `model_list.json` is not modified. `--model-dir` works with `run` and `serve` only, and not together with a model tag.
+- **Known limits.** A few engines recognise their model by the catalog entry's `size` (Qwen3 0.6B turns thinking off when it is exactly `600000000`), which a folder does not have; such a model keeps the engine's general behaviour. `flm_version` in an NPU package's `config.json` is not compared with this build's.
+
+---
+
 ### 🖧 Set Server Port at Launch
 
 Set a custom port at launch:

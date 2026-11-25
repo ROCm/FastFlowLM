@@ -55,6 +55,8 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm serve llama3.2:1b --cors 0" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --cors-origins \"http://nas:3000\"" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --asr whisper-v3:turbo" << std::endl;
+    std::cout << "\tflm serve --model-dir C:\\models\\Qwen3.8-27B --family qwen3.5 --ctx-len 32768" << std::endl;
+    std::cout << "\tflm serve --model-dir C:\\models\\Qwen3-VL-4B-NPU2 --family qwen3vl" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --embed embed-gemma:300m" << std::endl;
     std::cout << "\tflm serve -a whisper-v3:turbo" << std::endl;
     std::cout << "\tflm serve -e embed-gemma:300m" << std::endl;
@@ -111,6 +113,15 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              po::value<std::vector<std::string>>(
                  &parsed_args.model_extensions)->composing(),
              "Load a model-extension manifest (repeatable)")
+            ("model-dir", po::value<std::string>(&parsed_args.model_dir)->default_value(""),
+             "Run the model package in this folder instead of a catalog model; needs --family and no model tag "
+             "(for run and serve). genai_config.json marks an OGA package (GPU, oga-hipep), model.q4nx an NPU "
+             "package. The folder is read in place: nothing is downloaded, verified or deleted")
+            ("xclbin-folder", po::value<std::string>(&parsed_args.xclbin_folder)->default_value(""),
+             "With an NPU --model-dir: the folder under xclbins (a shipped model's name, e.g. Qwen3-VL-4B-Instruct-NPU2) "
+             "whose kernels the package runs on; needed when the folder is not named like that model")
+            ("family", po::value<std::string>(&parsed_args.family)->default_value(""),
+             "With --model-dir: the model family that runs the package, e.g. qwen3.5 (OGA or NPU), qwen3vl (NPU)")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),
@@ -261,6 +272,29 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
         // Handle all options
         if (vm.count("model_tag")) {
             parsed_args.model_tag = vm["model_tag"].as<std::string>();
+        }
+
+        if (!parsed_args.xclbin_folder.empty() && parsed_args.model_dir.empty()) {
+            std::cerr << "Error: --xclbin-folder is for an NPU model folder: flm " << parsed_args.command
+                      << " --model-dir <folder> --family <family> --xclbin-folder <name>" << std::endl;
+            return false;
+        }
+
+        // --model-dir names the model, so it replaces the tag instead of adding to it
+        if (!parsed_args.model_dir.empty() || !parsed_args.family.empty()) {
+            if (parsed_args.command != "serve" && parsed_args.command != "run") {
+                std::cerr << "Error: --model-dir and --family are only supported with the run and serve commands!" << std::endl;
+                return false;
+            }
+            if (parsed_args.model_dir.empty() || parsed_args.family.empty()) {
+                std::cerr << "Error: --model-dir and --family go together: "
+                             "flm " << parsed_args.command << " --model-dir <folder> --family <family>" << std::endl;
+                return false;
+            }
+            if (vm.count("model_tag")) {
+                std::cerr << "Error: --model-dir replaces the model tag; give one or the other, not both" << std::endl;
+                return false;
+            }
         }
 
 
