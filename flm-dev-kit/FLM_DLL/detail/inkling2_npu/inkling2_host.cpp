@@ -101,7 +101,12 @@ inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 ///        of ~1100 tokens/s, 137 tokens ~155 instead of ~185). A pool lives as long as its thread and never
 ///        shrinks, so the engine loads on a thread that exits, and a prompt starts the helper with a pool of every
 ///        logical CPU (wide), which pushes libgomp past the limit for the prompt only: the helper exits after it.
+///        MSVC's runtime (vcomp) has no such limit and spins whatever the count, so on Windows a wide pool would only
+///        put 1.5 threads on every core (the helper's plus the caller's half): the helper stays at one per core.
 void use_core_threads(bool wide = false) {
+#ifdef _WIN32
+    wide = false;
+#endif
 #ifdef _OPENMP
     static const int env = [] { return std::getenv("OMP_NUM_THREADS") ? omp_get_max_threads() : 0; }();
     const int all = std::max(1, (int)std::thread::hardware_concurrency());
@@ -478,42 +483,43 @@ template <typename W>
 void gemm_nt(float* y, int ldy, const float* x, int ldx, const W* w, int ldw, int T, int N, int K) {
     constexpr int TB = 6, NB = 4;
     const int tb = (T + TB - 1) / TB, nb = (N + NB - 1) / NB;
-    #pragma omp parallel for schedule(static) collapse(2)
-    for (int bt = 0; bt < tb; bt++)
-        for (int bn = 0; bn < nb; bn++) {
-            const int t0 = bt * TB, n0 = bn * NB;
-            const float* xp[TB];
-            const W* wp[NB];
-            for (int i = 0; i < TB; i++) xp[i] = x + (size_t)std::min(t0 + i, T - 1) * ldx;
-            for (int j = 0; j < NB; j++) wp[j] = w + (size_t)std::min(n0 + j, N - 1) * ldw;
-            __m512 acc[TB][NB];
-            for (int i = 0; i < TB; i++)
-                for (int j = 0; j < NB; j++) acc[i][j] = _mm512_setzero_ps();
-            for (int k = 0; k < K; k += 16) {
-                __m512 wv[NB];
-                for (int j = 0; j < NB; j++) wv[j] = load16(wp[j] + k);
-                for (int i = 0; i < TB; i++) {
-                    const __m512 xv = _mm512_loadu_ps(xp[i] + k);
-                    for (int j = 0; j < NB; j++) acc[i][j] = _mm512_fmadd_ps(xv, wv[j], acc[i][j]);
-                }
+    // one flat loop, not collapse(2): MSVC's OpenMP 2.0 ignores collapse and would split only the tb tiles
+    #pragma omp parallel for schedule(static)
+    for (int64_t ib = 0; ib < (int64_t)tb * nb; ib++) {
+        const int t0 = (int)(ib / nb) * TB, n0 = (int)(ib % nb) * NB;
+        const float* xp[TB];
+        const W* wp[NB];
+        for (int i = 0; i < TB; i++) xp[i] = x + (size_t)std::min(t0 + i, T - 1) * ldx;
+        for (int j = 0; j < NB; j++) wp[j] = w + (size_t)std::min(n0 + j, N - 1) * ldw;
+        __m512 acc[TB][NB];
+        for (int i = 0; i < TB; i++)
+            for (int j = 0; j < NB; j++) acc[i][j] = _mm512_setzero_ps();
+        for (int k = 0; k < K; k += 16) {
+            __m512 wv[NB];
+            for (int j = 0; j < NB; j++) wv[j] = load16(wp[j] + k);
+            for (int i = 0; i < TB; i++) {
+                const __m512 xv = _mm512_loadu_ps(xp[i] + k);
+                for (int j = 0; j < NB; j++) acc[i][j] = _mm512_fmadd_ps(xv, wv[j], acc[i][j]);
             }
-            for (int i = 0; i < TB && t0 + i < T; i++)
-                for (int j = 0; j < NB && n0 + j < N; j++) y[(size_t)(t0 + i) * ldy + n0 + j] = _mm512_reduce_add_ps(acc[i][j]);
         }
+        for (int i = 0; i < TB && t0 + i < T; i++)
+            for (int j = 0; j < NB && n0 + j < N; j++) y[(size_t)(t0 + i) * ldy + n0 + j] = _mm512_reduce_add_ps(acc[i][j]);
+    }
 }
 
 /// \brief y[T][N] = x[T][K] W^T for a bf16 or fp32 [N][K] matrix (the small projections)
 template <typename W>
 void dense_mm(float* y, const W* w, int N, int K, const float* x, int T) {
     if (T >= 16 && K % 16 == 0) return gemm_nt(y, N, x, K, w, K, T, N, K);
-    #pragma omp parallel for schedule(static) collapse(2)
-    for (int t = 0; t < T; t++)
-        for (int n = 0; n < N; n++) {
-            if constexpr (std::is_same_v<W, u16>)
-                y[(size_t)t * N + n] = dot_bf16(w + (size_t)n * K, x + (size_t)t * K, K);
-            else
-                y[(size_t)t * N + n] = dot(w + (size_t)n * K, x + (size_t)t * K, K);
-        }
+    // flat (gemm_nt): over t alone, a decode step (T = 1) would run on one thread under MSVC
+    #pragma omp parallel for schedule(static)
+    for (int64_t i = 0; i < (int64_t)T * N; i++) {
+        const int t = (int)(i / N), n = (int)(i % N);
+        if constexpr (std::is_same_v<W, u16>)
+            y[i] = dot_bf16(w + (size_t)n * K, x + (size_t)t * K, K);
+        else
+            y[i] = dot(w + (size_t)n * K, x + (size_t)t * K, K);
+    }
 }
 
 }  // namespace
@@ -616,27 +622,26 @@ inline __m256i to_bf16x16(__m512 v) { return (__m256i)_mm512_cvtneps_pbh(v); }
 void gemm_nt_bf16(float* y, int ldy, const u16* x, int ldx, const u16* w, int ldw, int T, int N, int K) {
     constexpr int TB = 4, NB = 4;
     const int tb = (T + TB - 1) / TB, nb = (N + NB - 1) / NB;
-    #pragma omp parallel for schedule(static) collapse(2) if (T >= 16)
-    for (int bt = 0; bt < tb; bt++)
-        for (int bn = 0; bn < nb; bn++) {
-            const int t0 = bt * TB, n0 = bn * NB;
-            const u16* xp[TB];
-            const u16* wp[NB];
-            for (int i = 0; i < TB; i++) xp[i] = x + (size_t)std::min(t0 + i, T - 1) * ldx;
-            for (int j = 0; j < NB; j++) wp[j] = w + (size_t)std::min(n0 + j, N - 1) * ldw;
-            __m512 acc[TB][NB];
+    #pragma omp parallel for schedule(static) if (T >= 16)   // flat, as gemm_nt
+    for (int64_t ib = 0; ib < (int64_t)tb * nb; ib++) {
+        const int t0 = (int)(ib / nb) * TB, n0 = (int)(ib % nb) * NB;
+        const u16* xp[TB];
+        const u16* wp[NB];
+        for (int i = 0; i < TB; i++) xp[i] = x + (size_t)std::min(t0 + i, T - 1) * ldx;
+        for (int j = 0; j < NB; j++) wp[j] = w + (size_t)std::min(n0 + j, N - 1) * ldw;
+        __m512 acc[TB][NB];
+        for (int i = 0; i < TB; i++)
+            for (int j = 0; j < NB; j++) acc[i][j] = _mm512_setzero_ps();
+        for (int k = 0; k < K; k += 32) {
+            __m512bh xv[TB], wv[NB];
+            for (int i = 0; i < TB; i++) xv[i] = (__m512bh)_mm512_loadu_si512(xp[i] + k);
+            for (int j = 0; j < NB; j++) wv[j] = (__m512bh)_mm512_loadu_si512(wp[j] + k);
             for (int i = 0; i < TB; i++)
-                for (int j = 0; j < NB; j++) acc[i][j] = _mm512_setzero_ps();
-            for (int k = 0; k < K; k += 32) {
-                __m512bh xv[TB], wv[NB];
-                for (int i = 0; i < TB; i++) xv[i] = (__m512bh)_mm512_loadu_si512(xp[i] + k);
-                for (int j = 0; j < NB; j++) wv[j] = (__m512bh)_mm512_loadu_si512(wp[j] + k);
-                for (int i = 0; i < TB; i++)
-                    for (int j = 0; j < NB; j++) acc[i][j] = _mm512_dpbf16_ps(acc[i][j], xv[i], wv[j]);
-            }
-            for (int i = 0; i < TB && t0 + i < T; i++)
-                for (int j = 0; j < NB && n0 + j < N; j++) y[(size_t)(t0 + i) * ldy + n0 + j] = _mm512_reduce_add_ps(acc[i][j]);
+                for (int j = 0; j < NB; j++) acc[i][j] = _mm512_dpbf16_ps(acc[i][j], xv[i], wv[j]);
         }
+        for (int i = 0; i < TB && t0 + i < T; i++)
+            for (int j = 0; j < NB && n0 + j < N; j++) y[(size_t)(t0 + i) * ldy + n0 + j] = _mm512_reduce_add_ps(acc[i][j]);
+    }
 }
 
 /// \brief loop controller: cur - tanh(forget g) * cur + tanh(gain g) * msg, g = down [rms(cur); rms(msg)]
@@ -858,28 +863,28 @@ void attention(float* O, const float* Q, const float* R, const float* sinks, con
         }
     }
     // merge the splits
-    #pragma omp parallel for schedule(static) collapse(2)
-    for (int qb = 0; qb < nqb; qb++)
-        for (int g = 0; g < NKV; g++) {
-            const int t0 = qb * BQ, t1 = std::min(T, t0 + BQ);
-            for (int qi = 0; qi < (t1 - t0) * G; qi++) {
-                const int t = t0 + qi / G, h = g * G + qi % G;
-                float m = -std::numeric_limits<float>::infinity();
-                for (int sp = 0; sp < nsplit; sp++)
-                    m = std::max(m, part[((size_t)((qb * NKV + g) * nsplit + sp) * NQ + qi) * (DH + 2)]);
-                float l = 0;
-                float o[DH] = {};
-                for (int sp = 0; sp < nsplit; sp++) {
-                    const float* st = part.data() + ((size_t)((qb * NKV + g) * nsplit + sp) * NQ + qi) * (DH + 2);
-                    if (st[1] == 0) continue;
-                    const float f = std::exp(st[0] - m);
-                    l += st[1] * f;
-                    for (int c = 0; c < DH; c++) o[c] += st[2 + c] * f;
-                }
-                float* out = O + (size_t)t * QD + h * DH;
-                for (int c = 0; c < DH; c++) out[c] = o[c] / l;
+    #pragma omp parallel for schedule(static)   // flat, as gemm_nt
+    for (int i = 0; i < nqb * NKV; i++) {
+        const int qb = i / NKV, g = i % NKV;
+        const int t0 = qb * BQ, t1 = std::min(T, t0 + BQ);
+        for (int qi = 0; qi < (t1 - t0) * G; qi++) {
+            const int t = t0 + qi / G, h = g * G + qi % G;
+            float m = -std::numeric_limits<float>::infinity();
+            for (int sp = 0; sp < nsplit; sp++)
+                m = std::max(m, part[((size_t)((qb * NKV + g) * nsplit + sp) * NQ + qi) * (DH + 2)]);
+            float l = 0;
+            float o[DH] = {};
+            for (int sp = 0; sp < nsplit; sp++) {
+                const float* st = part.data() + ((size_t)((qb * NKV + g) * nsplit + sp) * NQ + qi) * (DH + 2);
+                if (st[1] == 0) continue;
+                const float f = std::exp(st[0] - m);
+                l += st[1] * f;
+                for (int c = 0; c < DH; c++) o[c] += st[2 + c] * f;
             }
+            float* out = O + (size_t)t * QD + h * DH;
+            for (int c = 0; c < DH; c++) out[c] = o[c] / l;
         }
+    }
 }
 
 thread_local int trace_slot = -1;   // the slot decode_trace reports from moe()

@@ -94,23 +94,23 @@ void linear_fwd(const linear& l, const float* x, int ldx, int T, float* y, int l
 #pragma omp parallel
     {
         alignas(64) float wf[MM_K];
-#pragma omp for collapse(2) schedule(dynamic)
-        for (int ib = 0; ib < nb; ib++)
-            for (int it = 0; it < nt; it++) {
-                const int t0 = it * TB, t1 = std::min(T, t0 + TB), r1 = std::min(MM_N, l.N - ib * MM_N);
-                for (int r = 0; r < r1; r++) {
-                    const int n = ib * MM_N + r;
-                    const float b = l.bias.empty() ? 0.f : l.bias[n];
-                    for (int t = t0; t < t1; t++) y[(size_t)t * ldy + n] = b;
-                    for (int k = 0; k < kb; k++) {
-                        const int kn = std::min(MM_K, l.K - k * MM_K);
-                        if (kn <= 0) break;
-                        const u16* w = l.tiles + ((size_t)ib * kb + k) * TILE + (size_t)r * MM_K;
-                        inkling2_host::bf16_to_f32(wf, w, kn);
-                        for (int t = t0; t < t1; t++) y[(size_t)t * ldy + n] += dot16(x + (size_t)t * ldx + k * MM_K, wf, kn);
-                    }
+#pragma omp for schedule(dynamic)   // flat: MSVC's OpenMP 2.0 ignores collapse
+        for (int ibt = 0; ibt < nb * nt; ibt++) {
+            const int ib = ibt / nt, it = ibt % nt;
+            const int t0 = it * TB, t1 = std::min(T, t0 + TB), r1 = std::min(MM_N, l.N - ib * MM_N);
+            for (int r = 0; r < r1; r++) {
+                const int n = ib * MM_N + r;
+                const float b = l.bias.empty() ? 0.f : l.bias[n];
+                for (int t = t0; t < t1; t++) y[(size_t)t * ldy + n] = b;
+                for (int k = 0; k < kb; k++) {
+                    const int kn = std::min(MM_K, l.K - k * MM_K);
+                    if (kn <= 0) break;
+                    const u16* w = l.tiles + ((size_t)ib * kb + k) * TILE + (size_t)r * MM_K;
+                    inkling2_host::bf16_to_f32(wf, w, kn);
+                    for (int t = t0; t < t1; t++) y[(size_t)t * ldy + n] += dot16(x + (size_t)t * ldx + k * MM_K, wf, kn);
                 }
             }
+        }
     }
 }
 
@@ -365,41 +365,41 @@ void tower::impl::encode(const float* pixels, const grid& g, u16* out_bf16, floa
 #pragma omp parallel
             {
                 std::vector<float> sc(Lp);
-#pragma omp for collapse(2) schedule(dynamic, 8)
-                for (int hd = 0; hd < NHEAD; hd++)
-                    for (int t = 0; t < L; t++) {
-                        const float* q = qkv.data() + (size_t)t * 3 * DIM + hd * HDIM;
-                        const float* K = kt.data() + (size_t)hd * HDIM * Lp;
-                        std::fill(sc.begin(), sc.end(), 0.f);
-                        for (int d = 0; d < HDIM; d++) {
-                            const __m512 qd = _mm512_set1_ps(q[d] * scale);
-                            for (int j = 0; j < Lp; j += 16)
-                                _mm512_storeu_ps(&sc[j], _mm512_fmadd_ps(qd, _mm512_loadu_ps(K + (size_t)d * Lp + j), _mm512_loadu_ps(&sc[j])));
-                        }
-                        float mx = -INFINITY;
-                        for (int j = 0; j < L; j++) mx = std::max(mx, sc[j]);
-                        float den = 0.f;
-                        for (int j = 0; j < L; j++) {
-                            sc[j] = std::exp(sc[j] - mx);
-                            den += sc[j];
-                        }
-                        const float* V = vv.data() + (size_t)hd * L * HDIM;
-                        __m512 a0 = _mm512_setzero_ps(), a1 = a0, a2 = a0, a3 = a0;
-                        for (int j = 0; j < L; j++) {
-                            const __m512 p = _mm512_set1_ps(sc[j]);
-                            const float* v = V + (size_t)j * HDIM;
-                            a0 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v), a0);
-                            a1 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v + 16), a1);
-                            a2 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v + 32), a2);
-                            a3 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v + 48), a3);
-                        }
-                        const __m512 inv = _mm512_set1_ps(1.f / den);
-                        float* o = att.data() + (size_t)t * DIM + hd * HDIM;
-                        _mm512_storeu_ps(o, _mm512_mul_ps(a0, inv));
-                        _mm512_storeu_ps(o + 16, _mm512_mul_ps(a1, inv));
-                        _mm512_storeu_ps(o + 32, _mm512_mul_ps(a2, inv));
-                        _mm512_storeu_ps(o + 48, _mm512_mul_ps(a3, inv));
+#pragma omp for schedule(dynamic, 8)   // flat, as linear_fwd
+                for (int ht = 0; ht < NHEAD * L; ht++) {
+                    const int hd = ht / L, t = ht % L;
+                    const float* q = qkv.data() + (size_t)t * 3 * DIM + hd * HDIM;
+                    const float* K = kt.data() + (size_t)hd * HDIM * Lp;
+                    std::fill(sc.begin(), sc.end(), 0.f);
+                    for (int d = 0; d < HDIM; d++) {
+                        const __m512 qd = _mm512_set1_ps(q[d] * scale);
+                        for (int j = 0; j < Lp; j += 16)
+                            _mm512_storeu_ps(&sc[j], _mm512_fmadd_ps(qd, _mm512_loadu_ps(K + (size_t)d * Lp + j), _mm512_loadu_ps(&sc[j])));
                     }
+                    float mx = -INFINITY;
+                    for (int j = 0; j < L; j++) mx = std::max(mx, sc[j]);
+                    float den = 0.f;
+                    for (int j = 0; j < L; j++) {
+                        sc[j] = std::exp(sc[j] - mx);
+                        den += sc[j];
+                    }
+                    const float* V = vv.data() + (size_t)hd * L * HDIM;
+                    __m512 a0 = _mm512_setzero_ps(), a1 = a0, a2 = a0, a3 = a0;
+                    for (int j = 0; j < L; j++) {
+                        const __m512 p = _mm512_set1_ps(sc[j]);
+                        const float* v = V + (size_t)j * HDIM;
+                        a0 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v), a0);
+                        a1 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v + 16), a1);
+                        a2 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v + 32), a2);
+                        a3 = _mm512_fmadd_ps(p, _mm512_loadu_ps(v + 48), a3);
+                    }
+                    const __m512 inv = _mm512_set1_ps(1.f / den);
+                    float* o = att.data() + (size_t)t * DIM + hd * HDIM;
+                    _mm512_storeu_ps(o, _mm512_mul_ps(a0, inv));
+                    _mm512_storeu_ps(o + 16, _mm512_mul_ps(a1, inv));
+                    _mm512_storeu_ps(o + 32, _mm512_mul_ps(a2, inv));
+                    _mm512_storeu_ps(o + 48, _mm512_mul_ps(a3, inv));
+                }
             }
             linear_fwd(ly.out, att.data(), DIM, L, h.data(), DIM);
         }

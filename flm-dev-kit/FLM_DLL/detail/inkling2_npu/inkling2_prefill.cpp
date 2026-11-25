@@ -808,40 +808,40 @@ bool inkling2_prefill::attention(int il, int p0, int T, const float* Q, const fl
     this->reserve(Ln.att_tab, at::TAB_SIZE);
     uint8_t* kv = (uint8_t*)raw(Ln.att_kv);
     // head-major bfp16 tiles of 16 keys, so the shim reads each kv window as one contiguous run
-    #pragma omp parallel for schedule(static) collapse(2)
-    for (int t = 0; t < Le; t += 16)
-        for (int h = 0; h < NKV; h++) {
-            alignas(64) float k[16 * DH], v[16 * DH];
-            for (int i = 0; i < 16; i++) {
-                const int r = t + i;
-                float* kr = k + i * DH;
-                float* vr = v + i * DH;
-                if (r < q0) {
-                    const int p = F + r;
-                    const size_t row = (size_t)(ring ? p % ring : p) * KVD + h * DH;
-                    from_bf16(kr, Kc + row, DH);
-                    from_bf16(vr, Vc + row, DH);
-                } else if (r < q0 + T) {
-                    memcpy(kr, K + (size_t)(r - q0) * KVD + h * DH, DH * sizeof(float));
-                    memcpy(vr, V + (size_t)(r - q0) * KVD + h * DH, DH * sizeof(float));
-                } else {
-                    std::fill(kr, kr + DH, 0.0f);
-                    std::fill(vr, vr + DH, 0.0f);
-                }
+    #pragma omp parallel for schedule(static)   // flat: MSVC's OpenMP 2.0 ignores collapse
+    for (int it = 0; it < Le / 16 * NKV; it++) {
+        const int t = it / NKV * 16, h = it % NKV;
+        alignas(64) float k[16 * DH], v[16 * DH];
+        for (int i = 0; i < 16; i++) {
+            const int r = t + i;
+            float* kr = k + i * DH;
+            float* vr = v + i * DH;
+            if (r < q0) {
+                const int p = F + r;
+                const size_t row = (size_t)(ring ? p % ring : p) * KVD + h * DH;
+                from_bf16(kr, Kc + row, DH);
+                from_bf16(vr, Vc + row, DH);
+            } else if (r < q0 + T) {
+                memcpy(kr, K + (size_t)(r - q0) * KVD + h * DH, DH * sizeof(float));
+                memcpy(vr, V + (size_t)(r - q0) * KVD + h * DH, DH * sizeof(float));
+            } else {
+                std::fill(kr, kr + DH, 0.0f);
+                std::fill(vr, vr + DH, 0.0f);
             }
-            uint8_t* kt = kv + ((size_t)h * Le + t) * at::KV_ROW * sizeof(u16);
-            at::pack_kv_tile(kt, kt + half * sizeof(u16), k, v, DH, bfp::pack2);
         }
+        uint8_t* kt = kv + ((size_t)h * Le + t) * at::KV_ROW * sizeof(u16);
+        at::pack_kv_tile(kt, kt + half * sizeof(u16), k, v, DH, bfp::pack2);
+    }
     // query packs; padding rows are zero queries with a zero sink
     static const float zero[DH] = {};
-    #pragma omp parallel for schedule(static) collapse(2)
-    for (int r = Lb; r < Le; r++)
-        for (int h = 0; h < NH; h++) {
-            const int t = r - q0;
-            const bool in = t >= 0 && t < T;
-            at::pack_q(Ln.att_q.data(), rounds, h, r - Lb, in ? Q + (size_t)t * QD + h * DH : zero,
-                       in ? R + ((size_t)t * NH + h) * NREL : zero, in ? sinks[(size_t)t * NH + h] : 0.0f);
-        }
+    #pragma omp parallel for schedule(static)   // flat, as above
+    for (int ir = 0; ir < (Le - Lb) * NH; ir++) {
+        const int r = Lb + ir / NH, h = ir % NH;
+        const int t = r - q0;
+        const bool in = t >= 0 && t < T;
+        at::pack_q(Ln.att_q.data(), rounds, h, r - Lb, in ? Q + (size_t)t * QD + h * DH : zero,
+                   in ? R + ((size_t)t * NH + h) * NREL : zero, in ? sinks[(size_t)t * NH + h] : 0.0f);
+    }
     at::pack_table(Ln.att_tab.data(), rel_bias);
     Ln.att_kv.sync_range_to_device_exact(0, 2 * half * sizeof(u16));
     Ln.att_q.sync_range_to_device_exact(0, at::q_pack_size(rounds) * sizeof(u16));
