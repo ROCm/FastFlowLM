@@ -37,6 +37,16 @@ public:
 
     /// \brief Undo the last n accepted tokens
     virtual void rollback(int /*n*/) {}
+
+    /// \brief Whether the next token is inside text the request's grammar dictates: a tool call,
+    ///        or a response_format body
+    /// \note The sampler skips its repetition penalties there. That text (code, SQL, paths, JSON
+    ///       keys) repeats by nature, and penalising it makes the model close an argument early or
+    ///       drift into words it has not used yet. Tokens are still counted, so text after the
+    ///       call is penalised as before.
+    virtual bool penalty_free() const {
+        return false;
+    }
 };
 
 /// \brief Bans a fixed set of tokens, e.g. the tool call opener for tool_choice=none
