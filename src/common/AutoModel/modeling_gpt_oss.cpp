@@ -39,7 +39,7 @@ void GPT_OSS::load_model(std::string model_path, json model_info, int default_co
     config.min_p = 0.1;
     config.temperature = 0.6;
     config.rep_penalty = 1.05;
-    config.freq_penalty = 0.0f;
+    config.freq_penalty = 1.05;
 
     this->set_sampler(config);
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {

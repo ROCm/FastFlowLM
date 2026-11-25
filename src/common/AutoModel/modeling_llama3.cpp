@@ -134,7 +134,7 @@ void DeepSeek_r1_8b::load_model(std::string model_path, json model_info, int def
     config.min_p = 0.1;
     config.temperature = 0.8;
     config.rep_penalty = 1.05;
-    config.freq_penalty = 0.0f;
+    config.freq_penalty = 1.05;
 
     this->set_sampler(config);
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {

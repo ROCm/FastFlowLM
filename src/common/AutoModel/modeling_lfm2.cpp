@@ -104,7 +104,7 @@ void LFM2_5_TK::load_model(std::string model_path, json model_info, int default_
     config.temperature = 0.1;
     config.top_p = 0.1;
     config.top_k = 10;
-    config.freq_penalty = 0.0f;
+    config.freq_penalty = 1.0;
     this->set_sampler(config);
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
         this->profiler_list[i].reset();
