@@ -152,7 +152,7 @@
                 "url": "https://huggingface.co/FastFlowLM/Confucius4-R2T2-NPU2",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Confucius4-R2T2-NPU2/tree/main",
                 "ms_url": "https://modelscope.cn/models/amd/Confucius4-R2T2-NPU2",
-                "modified_at": "2026-11-02T00:00:00Z",
+                "modified_at": "2026-11-25T00:00:00Z",
                 "size": 3920000000,
                 "flm_min_version": "1.0.14",
                 "default_context_length": 2048,
@@ -180,7 +180,7 @@
                     "audio",
                     "transcription"
                 ],
-                "footprint": 4.2
+                "footprint": 3.6
             }
         },
         "nanbeige4.1": {

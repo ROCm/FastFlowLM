@@ -6692,7 +6692,7 @@
         },
         {
             "type": "file",
-            "oid": "71f6409cf391100fa059fed49c68045fe8c02305",
+            "oid": "1f022ec34a05a45a7e8e3f984a7d77756c9173ff",
             "size": 729,
             "path": "MANIFEST.sha256"
         },
@@ -6704,8 +6704,8 @@
         },
         {
             "type": "file",
-            "oid": "b86bc5ae216c4aa86bfcf871f38520db752b9fc1",
-            "size": 3521,
+            "oid": "36ea1d9abfbb9ced547afa4f9b2f02821a0a5cbd",
+            "size": 4445,
             "path": "README.md"
         },
         {
@@ -6728,7 +6728,7 @@
         },
         {
             "type": "file",
-            "oid": "43352306b573b9cb810004da4fa209dd7db93fc4",
+            "oid": "1cee6e7d3343a08f4424c85bcfac96344650df08",
             "size": 6148,
             "path": "config.json"
         },
