@@ -843,6 +843,12 @@
         "xclbins-Whisper_whisper_lm_head_npu_bin"
       ]
     },
+    "bfp16_gemm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-bfp16_gemm"
+      ]
+    },
     "conv1d": {
       "model_types": [],
       "artifacts": [
@@ -893,10 +899,22 @@
         "xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512"
       ]
     },
+    "dequant_mm_mix_bfp16": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_mix_bfp16"
+      ]
+    },
     "d3_switches": {
       "model_types": [],
       "artifacts": [
         "xclbins-d3_switches"
+      ]
+    },
+    "r2t2_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-r2t2_switches"
       ]
     },
     "generic_decoding_layer": {

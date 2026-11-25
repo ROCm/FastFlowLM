@@ -748,13 +748,30 @@ conv1d runs on the host.
 
 #### `r2t2:1.7b` → `Confucius4-R2T2-NPU2`
 
-Decode only: the prompt is prefilled on the host (AVX-512), the audio encoder is host code too. Mixed decode weights
-(`QWEN3_ASR_1_7B_MIX`): Q4_1 for q/k/o/gate/up and the LM head, Q8_0 for v_proj and down_proj (4-bit everywhere breaks this
-fine-tune); the package's `npu_q41.q4nx` holds the Q4_1 copies. `QWEN3_ASR_1_7B` is the all-Q8_0 build (packages without that file).
+The prompt prefill's projections (q/k/v, o, up/gate, down) run on `prefill.xclbin`, a 32-core GEMM that reads the decode
+weights below in place and multiplies them as block float; the host keeps the norms, RoPE and the last token's LM head.
+Prompts of about 384 tokens or more also run their attention on the NPU, the shared prefill attention, inside
+`prefill.xclbin`'s hardware context through `r2t2.switches` (shorter ones, or with `QWEN3_ASR_CPU_ATTENTION=1`, keep it
+on the host). Without `r2t2.switches`, or with `QWEN3_ASR_NO_SWITCH=1`, `attn.xclbin` runs it in its own context from
+about 1024 tokens (switching contexts twice per layer costs more below). Without
+`prefill.xclbin`, or with `QWEN3_ASR_CPU_PREFILL=1`, the prompt is prefilled on the host (AVX-512). The audio
+encoder's matrix products (conv2/3, conv_out, qkv, o, fc1, fc2, proj1/2) run on `audio_gemm.xclbin`, a 32-core block-float
+GEMM for its bf16 weights; the host keeps conv1 (K = 9), LayerNorm and window attention. Without that file, or with
+`QWEN3_ASR_CPU_ENCODER=1`, the encoder runs on the host. Mixed
+decode weights (`QWEN3_ASR_1_7B_MIX`): Q4_1 for q/k/o/gate/up and the LM head, Q8_0 for v_proj and down_proj (4-bit
+everywhere breaks this fine-tune); the package's `npu_q41.q4nx` holds the Q4_1 copies. `QWEN3_ASR_1_7B` is the all-Q8_0
+build (packages without that file).
 
 | Kernels | Artifacts | Compiler |
 |---|---|---|
+| `attn.xclbin` | `xclbins-generic_prefill_attention_attention_DH_128_GQA_1_2` | Peano |
+| `audio_gemm.xclbin` | `xclbins-bfp16_gemm` | Peano |
 | `layer.xclbin` | `xclbins-generic_decoding_layer_QWEN3_ASR_1_7B_MIX` | Peano |
+| `prefill.xclbin` | `xclbins-dequant_mm_mix_bfp16` | Peano |
+| `r2t2.switches` | `xclbins-r2t2_switches` | Peano |
+
+`r2t2.switches` is not a kernel: it packs the aie2p-launchlib control-packet switches between `prefill.xclbin`'s GEMM and
+the attention; see `r2t2_switches/README.md`.
 
 ### Whisper
 
