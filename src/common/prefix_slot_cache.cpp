@@ -92,13 +92,71 @@ void PrefixSlotCache::attach(void* engine, const flm_state_api* api) {
 void PrefixSlotCache::forget_all() {
     slots_table_.clear(); // the states are ours: their memory goes with them
     live_tokens_.clear();
+    last_prompt_.clear();
 }
 
-int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, size_t boundary) const {
-    if (boundary == 0) return 0;
-    for (const auto& slot : slots_table_) {
-        if (slot.kv_from() == 0 &&slot.tokens.size() == boundary && has_prefix(tokens, slot.tokens)) {
-            return static_cast<int>(boundary);
+bool PrefixSlotCache::forked(const std::vector<int>& tokens, size_t length) const {
+    return length <= tokens.size() && last_prompt_.size() > length && lcp_len(last_prompt_, tokens) >= length &&
+           !has_prefix(tokens, last_prompt_);
+}
+
+PrefixSlotCache::user_turns_t PrefixSlotCache::find_user_turns(const std::vector<int>& tokens, const std::vector<int>& marker) {
+    user_turns_t turns;
+    for (size_t i = 1; i + marker.size() <= tokens.size() && !marker.empty(); i++) {
+        if (std::equal(marker.begin(), marker.end(), tokens.begin() + i)) {
+            if (turns.first == 0) turns.first = i;
+            turns.last = i;
+        }
+    }
+    return turns;
+}
+
+PrefixSlotCache::heads_t PrefixSlotCache::plan_heads(const std::vector<int>& full_tokens, const user_turns_t& turns, size_t match_len, bool split) {
+    heads_t heads;
+    heads.boundary = turns.first >= min_boundary ? turns.first : 0;
+    heads.history = turns.last != turns.first && turns.last >= min_boundary ? turns.last : 0;
+    // A head is saved after a prefill pass of its own, which has a cost of its own whatever its length, so it is
+    // saved only when its slot is kept.
+    heads.save_boundary = split && heads.boundary > match_len && heads.boundary < full_tokens.size() && fits(heads.boundary);
+    // The history is saved only when the prompt before this one shared it and went on with another last message, as
+    // prompts with the same few-shot examples do. A chat turn only continues the turn before, and would pay for the
+    // pass every turn. It also has to add enough over the boundary slot and over the slot this prompt resumed from to
+    // be worth a slot.
+    heads.save_history = split && heads.history > 0 && heads.history < full_tokens.size() && heads.history >= heads.boundary + min_end_gain &&
+                         heads.history >= match_len + min_end_gain && forked(full_tokens, heads.history) && fits(heads.history);
+    return heads;
+}
+
+bool PrefixSlotCache::fits(size_t length) {
+    if (!engine_ || slot_limit() == 0 || length == 0) return false;
+    flm_state* raw = api_->state_new(engine_);
+    if (!raw) return false; // the engine cannot save its context
+    const saved_state state(api_, raw);
+    return within_budget(state.estimate_bytes(static_cast<int>(length), 0), length);
+}
+
+bool PrefixSlotCache::within_budget(size_t cost, size_t length) {
+    const size_t budget = budget_bytes();
+    if (cost <= budget) return true;
+    // nothing this long would ever be reused, so it is said once
+    if (!warned_too_big_) {
+        warned_too_big_ = true;
+        header_print("WARNING", "Prefix cache: a " << length << "-token prompt needs " << (cost >> 20) << " MiB, more than --prefix-cache-mb ("
+                     << (budget >> 20) << " MiB); it is not saved. Raise --prefix-cache-mb to reuse prompts this long.");
+    }
+    return false;
+}
+
+int PrefixSlotCache::end_kv_from(const std::vector<int>& tokens, const heads_t& heads) const {
+    for (const size_t head : {heads.history, heads.boundary}) {
+        // resume() puts the rows before kv_from back from the engine's live context or from a self-contained slot
+        // which starts with the same tokens, and matches both by tokens only. With pictures in the head the same
+        // tokens can hold another picture's rows, so the end slot keeps the rows of such a head itself.
+        if (head == 0 || count_image_runs(tokens, head) > 0) continue;
+        for (const auto& slot : slots_table_) {
+            if (slot.kv_from() == 0 && slot.tokens.size() == head && has_prefix(tokens, slot.tokens)) {
+                return static_cast<int>(head);
+            }
         }
     }
     return 0;
@@ -251,13 +309,7 @@ void PrefixSlotCache::save(const std::vector<int>& tokens, const std::vector<uin
     const size_t limit = slot_limit();
     auto cost = [](const saved_state& s, size_t length, int from) { return s.estimate_bytes(static_cast<int>(length), from); };
     const size_t new_cost = cost(*state, tokens.size(), kv_from);
-    if (new_cost > budget) {
-        // this prompt alone does not fit; say so once, since nothing would ever be reused
-        if (!warned_too_big_) {
-            warned_too_big_ = true;
-            header_print("WARNING", "Prefix cache: a " << tokens.size() << "-token prompt needs " << (new_cost >> 20) << " MiB, more than --prefix-cache-mb ("
-                         << (budget >> 20) << " MiB); it is not saved. Raise --prefix-cache-mb to reuse prompts this long.");
-        }
+    if (!within_budget(new_cost, tokens.size())) {
         return;
     }
 

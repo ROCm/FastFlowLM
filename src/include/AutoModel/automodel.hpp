@@ -357,9 +357,10 @@ protected:
 	/// \param tokens the prompt without its last generation-prompt tokens (what is prefilled)
 	/// \param full_tokens the same tokens, kept intact: _shared_insert erases the part the engine already holds from `tokens`
 	/// \param match_len what _prefix_resume returned
-	/// \param boundary_marker the text that opens the first user turn, e.g. "<|im_start|>user": everything before it is
-	///        the shared head (system + tools), saved as its own slot while prefilling when it is long enough
-	/// \param payload image payload or nullptr; a prompt with images is not split at the boundary
+	/// \param boundary_marker the text that opens a user turn, e.g. "<|im_start|>user": everything before the first one is
+	///        the shared head (system + tools), saved as its own slot while prefilling when it is long enough, and everything
+	///        before the last one the history, saved as well when the prompt before this one shared it
+	/// \param payload image payload or nullptr; a prompt with images is not split at the boundary or the history
 	/// \param last_image_token_index as _shared_insert's first_len_run
 	bool _prefix_insert(PrefixSlotCache& cache, chat_meta_info_t& meta_info, std::vector<int>& tokens, const std::vector<int>& full_tokens,
 	                    const std::vector<uint64_t>& image_hashes, size_t match_len, const std::string& boundary_marker,
@@ -387,7 +388,7 @@ protected:
 
 	/// \brief insert a text-only prompt through the slots (use when _prefix_slot_mode() said yes)
 	/// \param tokens the whole rendered prompt; its last `trim` tokens are left out of the prefill
-	/// \param boundary_marker the text that opens the first user turn (see _prefix_insert)
+	/// \param boundary_marker the text that opens a user turn (see _prefix_insert)
 	bool _prefix_text_insert(chat_meta_info_t& meta_info, std::vector<int>& tokens, size_t trim, const std::string& boundary_marker,
 	                         std::function<bool()> is_cancelled, std::optional<int> requested_max_new_tokens = std::nullopt);
 
