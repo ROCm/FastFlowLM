@@ -905,6 +905,12 @@
         "xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512"
       ]
     },
+    "dequant_mm_mix_bfp16": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-dequant_mm_mix_bfp16"
+      ]
+    },
     "d3_switches": {
       "model_types": [],
       "artifacts": [
