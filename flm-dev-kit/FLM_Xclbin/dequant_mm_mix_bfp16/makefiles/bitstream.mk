@@ -34,6 +34,8 @@ ${BITSTREAM_O_DIR}/from_iron/%.xclbin: ${MLIR_O_DIR}/%.mlir ${KERNEL_OBJS}
 		--xclbin-name=${@F} $(<:${MLIR_O_DIR}/%=../../mlir/%)
 	mkdir -p build/$(MODEL_TYPE)/xclbins
 	cp ${@} build/$(MODEL_TYPE)/xclbins/
+	@# host/seq_gen.hpp and the engine's qwen3_asr_prefill_seq.hpp hard-code these
+	cat ${@D}/*/input_with_addresses.mlir | grep -E "%(K_div_k|rtp_act)_" | grep "aie.buffer" | awk '{print $$1, $$6}' | sed 's/%//g' | sort | tee build/$(MODEL_TYPE)/xclbins/rtp_addresses.txt
 
 ${BITSTREAM_O_DIR}/from_iron/%.txt: ${MLIR_O_DIR}/%.mlir
 	mkdir -p ${@D}

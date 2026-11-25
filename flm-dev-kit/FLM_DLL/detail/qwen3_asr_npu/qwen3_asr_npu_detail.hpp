@@ -8,6 +8,7 @@
 #include "decoder/qwen3_asr_cpu_decoder.hpp"
 #include "audio/qwen3_asr_audio_encoder.hpp"
 #include "audio/qwen3_asr_audio_gemm_npu.hpp"
+#include "prefill/qwen3_asr_prefill_npu.hpp"
 #include "utils/kv_rows_state.hpp"
 #include <future>
 #include <optional>
@@ -69,7 +70,9 @@ struct qwen3_asr_npu::Impl{
 
     /// @brief model dimensions, weight descriptors and weight loading
     qwen3_asr_desc desc;
-    /// @brief CPU prefill (created in load_weights, it reads the same model.q4nx)
+    /// @brief the prompt prefill's matrix products on the NPU (prefill.xclbin); declared before cpu_decoder, which uses it
+    std::unique_ptr<qwen3_asr_prefill_npu> prefill_mm;
+    /// @brief the prompt prefill (created in load_weights, it reads the same model.q4nx); its projections run on prefill_mm
     std::unique_ptr<qwen3_asr_cpu::decoder> cpu_decoder;
     /// @brief the audio encoder's matrix products on the NPU (audio_gemm.xclbin); declared before audio_encoder, which uses it
     std::unique_ptr<qwen3_asr_audio_gemm_npu> audio_gemm;

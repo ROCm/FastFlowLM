@@ -7,10 +7,9 @@
 #include <vector>
 #include "npu_utils/npu_utils.hpp"
 
-// Mirror of the prefill sequence of FLM_DLL/detail/qwen3_asr_npu (gen_prefill_mm). Keep the two in sync.
-// These are core-local buffer addresses assigned by aie-assign-buffer-addresses; after any bitstream rebuild, re-read
-// them from build/bitstream/from_iron/dequant_mm.mlir.prj/input_with_addresses.mlir (K_div_k_2_0 / rtp_act_2_0 and
-// K_div_k_3_0 / rtp_act_3_0).
+// Mirror of the engine's FLM_DLL/detail/qwen3_asr_npu/prefill/qwen3_asr_prefill_seq.hpp. Keep the two in sync.
+// These are core-local buffer addresses assigned by aie-assign-buffer-addresses; a bitstream build lists them in
+// build/xclbins/rtp_addresses.txt (K_div_k_* and rtp_act_*), locked in FLM_Xclbin/rtp_addresses.lock.txt.
 static constexpr uint32_t CT_rtp_address_even_row  = 53760;
 static constexpr uint32_t act_rtp_address_even_row = 53824;
 static constexpr uint32_t CT_rtp_address_odd_row   = 61952;

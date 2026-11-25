@@ -93,6 +93,7 @@ SOURCES += $(wildcard ../lm_head/*.cpp)
 SOURCES += decoder/qwen3_asr_cpu_decoder.cpp
 SOURCES += audio/qwen3_asr_audio_encoder.cpp
 SOURCES += audio/qwen3_asr_audio_gemm_npu.cpp
+SOURCES += prefill/qwen3_asr_prefill_npu.cpp
 HEADERS = $(wildcard *.hpp)
 HEADERS += $(wildcard ../include/*.hpp)
 

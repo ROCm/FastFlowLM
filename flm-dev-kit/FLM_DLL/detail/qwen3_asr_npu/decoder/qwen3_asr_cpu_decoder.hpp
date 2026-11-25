@@ -31,12 +31,31 @@ struct decoder_config {
     float rope_theta = 1000000.0f;
 };
 
+/// The matrix products of a decoder layer, done elsewhere for a prompt (the NPU prefill). Inputs and outputs are row-major
+/// floats holding bf16 values; the decoder keeps the norms, RoPE, attention, the KV cache and the logits.
+class projections {
+public:
+    virtual ~projections() = default;
+    /// prompts of fewer positions stay on the CPU
+    virtual int min_rows() const = 0;
+    /// q [n][heads * head_dim], k and v [n][kv_heads * head_dim] of the normed input x [n][hidden]
+    virtual void qkv(int layer, const float* x, int n, float* q, float* k, float* v) = 0;
+    /// out [n][hidden] = o_proj(att [n][heads * head_dim])
+    virtual void o(int layer, const float* att, int n, float* out) = 0;
+    /// out [n][hidden] = down(silu(gate x) * up x) of the normed input x [n][hidden]
+    virtual void mlp(int layer, const float* x, int n, float* out) = 0;
+};
+
 class decoder {
 public:
     explicit decoder(const std::string& q4nx_path, decoder_config cfg = decoder_config());
     ~decoder();
 
     const decoder_config& cfg() const;
+
+    /// forward() hands the projections of n >= p->min_rows() positions to p (nullptr: all on the CPU); p must outlive the
+    /// decoder or be reset first
+    void set_projections(projections* p);
 
     /// bf16-valued row of the (BF16) embedding table
     void embed(int token, float* out) const;

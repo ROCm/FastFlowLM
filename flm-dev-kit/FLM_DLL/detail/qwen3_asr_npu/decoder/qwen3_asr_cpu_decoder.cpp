@@ -429,6 +429,7 @@ struct decoder::impl {
     std::vector<float> kt_scratch;                 // attention_blocked's transposed keys
     int ctx = 0;
     int peak_ctx = 0;                              // the longest context since release()
+    projections* proj = nullptr;                   // the prompt's matrix products elsewhere (set_projections)
 
     impl(const std::string& path, decoder_config c) : cfg(c), file(path) {
         const int D = cfg.hidden, DH = cfg.head_dim;
@@ -487,11 +488,13 @@ struct decoder::impl {
         const int D = cfg.hidden, DH = cfg.head_dim, H = cfg.heads, KV = cfg.kv_heads;
         const int DQ = H * DH, DK = KV * DH, I = cfg.inter;
         const int pos0 = ctx;
+        projections* P = (proj && n >= proj->min_rows()) ? proj : nullptr;
+        auto timed = [](auto&& f) { const double s = now_ms(); f(); g_prof.mm += now_ms() - s; };
 
         std::vector<float> h(embeds, embeds + (size_t)n * D);          // residual stream, bf16-valued
         std::vector<float> x((size_t)n * D), q((size_t)n * DQ), k((size_t)n * DK), v((size_t)n * DK);
         std::vector<float> att((size_t)n * DQ), o((size_t)n * D);
-        std::vector<float> g((size_t)n * I), u((size_t)n * I), dn((size_t)n * D);
+        std::vector<float> g(P ? 0 : (size_t)n * I), u(P ? 0 : (size_t)n * I), dn((size_t)n * D);
         std::vector<float> cos_t((size_t)n * DH), sin_t((size_t)n * DH);
         for (int t = 0; t < n; ++t) rope_tables(pos0 + t, &cos_t[(size_t)t * DH], &sin_t[(size_t)t * DH]);
 
@@ -500,9 +503,13 @@ struct decoder::impl {
             // ---- attention block ----
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
             for (int t = 0; t < n; ++t) rmsnorm_row(&h[(size_t)t * D], L.input_norm.data(), &x[(size_t)t * D], D, cfg.rms_eps);
-            matmul_q8(L.q, x.data(), n, q.data());
-            matmul_q8(L.k, x.data(), n, k.data());
-            matmul_q8(L.v, x.data(), n, v.data());
+            if (P) {
+                timed([&] { P->qkv(li, x.data(), n, q.data(), k.data(), v.data()); });
+            } else {
+                matmul_q8(L.q, x.data(), n, q.data());
+                matmul_q8(L.k, x.data(), n, k.data());
+                matmul_q8(L.v, x.data(), n, v.data());
+            }
 
             std::vector<uint16_t>& Kc = k_cache[li];
             std::vector<uint16_t>& Vc = v_cache[li];
@@ -573,13 +580,20 @@ struct decoder::impl {
                 }
             }
             g_prof.att += now_ms() - att_start;
-            matmul_q8(L.o, att.data(), n, o.data());
+            if (P) timed([&] { P->o(li, att.data(), n, o.data()); });
+            else matmul_q8(L.o, att.data(), n, o.data());
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
             for (long long i = 0; i < (long long)n * D; ++i) h[i] = bf16r(h[i] + o[i]);   // residual
 
             // ---- MLP block (SwiGLU) ----
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
             for (int t = 0; t < n; ++t) rmsnorm_row(&h[(size_t)t * D], L.post_norm.data(), &x[(size_t)t * D], D, cfg.rms_eps);
+            if (P) {
+                timed([&] { P->mlp(li, x.data(), n, dn.data()); });
+#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
+                for (long long i = 0; i < (long long)n * D; ++i) h[i] = bf16r(h[i] + dn[i]);   // residual
+                continue;
+            }
             matmul_q8(L.gate, x.data(), n, g.data());
             matmul_q8(L.up, x.data(), n, u.data());
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
@@ -606,6 +620,7 @@ struct decoder::impl {
 decoder::decoder(const std::string& q4nx_path, decoder_config cfg) : p_(new impl(q4nx_path, cfg)) {}
 decoder::~decoder() = default;
 const decoder_config& decoder::cfg() const { return p_->cfg; }
+void decoder::set_projections(projections* p) { p_->proj = p; }
 void decoder::embed(int token, float* out) const {
     const uint16_t* row = p_->embed_table + (size_t)token * p_->cfg.hidden;
     for (int i = 0; i < p_->cfg.hidden; ++i) out[i] = bf2f(row[i]);
