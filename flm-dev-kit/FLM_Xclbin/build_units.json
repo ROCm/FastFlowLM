@@ -849,6 +849,12 @@
         "xclbins-Whisper_whisper_lm_head_npu_bin"
       ]
     },
+    "bfp16_gemm": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-bfp16_gemm"
+      ]
+    },
     "conv1d": {
       "model_types": [],
       "artifacts": [
