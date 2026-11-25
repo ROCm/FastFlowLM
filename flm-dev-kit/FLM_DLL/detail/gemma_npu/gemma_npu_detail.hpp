@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #pragma once
 #include "models/gemma/gemma_npu.hpp"
@@ -7,6 +8,7 @@
 #include "modules/mha.hpp"
 #include "gamma_image.hpp"
 #include "utils/kv_rows_state.hpp"
+#include "gemma_bfp16_pack.hpp"
 
 struct gemma_npu::Impl{
     /// @brief constexprs
@@ -61,6 +63,13 @@ struct gemma_npu::Impl{
     void _allocate_checkpoint_buffers();
 
     kv_row_layout kv_layout() const;
+
+    // bfp16 copy of the KV cache (README "bfp16 KV cache"): every finished 16-row chunk, packed by the host
+    static constexpr int KV_CHUNK = 16;
+    size_t kv_bf16_elems(uint32_t layer);
+    void _kv_bfp16_invalidate_all();
+    void _kv_bfp16_invalidate_positions(uint32_t layer, size_t begin, size_t end);
+    void _kv_bfp16_ensure(int L_next);
     std::unique_ptr<hybrid_engine_state> new_state();
     int read_state(hybrid_engine_state& state, int kv_from);
     int write_state(const hybrid_engine_state& state);
@@ -103,7 +112,6 @@ struct gemma_npu::Impl{
     npu_app_manager* gemm_app_manager;
     npu_app_manager* dequant_app_manager;
     npu_app_manager* mha_app_manager;
-    npu_app_manager* lm_head_app_manager;
 
     npu_app layer;
     npu_app sliding_layer;
@@ -142,12 +150,12 @@ struct gemma_npu::Impl{
     int SLIDING_WINDOW;
     int SLIDING_WINDOW_PATTERN;
     uint32_t vocab_size;
-    uint32_t vocab_size_padded;
     // size
     std::vector<buffer<bf16>> rms_weights;
     std::vector<buffer<bf16>> rope_rms_weights;
     std::vector<buffer<u8>> proj_weights;
     std::vector<buffer<bf16>> kv_caches;
+    std::vector<std::vector<uint8_t>> kv_packed_valid;   // per layer, per chunk: the bfp16 copy matches the rows
 
     buffer<bf16> dequanted_qkv_weights; // QKV
     buffer<bf16> dequanted_o_weights; // O
@@ -163,6 +171,8 @@ struct gemma_npu::Impl{
     buffer<bf16> logits;
     buffer<bf16> logits_valid;
     buffer<u8> lm_head_weights;
+    buffer<bf16> lm_head_norm;
+    buffer<bf16> lm_head_unused;
     buffer<bf16> final_rms_weight;
     
     flm_rt::runlist layers_run;

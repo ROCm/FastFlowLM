@@ -317,8 +317,7 @@ use. `—` means CI has no build target for that kernel yet; FastFlowLM ships a 
 |---|---|---|
 | `attn.xclbin` | `xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2` | Peano |
 | `dequant.xclbin` | `xclbins-Dequant_Q4_1_w128x512` | Peano |
-| `layer.xclbin` | `xclbins-Gemma3_gemma_npu_bin` | Peano |
-| `lm_head.xclbin` | `xclbins-Gemma3_gemma_lm_head_npu_bin` | Peano |
+| `layer_lm.xclbin` | `xclbins-Gemma3_gemma_npu_lm_bin` | Peano |
 | `mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GENERIC` | Peano |
 | `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION` | Peano |
 | `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM` | Peano |
@@ -478,8 +477,7 @@ the sliding-window CU, so the array is never reconfigured mid-layer.
 |---|---|---|
 | `attn.xclbin` | `xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2` | Peano |
 | `dequant.xclbin` | `xclbins-Dequant_Q4_1_w128x512` | Peano |
-| `layer.xclbin` | `xclbins-Gemma3_gemma_npu_bin` | Peano |
-| `lm_head.xclbin` | `xclbins-Gemma3_gemma_lm_head_npu_bin` | Peano |
+| `layer_lm.xclbin` | `xclbins-Gemma3_gemma_npu_lm_bin` | Peano |
 | `mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GENERIC` | Peano |
 | `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION` | Peano |
 | `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM` | Peano |
@@ -490,8 +488,7 @@ the sliding-window CU, so the array is never reconfigured mid-layer.
 |---|---|---|
 | `attn.xclbin` | `xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2` | Peano |
 | `dequant.xclbin` | `xclbins-Dequant_Q4_1_w128x512` | Peano |
-| `layer.xclbin` | `xclbins-Gemma3_gemma_npu_bin` | Peano |
-| `lm_head.xclbin` | `xclbins-Gemma3_gemma_lm_head_npu_bin` | Peano |
+| `layer_lm.xclbin` | `xclbins-Gemma3_gemma_npu_lm_bin` | Peano |
 | `mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GENERIC` | Peano |
 | `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION` | Peano |
 | `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM` | Peano |
@@ -504,8 +501,7 @@ the sliding-window CU, so the array is never reconfigured mid-layer.
 |---|---|---|
 | `attn.xclbin` | `xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2` | Peano |
 | `dequant.xclbin` | `xclbins-Dequant_Q4_1_w128x512` | Peano |
-| `layer.xclbin` | `xclbins-Gemma3_gemma_npu_bin` | Peano |
-| `lm_head.xclbin` | `xclbins-Gemma3_gemma_lm_head_npu_bin` | Peano |
+| `layer_lm.xclbin` | `xclbins-Gemma3_gemma_npu_lm_bin` | Peano |
 | `mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GENERIC` | Peano |
 | `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION` | Peano |
 | `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM` | Peano |

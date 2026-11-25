@@ -131,16 +131,10 @@
         "xclbins-GPTOSS_gpt_prefill_mm_GPTOSS-SHORT-SEQ"
       ]
     },
-    "Gemma3/gemma_lm_head_npu_bin": {
+    "Gemma3/gemma_npu_lm_bin": {
       "model_types": [],
       "artifacts": [
-        "xclbins-Gemma3_gemma_lm_head_npu_bin"
-      ]
-    },
-    "Gemma3/gemma_npu_bin": {
-      "model_types": [],
-      "artifacts": [
-        "xclbins-Gemma3_gemma_npu_bin"
+        "xclbins-Gemma3_gemma_npu_lm_bin"
       ]
     },
     "Gemma3_small/gemma_text_dequant_npu_bin": {

@@ -312,8 +312,7 @@
       "kernels": {
         "attn.xclbin": "xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2",
         "dequant.xclbin": "xclbins-Dequant_Q4_1_w128x512",
-        "layer.xclbin": "xclbins-Gemma3_gemma_npu_bin",
-        "lm_head.xclbin": "xclbins-Gemma3_gemma_lm_head_npu_bin",
+        "layer_lm.xclbin": "xclbins-Gemma3_gemma_npu_lm_bin",
         "mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GENERIC",
         "vision_mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM",
         "vision_attn.xclbin": "xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION"
@@ -435,8 +434,7 @@
       "kernels": {
         "attn.xclbin": "xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2",
         "dequant.xclbin": "xclbins-Dequant_Q4_1_w128x512",
-        "layer.xclbin": "xclbins-Gemma3_gemma_npu_bin",
-        "lm_head.xclbin": "xclbins-Gemma3_gemma_lm_head_npu_bin",
+        "layer_lm.xclbin": "xclbins-Gemma3_gemma_npu_lm_bin",
         "mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GENERIC",
         "vision_mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM",
         "vision_attn.xclbin": "xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION"
@@ -448,8 +446,7 @@
       "kernels": {
         "attn.xclbin": "xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2",
         "dequant.xclbin": "xclbins-Dequant_Q4_1_w128x512",
-        "layer.xclbin": "xclbins-Gemma3_gemma_npu_bin",
-        "lm_head.xclbin": "xclbins-Gemma3_gemma_lm_head_npu_bin",
+        "layer_lm.xclbin": "xclbins-Gemma3_gemma_npu_lm_bin",
         "mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GENERIC",
         "vision_mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM",
         "vision_attn.xclbin": "xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION"
@@ -461,8 +458,7 @@
       "kernels": {
         "attn.xclbin": "xclbins-generic_prefill_attention_attention_DH_256_GQA_1_2",
         "dequant.xclbin": "xclbins-Dequant_Q4_1_w128x512",
-        "layer.xclbin": "xclbins-Gemma3_gemma_npu_bin",
-        "lm_head.xclbin": "xclbins-Gemma3_gemma_lm_head_npu_bin",
+        "layer_lm.xclbin": "xclbins-Gemma3_gemma_npu_lm_bin",
         "mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GENERIC",
         "vision_mm.xclbin": "xclbins-MM_host7_mt_variant_bias_GEMMA3_4B-VISION-MM",
         "vision_attn.xclbin": "xclbins-VisionAttention_hostAttention_whoel_array_GEMMA3_4B-VISION-ATTENTION"

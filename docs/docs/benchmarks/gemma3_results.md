@@ -38,6 +38,19 @@ AMD Ryzen™ AI 7 350 (Kraken Point) with 32 GB DRAM; performance is comparable 
 > OOC: Out Of Context Length  
 > Each LLM has a maximum supported context window. For example, the gemma3:1b model supports up to 32k tokens.
 
+#### Gemma 3 4B decode on Strix Halo (after the one-xclbin decode update)
+
+Decode runs lm_head inside the layer xclbin, reads the sliding-window KV in whole chunks and keeps a bfp16 KV copy.
+Same change applies to MedGemma 4B, MedGemma 1.5 4B and TranslateGemma 4B.
+
+| **Model**        | **HW**       | **Before** | **After** |
+|------------------|--------------------|--------:|--------:|
+| **Gemma 3 4B** @ 1k | XDNA2 (Strix Halo) | 17.4 | 19.9 |
+| **Gemma 3 4B** @ 4k | XDNA2 (Strix Halo) | 16.9 | 19.7 |
+
+> Per-token latency 57.38 -> 50.13 ms at 1k and 59.17 -> 50.81 ms at 4k (TPS = 1000 / ms); Performance mode, median of 3 rounds of 128 tokens.
+> The Kraken Point table above is from v0.9.31 and has not been re-measured.
+
 ---
 
 ### 🚀 Prefill Speed (TPS, or Tokens per Second, with different prompt lengths)

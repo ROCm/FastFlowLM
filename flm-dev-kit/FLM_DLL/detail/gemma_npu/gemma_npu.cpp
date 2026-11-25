@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 #include "gemma_npu_detail.hpp"
 
@@ -17,7 +18,6 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
     SLIDING_WINDOW = config.get("sliding_window");
     SLIDING_WINDOW_PATTERN = config.get("sliding_window_pattern");
     vocab_size = config.get("vocab_size");
-    vocab_size_padded = (vocab_size + 1024 - 1) / 1024 * 1024;
 
     this->MAX_L = std::max(MAX_L, 8192);
     // make MAX_L a power of 2
@@ -40,7 +40,7 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
         this->gemma_image_encoder = std::make_unique<GemmaImageEncoder>(config, npu);
     }
 
-    layer_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "layer.xclbin"));
+    layer_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "layer_lm.xclbin"));
     this->layer = layer_app_manager->create_app();
     this->sliding_layer = layer_app_manager->create_app();
     if (!this->npu->is_preemption_enabled()){
@@ -69,13 +69,13 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
     this->mha_engine = mha_app_manager->create_app();
     this->sliding_mha_engine = mha_app_manager->create_app();
 
-    lm_head_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "lm_head.xclbin"));
-    this->lm_head = lm_head_app_manager->create_app();
+    this->lm_head = layer_app_manager->create_app();
 
     // allocate all buffers
     rms_weights.resize(num_hidden_layers);
     proj_weights.resize(num_hidden_layers);
     kv_caches.resize(num_hidden_layers);
+    kv_packed_valid.resize(num_hidden_layers);
     attn_mask.resize(num_hidden_layers);
     for (uint32_t i = 0; i < num_hidden_layers; i++) attn_mask[i] = !is_sliding_window(i);
     rope_rms_weights.resize(num_hidden_layers);
@@ -87,20 +87,23 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
         + config.get("intermediate_size") * config.get("hidden_size") * 3;
     size_t total_proj_weights_size = total_proj_weights * 5 / 8;
     size_t kv_cache_size = (size_t)MAX_L * config.get("num_key_value_heads") * config.get("head_dim") * 2;
-    size_t kv_cache_size_sliding = (size_t)SLIDING_WINDOW * config.get("num_key_value_heads") * config.get("head_dim") * 2;
 
     for (size_t i = 0; i < num_hidden_layers; i++){
         proj_weights[i] = layer.create_bo_buffer<u8>(total_proj_weights_size);
         rms_weights[i] = layer.create_bo_buffer<bf16>(config.get("hidden_size") * 4);
-        kv_caches[i] = layer.create_bo_buffer<bf16>(is_sliding_window(i) ? kv_cache_size_sliding : kv_cache_size);
+        kv_caches[i] = layer.create_bo_buffer<bf16>(this->sequence->get_kv_bfp16_offset(is_sliding_window(i), 4));
+        kv_packed_valid[i].assign((is_sliding_window(i) ? SLIDING_WINDOW : MAX_L) / KV_CHUNK, 0);
         rope_rms_weights[i] = layer.create_bo_buffer<bf16>(config.get("head_dim") * 3);
         this->kv_caches[i].sync_to_device();
     }
     this->sliding_temp_cache = this->mha_engine.create_bo_buffer<bf16>(kv_cache_size);
     x = layer.create_bo_buffer<bf16>(D);
-    this->logits = this->lm_head.create_bo_buffer<bf16>(vocab_size_padded);
+    const size_t lm_head_rows = this->sequence->get_lm_head_in_layer_rows();
+    this->logits = this->lm_head.create_bo_buffer<bf16>(lm_head_rows);
     this->logits_valid = buffer<bf16>(this->logits.data(), vocab_size);
-    this->lm_head_weights = this->lm_head.create_bo_buffer<u8>(vocab_size_padded * D * 5 / 8);
+    this->lm_head_weights = this->lm_head.create_bo_buffer<u8>(lm_head_rows * D * 5 / 8);
+    this->lm_head_norm = this->lm_head.create_bo_buffer<bf16>(D);
+    this->lm_head_unused = this->lm_head.create_bo_buffer<bf16>(D);
 
     this->K01_offset = sequence->get_k01_offset();
     this->K23_offset = sequence->get_k23_offset();
@@ -127,8 +130,8 @@ gemma_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, int MA
 
     this->dequant_seq_generator->generate_dequant_q4_1_seq(this->down_dequant.seq(), INTERMEDIATE_SIZE, D, D * (DQ + DK + DV + DQ + 2 * INTERMEDIATE_SIZE) * 5 / 8,    0);
 
-    this->sequence->gen_lm_head_seq(this->lm_head.seq());
-    this->lm_head_run = this->lm_head.create_run(this->logits, this->lm_head_weights, this->x);
+    this->sequence->gen_lm_head_in_layer_seq(this->lm_head.seq());
+    this->lm_head_run = this->lm_head.create_run(this->x, this->lm_head_weights, this->lm_head_norm, this->lm_head_unused, this->logits);
 }
 
 void reorder_cpy(u8* dst, buffer<u8>& src, const int col, const int vertical_blocks = 2){
@@ -273,8 +276,10 @@ void gemma_npu::Impl::load_weights(Q4NX& q4nx){
         LOG_VERBOSE(1, "Loading lm head weights");
         buffer<u8> w_lm_head;
         q4nx.load_weights(w_lm_head, "lm_head.weight");
-        reorder_cpy(this->lm_head_weights.data(), w_lm_head, D, 4);
+        reorder_cpy(this->lm_head_weights.data(), w_lm_head, D, 2);
         this->lm_head_weights.sync_to_device();
+        memcpy(this->lm_head_norm.data(), this->final_rms_weight.data(), (size_t)D * sizeof(bf16));
+        this->lm_head_norm.sync_to_device();
     }
     this->clear_context();
 }
@@ -304,7 +309,7 @@ void gemma_npu::Impl::_set_rope_rms_weights(int idx){
             w_rope_ptr += DH / 2;
             memcpy(w_rope_ptr, sin_buf_global.data(), DH / 2 * sizeof(bf16));
         }
-        this->rope_rms_weights[i].sync_to_device();
+        this->rope_rms_weights[i].sync_to_device(DH);
     }
 }
 
@@ -314,6 +319,7 @@ void gemma_npu::Impl::set_context_length(int L){
 
     this->sequence->gen_layer_seq(this->layer.seq(), L + 1, false);
     this->sequence->gen_layer_seq(this->sliding_layer.seq(), L + 1, true);
+    this->_kv_bfp16_ensure(L + 1);
 
     this->_set_rope_rms_weights(L);
 
@@ -333,7 +339,7 @@ void gemma_npu::Impl::set_context_length(int L){
 
 buffer<bf16> gemma_npu::Impl::forward(int ids){
     this->embedding->forward(ids, this->x);
-    this->x.sync_to_device();
+    this->x.sync_to_device(this->x.size());
     if (!this->npu->is_preemption_enabled()){
         this->layers_run.execute();
         flm::npu::wait_for_completion(this->layers_run, "layers_run");
@@ -349,14 +355,14 @@ buffer<bf16> gemma_npu::Impl::forward(int ids){
         }
     }
 
-    this->x.sync_from_device();
+    this->x.sync_from_device(this->x.size());
     // buffer<bf16> logits = get_logits(this->x);
     this->_rms_norm(this->x, this->x, this->final_rms_weight);
-    this->x.sync_to_device();
+    this->x.sync_to_device(this->x.size());
     this->lm_head_run.start();
     this->set_context_length(this->current_context_length + 1);
     flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
-    this->logits.sync_from_device();
+    this->logits.sync_from_device(this->logits.size());
     return this->logits_valid;
 }
 
@@ -572,7 +578,8 @@ buffer<bf16> gemma_npu::Impl::_prefill_with_mm(std::vector<int>& ids, void* payl
         else{
             fill_kv_cache(buffer_k, buffer_v, L_offset, L_begin, L_effective, layer_idx);
         }
-        this->kv_caches[layer_idx].sync_to_device();
+        this->kv_caches[layer_idx].sync_to_device(kv_bf16_elems(layer_idx));
+        this->_kv_bfp16_invalidate_positions(layer_idx, L_begin, L_begin + L_effective);
         // start = time_utils::now();
         // Step 5: apply mha
         if (is_sliding_window(layer_idx)){
@@ -684,11 +691,11 @@ buffer<bf16> gemma_npu::Impl::get_v_cache(int layer_idx, int idx){
 
 buffer<bf16> gemma_npu::Impl::get_logits(buffer<bf16>& predict){
     this->_rms_norm(this->x, predict, this->final_rms_weight);
-    this->x.sync_to_device();
-    this->logits.sync_to_device();
+    this->x.sync_to_device(this->x.size());
+    this->logits.sync_to_device(this->logits.size());
     this->lm_head_run.start();
     flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
-    this->logits.sync_from_device();
+    this->logits.sync_from_device(this->logits.size());
     return this->logits_valid;
 }
 
@@ -697,7 +704,7 @@ void gemma_npu::Impl::fill_kv_cache(buffer<bf16>& buffer_k, buffer<bf16>& buffer
     tensor_2d<bf16> v_cache(buffer_v, DV / 2, L_offset * 2);
 
     buffer<bf16> kv_cache = this->kv_caches[layer_idx];
-    kv_cache.sync_from_device();
+    kv_cache.sync_from_device(kv_bf16_elems(layer_idx));
 
     bf16* k_03_ptr = kv_cache.data() + this->K01_offset + L_begin * DK / 2;
     bf16* k_47_ptr = kv_cache.data() + this->K23_offset + L_begin * DK / 2;
@@ -727,7 +734,7 @@ void gemma_npu::Impl::fill_kv_cache_sliding(buffer<bf16>& local_kv_cache, buffer
     tensor_2d<bf16> v_cache(buffer_v, DV / 2, L_offset * 2);
     int local_length = sliding_l_end - sliding_l_begin;
 
-    this->kv_caches[layer_idx].sync_from_device();
+    this->kv_caches[layer_idx].sync_from_device(kv_bf16_elems(layer_idx));
     local_kv_cache.sync_from_device();
     bf16* k_01_ptr = local_kv_cache.data() + this->K01_offset + in_memory * DK / 2;
     bf16* k_23_ptr = local_kv_cache.data() + this->K23_offset + in_memory * DK / 2;
@@ -1089,6 +1096,7 @@ void gemma_npu::Impl::clear_context(){
         kv_cache.sync_to_device();
     }
     this->dirty_rows = 0;
+    this->_kv_bfp16_invalidate_all();
     this->_zero_temp_cache();
     this->set_context_length(0);
 }
@@ -1098,6 +1106,95 @@ void gemma_npu::Impl::_zero_temp_cache(){
     this->sliding_temp_cache.memset((bf16)0);
     this->sliding_temp_cache.sync_to_device();
     this->temp_dirty = false;
+}
+
+size_t gemma_npu::Impl::kv_bf16_elems(uint32_t layer){
+    return this->sequence->get_kv_bfp16_offset(is_sliding_window(layer), 0);
+}
+
+void gemma_npu::Impl::_kv_bfp16_invalidate_all(){
+    for (auto& valid : this->kv_packed_valid){
+        std::fill(valid.begin(), valid.end(), 0);
+    }
+}
+
+// rows [begin, end) of a layer's cache were written on the host
+void gemma_npu::Impl::_kv_bfp16_invalidate_positions(uint32_t layer, size_t begin, size_t end){
+    auto& valid = this->kv_packed_valid[layer];
+    if (end <= begin){
+        return;
+    }
+    if (is_sliding_window(layer)){
+        if (end - begin >= (size_t)SLIDING_WINDOW){
+            std::fill(valid.begin(), valid.end(), 0);
+            return;
+        }
+        for (size_t p = begin; p < end; p++){
+            valid[(p % SLIDING_WINDOW) / KV_CHUNK] = 0;
+        }
+        return;
+    }
+    for (size_t c = begin / KV_CHUNK; c <= (end - 1) / KV_CHUNK && c < valid.size(); c++){
+        valid[c] = 0;
+    }
+}
+
+// Before a layer run that sees L_next keys (its new row included): every chunk it reads packed must match its rows.
+// The chunk getting the new row is read as bf16 and marked stale; any other stale chunk is packed now. In decode that
+// is one chunk per layer every 16 tokens, inside the lm_head run (forward()); after a prefill or a state change, all.
+void gemma_npu::Impl::_kv_bfp16_ensure(int L_next){
+    std::vector<std::pair<uint32_t, uint32_t>> todo;
+    for (uint32_t i = 0; i < num_hidden_layers; i++){
+        auto& valid = this->kv_packed_valid[i];
+        const bool ring = is_sliding_window(i) && L_next > SLIDING_WINDOW;
+        const size_t newest_row = is_sliding_window(i) ? (size_t)(L_next - 1) % SLIDING_WINDOW : (size_t)(L_next - 1);
+        const size_t tail = newest_row / KV_CHUNK;
+        valid[tail] = 0;
+        const size_t read_packed = ring ? valid.size() : tail;
+        for (size_t c = 0; c < read_packed; c++){
+            if (c != tail && !valid[c]){
+                todo.emplace_back(i, (uint32_t)c);
+            }
+        }
+    }
+    if (todo.empty()){
+        return;
+    }
+
+    const size_t row_elems = DK / 2;
+    const size_t chunk_bytes = KV_CHUNK * row_elems * sizeof(bf16);
+    const size_t unit_bytes = gemma_npu_bfp16::unit_bytes;
+    auto region = [&](uint32_t layer, int stream) -> size_t {
+        const bool sliding = is_sliding_window(layer);
+        const size_t global_offsets[4] = {K01_offset, K23_offset, V01_offset, V23_offset};
+        const size_t sliding_offsets[4] = {sliding_K01_offset, sliding_K23_offset, sliding_V01_offset, sliding_V23_offset};
+        return sliding ? sliding_offsets[stream] : global_offsets[stream];
+    };
+
+    // rows the array wrote: pull them (runtime calls stay on this thread)
+    for (const auto& [layer, chunk] : todo){
+        for (int s = 0; s < 4; s++){
+            this->kv_caches[layer].sync_range_from_device_exact(region(layer, s) * sizeof(bf16) + chunk * chunk_bytes, chunk_bytes);
+        }
+    }
+    #pragma omp parallel for
+    for (int t = 0; t < (int)todo.size(); t++){
+        const uint32_t layer = todo[t].first;
+        const uint32_t chunk = todo[t].second;
+        const bool sliding = is_sliding_window(layer);
+        for (int s = 0; s < 4; s++){
+            const bf16* rows = this->kv_caches[layer].data() + region(layer, s) + (size_t)chunk * KV_CHUNK * row_elems;
+            uint8_t* unit = reinterpret_cast<uint8_t*>(this->kv_caches[layer].data() + this->sequence->get_kv_bfp16_offset(sliding, s)) + chunk * unit_bytes;
+            gemma_npu_bfp16::pack_stream_chunk(unit, rows, s >= 2);
+        }
+    }
+    for (const auto& [layer, chunk] : todo){
+        const bool sliding = is_sliding_window(layer);
+        for (int s = 0; s < 4; s++){
+            this->kv_caches[layer].sync_range_to_device_exact(this->sequence->get_kv_bfp16_offset(sliding, s) * sizeof(bf16) + chunk * unit_bytes, unit_bytes);
+        }
+        this->kv_packed_valid[layer][chunk] = 1;
+    }
 }
 
 kv_row_layout gemma_npu::Impl::kv_layout() const{
@@ -1111,7 +1208,7 @@ std::unique_ptr<hybrid_engine_state> gemma_npu::Impl::new_state(){
     size_t ring_bytes = 0, global_layers = 0;
     for (size_t i = 0; i < kv_caches.size(); i++){
         if (attn_mask[i]) global_layers++;
-        else ring_bytes += kv_caches[i].size() * sizeof(bf16);
+        else ring_bytes += kv_bf16_elems(i) * sizeof(bf16);
     }
     return kv_rows_new_state(global_layers, kv_layout(), ring_bytes);
 }
@@ -1122,14 +1219,15 @@ int gemma_npu::Impl::read_state(hybrid_engine_state& state, int kv_from){
     if (length < 0) return -1;
     for (size_t i = 0; i < kv_caches.size(); i++){
         if (attn_mask[i]) continue;
-        this->kv_caches[i].sync_from_device();
-        state.state[i] = buffer<bf16>(this->kv_caches[i].size());
-        memcpy(static_cast<void*>(state.state[i].data()), static_cast<void*>(this->kv_caches[i].data()), this->kv_caches[i].size() * sizeof(bf16));
+        this->kv_caches[i].sync_from_device(kv_bf16_elems(i));
+        state.state[i] = buffer<bf16>(kv_bf16_elems(i));
+        memcpy(static_cast<void*>(state.state[i].data()), static_cast<void*>(this->kv_caches[i].data()), kv_bf16_elems(i) * sizeof(bf16));
     }
     return length;
 }
 
 int gemma_npu::Impl::write_state_kv(const hybrid_engine_state& state){
+    this->_kv_bfp16_invalidate_all();
     return kv_rows_write(state, this->kv_caches, kv_layout(), this->MAX_L, &attn_mask);
 }
 
@@ -1137,7 +1235,7 @@ int gemma_npu::Impl::write_state(const hybrid_engine_state& state){
     // check the rings before anything is written
     bool ok = state.state.size() == this->kv_caches.size();
     for (size_t i = 0; ok && i < kv_caches.size(); i++){
-        if (!attn_mask[i] && state.state[i].size() != this->kv_caches[i].size()) ok = false;
+        if (!attn_mask[i] && state.state[i].size() != kv_bf16_elems(i)) ok = false;
     }
     const int length = ok ? kv_rows_write(state, this->kv_caches, kv_layout(), this->MAX_L, &attn_mask) : -1;
     if (length < 0){
@@ -1147,10 +1245,11 @@ int gemma_npu::Impl::write_state(const hybrid_engine_state& state){
     header_print_r("FLM", "Writing state at context length " + std::to_string(length));
     for (size_t i = 0; i < kv_caches.size(); i++){
         if (attn_mask[i]) continue;
-        this->kv_caches[i].sync_from_device();
-        memcpy(static_cast<void*>(this->kv_caches[i].data()), static_cast<const void*>(state.state[i].data()), this->kv_caches[i].size() * sizeof(bf16));
-        this->kv_caches[i].sync_to_device();
+        this->kv_caches[i].sync_from_device(kv_bf16_elems(i));
+        memcpy(static_cast<void*>(this->kv_caches[i].data()), static_cast<const void*>(state.state[i].data()), kv_bf16_elems(i) * sizeof(bf16));
+        this->kv_caches[i].sync_to_device(kv_bf16_elems(i));
     }
+    this->_kv_bfp16_invalidate_all();
     // rows past the length hold what the requests since the state was read left there: put back the zeros of a fresh engine
     kv_rows_zero(this->kv_caches, kv_layout(), static_cast<size_t>(length), this->dirty_rows, &attn_mask);
     this->dirty_rows = static_cast<size_t>(length);
@@ -1169,7 +1268,8 @@ void gemma_npu::Impl::update_max_length(uint32_t MAX_L){
 	}
     this->MAX_L = MAX_L;
     size_t kv_cache_size = (size_t)MAX_L * DK * 2;   // DK == num_key_value_heads * head_dim
-    buffer<bf16> kv_cache_temp(this->kv_caches[this->SLIDING_WINDOW_PATTERN - 1].size());
+    const size_t old_bf16_elems = kv_bf16_elems(this->SLIDING_WINDOW_PATTERN - 1);
+    buffer<bf16> kv_cache_temp(old_bf16_elems);
     size_t original_k01_offset = this->K01_offset;
     size_t original_k23_offset = this->K23_offset;
     size_t original_v01_offset = this->V01_offset;
@@ -1183,9 +1283,10 @@ void gemma_npu::Impl::update_max_length(uint32_t MAX_L){
         if (is_sliding_window(i)){
             continue;
         }
-        this->kv_caches[i].sync_from_device();
-        memcpy(static_cast<void*>(kv_cache_temp.data()), static_cast<void*>(this->kv_caches[i].data()), this->kv_caches[i].size() * sizeof(bf16));
-        this->kv_caches[i] = layer.create_bo_buffer<bf16>(kv_cache_size);
+        this->kv_caches[i].sync_from_device(old_bf16_elems);
+        memcpy(static_cast<void*>(kv_cache_temp.data()), static_cast<void*>(this->kv_caches[i].data()), old_bf16_elems * sizeof(bf16));
+        this->kv_caches[i] = layer.create_bo_buffer<bf16>(this->sequence->get_kv_bfp16_offset(false, 4));
+        this->kv_packed_valid[i].assign(MAX_L / KV_CHUNK, 0);
         this->kv_caches[i].memset((bf16)0); // the rows past the old size must start zero
 
         memcpy(static_cast<void*>(this->kv_caches[i].data() + this->K01_offset), static_cast<void*>(kv_cache_temp.data() + original_k01_offset), (kv_cache_temp.size() / 4) * sizeof(bf16));
@@ -1205,7 +1306,7 @@ void gemma_npu::Impl::_allocate_checkpoint_buffers(){
     this->kv_checkpoint.resize(num_hidden_layers);
     for (int i = 0; i < num_hidden_layers; i++){
         if (is_sliding_window(i)){
-            this->kv_checkpoint[i] = layer.create_bo_buffer<bf16>(this->kv_caches[i].size());
+            this->kv_checkpoint[i] = layer.create_bo_buffer<bf16>(kv_bf16_elems(i));
         }
     }
 }
@@ -1217,9 +1318,8 @@ int gemma_npu::Impl::checkpoint() {
     } // lazy allocation of checkpoint buffers, only allocate when checkpoint is called for the first time
     for (int i = 0; i < num_hidden_layers; i++){
         if (is_sliding_window(i)){
-            this->kv_caches[i].sync_from_device();
-            memcpy(static_cast<void*>(this->kv_checkpoint[i].data()), static_cast<void*>(this->kv_caches[i].data()), this->kv_caches[i].size() * sizeof(bf16));
-            this->kv_caches[i].sync_to_device();
+            this->kv_caches[i].sync_from_device(kv_bf16_elems(i));
+            memcpy(static_cast<void*>(this->kv_checkpoint[i].data()), static_cast<void*>(this->kv_caches[i].data()), kv_bf16_elems(i) * sizeof(bf16));
         }
     }
     is_checkpoint_valid = true;
@@ -1235,11 +1335,22 @@ int gemma_npu::Impl::restore() {
     header_print_r("FLM", "Restoring checkpoint at context length " + std::to_string(checkpoint_context_length));
     for (int i = 0; i < num_hidden_layers; i++){
         if (is_sliding_window(i)){
-            this->kv_caches[i].sync_from_device();
-            memcpy(static_cast<void*>(this->kv_caches[i].data()), static_cast<void*>(this->kv_checkpoint[i].data()), this->kv_caches[i].size() * sizeof(bf16));
-            this->kv_caches[i].sync_to_device();
+            this->kv_caches[i].sync_from_device(kv_bf16_elems(i));
+            memcpy(static_cast<void*>(this->kv_caches[i].data()), static_cast<void*>(this->kv_checkpoint[i].data()), kv_bf16_elems(i) * sizeof(bf16));
+            this->kv_caches[i].sync_to_device(kv_bf16_elems(i));
+            std::fill(this->kv_packed_valid[i].begin(), this->kv_packed_valid[i].end(), 0);
         }
     }
+    // global layers: rows above the checkpoint still hold what was decoded after it; zero them as write_state does, so
+    // the decode replays bit for bit (the attention's max also sees the rows past the context in the newest chunk)
+    const size_t restored = static_cast<size_t>(checkpoint_context_length);
+    for (uint32_t i = 0; i < num_hidden_layers; i++){
+        if (!is_sliding_window(i)){
+            this->_kv_bfp16_invalidate_positions(i, restored, std::max(restored, this->dirty_rows));
+        }
+    }
+    kv_rows_zero(this->kv_caches, kv_layout(), restored, this->dirty_rows, &attn_mask);
+    this->dirty_rows = restored;
     this->set_context_length(checkpoint_context_length); // regenerate sequence
     return checkpoint_context_length;
 }

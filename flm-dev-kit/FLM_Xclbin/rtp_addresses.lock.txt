@@ -17,6 +17,33 @@
 # Generated from Build and Test run 44643363368 (be628bbe), which built all 184 builds.
 # Left out: 6 artifacts that run built but no kernel_assignment.json model uses (Gemma4_12B_QAT_causal/sliding_attention_decoding, Gemma4_attention_decoding, Qwen3_6_attention_decoding, generic_decoding_layer_HUNYUAN_DENSE_1_8B, generic_decoding_layer_QWEN3_ASR_1_7B).
 
+[xclbins-Gemma3_gemma_npu_lm_bin/rtp_addresses.txt]
+IS_ATTN_PROJ_BUFFER_2_2 33280
+IS_ATTN_PROJ_BUFFER_2_3 33280
+IS_ATTN_PROJ_BUFFER_2_4 33280
+IS_ATTN_PROJ_BUFFER_2_5 33280
+IS_ATTN_PROJ_BUFFER_3_2 33280
+IS_ATTN_PROJ_BUFFER_3_3 33280
+IS_ATTN_PROJ_BUFFER_3_4 33280
+IS_ATTN_PROJ_BUFFER_3_5 33280
+IS_ATTN_PROJ_BUFFER_4_2 33280
+IS_ATTN_PROJ_BUFFER_4_3 33280
+IS_ATTN_PROJ_BUFFER_4_4 33280
+IS_ATTN_PROJ_BUFFER_4_5 33280
+IS_ATTN_PROJ_BUFFER_5_2 33280
+IS_ATTN_PROJ_BUFFER_5_3 33280
+IS_ATTN_PROJ_BUFFER_5_4 33280
+IS_ATTN_PROJ_BUFFER_5_5 33280
+IS_ATTN_RMS_BUFFERS 54272
+L_attn_kv_core_3_0 50176
+L_attn_kv_core_3_7 50176
+L_attn_kv_core_5_0 50176
+L_attn_kv_core_5_7 50176
+L_attn_qk_core_2_0 20992
+L_attn_qk_core_2_7 20992
+L_attn_qk_core_4_0 20992
+L_attn_qk_core_4_7 20992
+
 [xclbins-Gemma4_12B_QAT_decoding/rtp_addresses.txt]
 RTP_L_attn_kv_core_3_2 14976
 RTP_L_attn_kv_core_5_2 14976

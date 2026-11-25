@@ -1,6 +1,0 @@
-build
-*.exe
-*.txt
-iron/__pycache__/*
-trace.*
-model.q4nx

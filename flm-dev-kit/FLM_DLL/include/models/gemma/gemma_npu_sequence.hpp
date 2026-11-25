@@ -1,4 +1,5 @@
 // Copyright © Advanced Micro Devices, Inc., or its affiliates. All rights reserved.
+// Portions of this file consist of AI-generated content.
 
 /// \file gemma_npu_sequence.hpp
 /// \brief gemma_npu_sequence class
@@ -30,7 +31,12 @@ public:
     /// \brief Generate the layer sequence
     /// \param seq the sequence
     /// \param L the length
+    /// \note finished chunks are read from the bfp16 copy behind the bf16 cache (get_kv_bfp16_offset)
     void gen_layer_seq(npu_sequence* seq, const uint32_t L, bool is_sliding_window);
+
+    /// \brief Offset (bf16 elements) of a stream's bfp16 copy in a layer's kv cache buffer; stream 0..3 = K01, K23,
+    ///        V01, V23; stream 4 = the buffer's total size with the copy
+    size_t get_kv_bfp16_offset(bool is_sliding_window, int stream) const;
 
     /// \brief Set the max length
     /// \param MAX_L the max length
@@ -42,9 +48,12 @@ public:
     /// \param L_end the end length
     void gen_mha_engine_seq(npu_sequence* seq, const uint32_t L_begin, const uint32_t L_end, bool is_sliding_window, int buffer_length);
 
-    /// \brief Generate the lm head sequence
-    /// \param seq the sequence
-    void gen_lm_head_seq(npu_sequence* seq);
+    /// \brief Generate the lm head sequence for layer_lm.xclbin (lm_head inside the layer design)
+    /// \param seq the sequence; args: 0 x (already normalized), 1 lm_head weights, 2 any D bf16, 3 unused, 4 logits
+    void gen_lm_head_in_layer_seq(npu_sequence* seq);
+
+    /// \brief Logit rows layer_lm.xclbin writes (vocab padded to whole rounds of D)
+    uint32_t get_lm_head_in_layer_rows() const;
 
     /// \brief Get the k03 offset
     size_t get_k01_offset() const;
