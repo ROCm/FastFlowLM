@@ -105,14 +105,15 @@ double ms_since(std::chrono::steady_clock::time_point t) {
 }  // namespace
 
 qwen3_asr_prefill_npu::qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr,
-                                             std::mutex* npu_lock)
-    : mgr_(mgr), l_(l), weights_(weights), io_app_(mgr->create_app()), attn_mgr_(attn_mgr), mu_(npu_lock ? *npu_lock : own_mu_) {
-    if (attn_mgr_) {
+                                             std::mutex* npu_lock, std::unique_ptr<qwen3_asr_launch::switches> sw)
+    : mgr_(mgr), l_(l), weights_(weights), io_app_(mgr->create_app()), attn_mgr_(attn_mgr), sw_(std::move(sw)),
+      mu_(npu_lock ? *npu_lock : own_mu_) {
+    if (sw_ || attn_mgr_) {
         mha_type_t ty = mha_d128_q2;
         mha_ = std::make_unique<MHA>(ty, l.DK / 128);
-        attn_app_ = std::make_unique<npu_app>(attn_mgr_->create_app());
+        attn_app_ = std::make_unique<npu_app>((sw_ ? mgr_ : attn_mgr_)->create_app());
         const char* min_env = std::getenv("QWEN3_ASR_NPU_ATTENTION_MIN");
-        const int64_t rows = min_env ? std::max(0, std::atoi(min_env)) : 1024;
+        const int64_t rows = min_env ? std::max(0, std::atoi(min_env)) : sw_ ? ATTN_MIN_SWITCHES : 1024;
         attn_min_work_ = rows * (rows + 1);
     }
     using seqg::MIX_FMT_Q4_1;
@@ -276,7 +277,7 @@ void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, const rows_sin
 }
 
 bool qwen3_asr_prefill_npu::attention(int /*layer*/, const float* q, int pos0, int n, const uint16_t* k, const uint16_t* v, float* att) {
-    if (!attn_mgr_ || (int64_t)n * (2 * (int64_t)pos0 + n + 1) < attn_min_work_) return false;
+    if (!attn_app_ || (int64_t)n * (2 * (int64_t)pos0 + n + 1) < attn_min_work_) return false;
     std::lock_guard<std::mutex> lock(mu_);
     const int DQ = l_.DQ, DK = l_.DK, half = DK / 2;
     const int chunk = mha_->get_chunk_size(), L = pos0 + n;
@@ -326,7 +327,13 @@ bool qwen3_asr_prefill_npu::attention(int /*layer*/, const float* q, int pos0, i
         prof_ms_[CALLS][0] += ms_since(t);
         t = std::chrono::steady_clock::now();
     }
-    (*attn_app_)(attn_y_, attn_q_, attn_kv_);
+#if !defined(FLM_USE_HRX)
+    if (sw_) {
+        std::vector<xrt::run> guest{attn_app_->create_run(attn_y_, attn_q_, attn_kv_)};
+        sw_->window(mgr_, guest);
+    } else
+#endif
+        (*attn_app_)(attn_y_, attn_q_, attn_kv_);
     if (prof_) {
         prof_ms_[CALLS][1] += ms_since(t);
         // QK and PV over each real row's causal length: 2 x 2 x DQ x (pos0 + i + 1) for i in [0, n)

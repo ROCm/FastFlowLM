@@ -594,7 +594,8 @@
         "attn.xclbin": "xclbins-generic_prefill_attention_attention_DH_128_GQA_1_2",
         "audio_gemm.xclbin": "xclbins-bfp16_gemm",
         "layer.xclbin": "xclbins-generic_decoding_layer_QWEN3_ASR_1_7B_MIX",
-        "prefill.xclbin": "xclbins-dequant_mm_mix_bfp16"
+        "prefill.xclbin": "xclbins-dequant_mm_mix_bfp16",
+        "r2t2.switches": "xclbins-r2t2_switches"
       }
     },
     "whisper-v3:turbo": {

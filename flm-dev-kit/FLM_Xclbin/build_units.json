@@ -917,6 +917,12 @@
         "xclbins-d3_switches"
       ]
     },
+    "r2t2_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-r2t2_switches"
+      ]
+    },
     "generic_decoding_layer": {
       "model_types": [
         "LLAMA_3_2_1B",

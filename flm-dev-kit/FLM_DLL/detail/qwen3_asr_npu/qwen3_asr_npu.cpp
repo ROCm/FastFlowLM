@@ -117,19 +117,34 @@ void qwen3_asr_npu::Impl::load_weights(Q4NX &q4nx)
             l.o = l0.attn_output.offset;
             l.up = l0.ffn_up.offset;
             l.down = l0.ffn_down.offset;
-            // the prompt's attention on attn.xclbin too, unless QWEN3_ASR_CPU_ATTENTION=1 (or the package lacks it)
+            // the prompt's attention on the NPU too, unless QWEN3_ASR_CPU_ATTENTION=1: in prefill.xclbin's context with the
+            // control-packet switches (r2t2.switches, unless QWEN3_ASR_NO_SWITCH=1), else on attn.xclbin's own context (if the
+            // package has it)
             const char* cpu_attn_env = std::getenv("QWEN3_ASR_CPU_ATTENTION");
-            const std::string attn_xclbin = utils::path_join(config.exec_path, "xclbins", config.model_name, "attn.xclbin");
+            const std::string xdir = utils::path_join(config.exec_path, "xclbins", config.model_name);
+            const std::string attn_xclbin = utils::path_join(xdir, "attn.xclbin");
+            npu_app_manager* prefill_mgr = npu->register_xclbin(prefill_xclbin);
             npu_app_manager* attn_mgr = nullptr;
+            std::unique_ptr<qwen3_asr_launch::switches> sw;
             if (cpu_attn_env && std::atoi(cpu_attn_env) != 0)
                 header_print("FLM", "qwen3_asr_npu: prompt attention on the CPU (QWEN3_ASR_CPU_ATTENTION)");
             else if (desc.DK % 128 != 0 || desc.DQ != 2 * desc.DK)
                 header_print("FLM", "qwen3_asr_npu: attention shape not supported by attn.xclbin, prompt attention on the CPU");
-            else if (!std::filesystem::exists(attn_xclbin))
-                header_print("FLM", "qwen3_asr_npu: attn.xclbin not found, prompt attention on the CPU");
             else
-                attn_mgr = npu->register_xclbin(attn_xclbin);
-            this->prefill_mm = std::make_unique<qwen3_asr_prefill_npu>(npu->register_xclbin(prefill_xclbin), l, this->proj_weights, attn_mgr, &this->npu_mu);
+            {
+                std::string why;
+                sw = qwen3_asr_launch::load(prefill_mgr, utils::path_join(xdir, "r2t2.switches"), why);
+                if (sw)
+                    header_print("FLM", "qwen3_asr_npu: prompt attention in prefill.xclbin's context (control-packet switches)");
+                else if (!std::filesystem::exists(attn_xclbin))
+                    header_print("FLM", "qwen3_asr_npu: attn.xclbin not found, prompt attention on the CPU");
+                else
+                {
+                    header_print("FLM", "qwen3_asr_npu: control-packet switches off (" << why << "), prompt attention on attn.xclbin");
+                    attn_mgr = npu->register_xclbin(attn_xclbin);
+                }
+            }
+            this->prefill_mm = std::make_unique<qwen3_asr_prefill_npu>(prefill_mgr, l, this->proj_weights, attn_mgr, &this->npu_mu, std::move(sw));
             this->cpu_decoder->set_projections(this->prefill_mm.get());
         }
     }

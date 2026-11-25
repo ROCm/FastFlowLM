@@ -9,7 +9,9 @@
 /// one, o, up and gate in one, down. The host packs X as block float (8 values share an exponent, rounded to nearest),
 /// hands the bf16 results to the decoder's row sinks, and computes silu(gate) * up between the last two calls, packing it
 /// straight into down's X. With attn.xclbin (the shared prefill
-/// attention, modules/mha.hpp) long prompts also run their attention on the NPU, between the first two calls. The CPU decoder
+/// attention, modules/mha.hpp) long prompts also run their attention on the NPU, between the first two calls; with
+/// r2t2.switches (qwen3_asr_launch.hpp) that kernel runs inside prefill.xclbin's own hardware context, so shorter prompts
+/// do too. The CPU decoder
 /// keeps the rest of the layer (norms, RoPE, short attention, the KV cache), so the streaming and background prefill paths
 /// are unchanged.
 /// Calls are serialized: the engine prefills in the foreground and in the background.
@@ -26,6 +28,7 @@
 #include "npu_utils/npu_utils.hpp"
 #include "modules/mha.hpp"
 #include "../decoder/qwen3_asr_cpu_decoder.hpp"
+#include "qwen3_asr_launch.hpp"
 #include "qwen3_asr_prefill_seq.hpp"
 
 class qwen3_asr_prefill_npu : public qwen3_asr_cpu::projections {
@@ -39,8 +42,13 @@ public:
     /// \param attn_mgr the app manager of attn.xclbin (prefill attention, head_dim 128, 2 q heads per kv head); nullptr: the
     /// decoder keeps the attention
     /// \param npu_lock held during each call: the engine's lock of the NPU (nullptr: a lock of its own)
+    /// \param sw the control-packet switches loaded in mgr's context (qwen3_asr_launch::load): the attention then runs in that
+    /// context and attn_mgr is not used; nullptr: attn_mgr's own context
     qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr = nullptr,
-                          std::mutex* npu_lock = nullptr);
+                          std::mutex* npu_lock = nullptr, std::unique_ptr<qwen3_asr_launch::switches> sw = nullptr);
+    /// the attention runs on the NPU for long enough prompts (in attn.xclbin's context or on the switches)
+    bool npu_attention() const { return attn_app_ != nullptr; }
+    bool switches() const { return sw_ != nullptr; }
     int min_rows() const override { return min_rows_; }
     void qkv(int layer, const float* x, int n, const rows_sink& out) override;
     void o(int layer, const float* att, int n, const rows_sink& out) override;
@@ -85,15 +93,18 @@ private:
     buffer<u8> x_[2];
     buffer<u16> y_[2];
     buffer<u8> xd_[2];   // silu(gate) * up of a down job, packed
-    // attention: the sequence is made for one (L0, L1); the K/V buffer holds K of kv heads 0-3, K 4-7, V 0-3, V 4-7, L1 rows each
+    // attention: the sequence is made for one (L0, L1); the K/V buffer holds K of kv heads 0-3, K 4-7, V 0-3, V 4-7, L1 rows each.
+    // Its app is attn_mgr's, or with the switches mgr's (the run goes into sw_->window)
     npu_app_manager* attn_mgr_ = nullptr;
+    std::unique_ptr<qwen3_asr_launch::switches> sw_;
     std::unique_ptr<MHA> mha_;
     std::unique_ptr<npu_app> attn_app_;
     uint32_t attn_l0_ = 0, attn_l1_ = 0;
     // the NPU runs the attention of n rows after pos0 when n * (2 pos0 + n + 1), twice its causal products per head, reaches
-    // that of a 1024-row prompt (QWEN3_ASR_NPU_ATTENTION_MIN rows): below, the two switches per layer between prefill.xclbin and
-    // attn.xclbin (~2.5 ms each) cost more than the CPU attention
+    // that of a prompt of QWEN3_ASR_NPU_ATTENTION_MIN rows: 1024 between two contexts (below, the two switches per layer
+    // between prefill.xclbin and attn.xclbin, ~2.5 ms each, cost more than the CPU attention), less on the switches
     int64_t attn_min_work_ = 0;
+    static constexpr int64_t ATTN_MIN_SWITCHES = 384;
     buffer<u16> attn_q_, attn_kv_, attn_y_;
     std::mutex own_mu_;
     std::mutex& mu_;
