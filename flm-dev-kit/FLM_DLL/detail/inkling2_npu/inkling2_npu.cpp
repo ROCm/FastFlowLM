@@ -92,8 +92,22 @@ double diag_region_us(int threads, int gap_us) {
     return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / N - gap_us;
 }
 
-void diag_host(inkling2_prefill* pf) {
+void diag_host(inkling2_prefill* pf, inkling2_host::model& m) {
     if (!pf || std::getenv("INKLING2_NODIAG")) return;
+    {   // host decode steps from position 0: ms per step, per part
+        std::vector<float> logits(VOCAB);
+        int id = 1000;
+        for (int i = 0; i < 4; i++) m.run(&id, 1, logits.data());
+        const int N = 16;
+        inkling2_host::diag_prof(true);
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < N; i++) m.run(&id, 1, logits.data());
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / N;
+        const std::string parts = inkling2_host::diag_prof_report(N);
+        inkling2_host::diag_prof(false);
+        m.reset();
+        header_print("inkling2", "DIAG host decode " << ms << " ms/step:" << parts);
+    }
     const int T = std::max(1, (int)std::thread::hardware_concurrency() / 2);
     buffer<uint8_t>* w = pf->device_layer(0).w;
     const size_t n = std::min(w->size(), (size_t)512 << 20) & ~(((size_t)1 << 20) - 1);
@@ -362,7 +376,7 @@ void inkling2_npu::load_weights(Q4NX& q4nx) {
             d->prefill->prewarm(std::min(inkling2_host::model::chunk(), d->MAX_L));
             d->model.set_offload(d->prefill.get());
             d->make_fused();
-            diag_host(d->prefill.get());
+            diag_host(d->prefill.get(), d->model);
         } catch (...) {
             err = std::current_exception();
         }
