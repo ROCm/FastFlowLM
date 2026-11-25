@@ -25,7 +25,10 @@ struct program_args_t {
     int ctx_length = -1; // let model decide
     std::string backend = ""; // let the catalog decide; see AutoModel/model_backend.hpp
     std::vector<std::string> model_extensions; // explicit manifests, in load order
+    std::string model_dir; // --model-dir: run the model package in this folder instead of a catalog model
+    std::string family;    // --family: details.family of that package (which frontend runs it)
     int prefill_chunk_len = -1; // let model decide
+    std::string xclbin_folder; // --xclbin-folder: with an NPU --model-dir, the shipped model whose kernels it runs on
     int prefix_cache_mb = -1;   // host memory (MiB) for saved prompt snapshots; -1 = the model's default
     int prefix_slots = -1;      // how many prompt snapshots to keep; -1 = the model's default, 0 = off
     int max_raw_frames = 128;   // serve: most raw RGB8 frames (image_raw) one request may carry
