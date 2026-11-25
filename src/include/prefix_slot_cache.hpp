@@ -130,22 +130,54 @@ public:
     /// \note On a restore failure every slot is forgotten and resumed is false.
     resume_t resume(const std::vector<int>& full_tokens, const std::vector<uint64_t>& image_hashes, std::vector<int>& matched_tokens);
 
+    /// \brief where the user turns of a prompt start: the first and the last marker at position 1 or later (0 = none)
+    struct user_turns_t {
+        size_t first = 0;
+        size_t last = 0;
+    };
+    /// \param marker the tokens which open a user turn
+    static user_turns_t find_user_turns(const std::vector<int>& tokens, const std::vector<int>& marker);
+
+    /// \brief the shared heads of a prompt, and which of them to save in prefill passes of their own (plan_heads)
+    struct heads_t {
+        size_t boundary = 0;          ///< end of system + tools (the first user turn), 0 when it is before min_boundary
+        size_t history = 0;           ///< start of the last user turn, 0 when it is the first one or before min_boundary
+        bool save_boundary = false;   ///< prefill up to boundary first and save a boundary slot there
+        bool save_history = false;    ///< prefill up to history next and save a boundary slot there too
+    };
+    /// \brief find the heads of a prompt and decide which of them to save while prefilling it
+    /// \param turns where its user turns start (find_user_turns)
+    /// \param match_len length of the slot the prompt resumed from (0 = none)
+    /// \param split whether the prompt may be prefilled in parts (false while it has pictures still to read)
+    /// \note A head is saved only when the prompt still has to read it and fits() says its slot is kept. The history is
+    ///       saved only when the prompt before forked there (forked()) and it is at least min_end_gain tokens past the
+    ///       boundary and past match_len.
+    heads_t plan_heads(const std::vector<int>& full_tokens, const user_turns_t& turns, size_t match_len, bool split);
+
+    /// \brief whether save() keeps a self-contained slot of the given number of tokens
+    /// \note save() evicts any other slot to make room for one, so it refuses one only when the cache is off or the slot
+    ///       alone is bigger than --prefix-cache-mb, which is logged once.
+    bool fits(size_t length);
+
     /// \brief read the engine's current context into a new slot; `tokens` is what the engine holds
     /// \param boundary true for a shared head: the end of system + tools, or the history before the last user turn (kv_from 0,
     ///        evicted last)
     /// \param kv_from first position whose K/V rows the slot saves (0 = self-contained)
     void save(const std::vector<int>& tokens, const std::vector<uint64_t>& image_hashes, bool boundary, int kv_from);
 
-    /// \brief the kv_from an end-of-prompt slot should use: `boundary` when a self-contained slot holds the first
-    ///        `boundary` tokens of `tokens`, else 0
-    int end_kv_from(const std::vector<int>& tokens, size_t boundary) const;
+    /// \brief the kv_from an end-of-prompt slot should use: the longer of the prompt's heads which a self-contained slot
+    ///        holds with no pictures in it, else 0
+    int end_kv_from(const std::vector<int>& tokens, const heads_t& heads) const;
 
     /// \brief tokens whose K/V rows the engine's cache holds now (what the last request left in it)
     void set_live(const std::vector<int>& tokens) { live_tokens_ = tokens; }
     /// \brief remember the whole prompt of a request, for forked()
     void set_last_prompt(const std::vector<int>& tokens) { last_prompt_ = tokens; }
-    /// \brief whether the prompt before this one shared the first `length` tokens of `tokens` and then went on differently
-    /// \note A prompt which `tokens` only continues, like the previous turn of a chat, is no fork.
+    /// \brief whether the prompt before this one holds the first length tokens of tokens and more, and tokens is not that
+    ///        prompt again nor a continuation of it
+    /// \note The next turn of a chat continues the prompt before, so it is no fork. An earlier turn sent again ends inside
+    ///       the prompt before, so it is one: the conversation branches there.
+    /// \note It only decides whether a head is worth a prefill pass of its own, never which rows a prompt reuses.
     bool forked(const std::vector<int>& tokens, size_t length) const;
     /// \param announce log that the engine's context was dropped while the slots were kept (a clear or a cancel, not a cold start)
     void clear_live(bool announce = false);
@@ -175,6 +207,8 @@ private:
     size_t budget_bytes() const;
     size_t slot_limit() const;
     size_t count_image_runs(const std::vector<int>& tokens, size_t len) const;
+    /// \brief whether a slot of the given cost in bytes fits --prefix-cache-mb; warns once when it does not
+    bool within_budget(size_t cost, size_t length);
 
     void* engine_ = nullptr;           // the engine (causal_lm*), opaque to the cache
     const flm_state_api* api_ = nullptr;

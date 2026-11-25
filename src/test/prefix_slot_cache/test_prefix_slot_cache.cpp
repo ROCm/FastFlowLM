@@ -39,6 +39,7 @@ private:
 class fake_engine {
 public:
     std::vector<std::string> calls;
+    std::vector<int> kv_written;        // context length of each state write_state_kv put back
     int length = 0;
     size_t row_bytes = 1024;            // 1 KiB per row
     size_t state_bytes = 1u << 20;      // 1 MiB per snapshot
@@ -60,6 +61,7 @@ public:
     }
     int write_state_kv(const fake_state& state) {
         calls.push_back("write_kv");
+        kv_written.push_back(state.context_length);
         return state.filled ? state.context_length : -1;
     }
 };
@@ -90,30 +92,28 @@ std::vector<int> cat(std::vector<int> a, const std::vector<int>& b) {
     return a;
 }
 
-/// \brief what AutoModel::_prefix_insert does after a prefill: boundary snapshot at `head`, boundary snapshot at `history`
-///        (the start of the last user turn) when the prompt before forked there, end snapshot at the end
-/// \param match what the prompt resumed from
-void prefill(PrefixSlotCache& cache, fake_engine& e, const std::vector<int>& prompt, size_t head, size_t history = 0,
-             size_t match = 0) {
-    if (head > 0) {
-        std::vector<int> h(prompt.begin(), prompt.begin() + head);
-        e.length = static_cast<int>(head);
+/// \brief the calls AutoModel::_prefix_insert makes on the cache around a prefill, with the fake engine in place of the
+///        model: the heads plan_heads() picks are saved after passes of their own, then the end of the prompt
+/// \param first where the first user turn starts (0 = none)
+/// \param last where the last user turn starts (0 = none)
+/// \param match length of the slot the prompt resumed from (0 = none)
+/// \param images content hashes of the pictures of the prompt
+/// \param split false while the prompt has pictures still to read
+void prefill(PrefixSlotCache& cache, fake_engine& e, const std::vector<int>& prompt, size_t first, size_t last = 0, size_t match = 0,
+             const std::vector<uint64_t>& images = {}, bool split = true) {
+    const PrefixSlotCache::heads_t heads = cache.plan_heads(prompt, {first, last}, match, split);
+    auto save_head = [&](size_t length) {
+        const std::vector<int> h(prompt.begin(), prompt.begin() + length);
+        e.length = static_cast<int>(length);
         cache.set_live(h);
-        cache.save(h, {}, true, 0);
-    }
-    if (history > 0 && history >= head + cache.min_end_gain && history >= match + cache.min_end_gain &&
-        cache.forked(prompt, history)) {
-        std::vector<int> h(prompt.begin(), prompt.begin() + history);
-        e.length = static_cast<int>(history);
-        cache.set_live(h);
-        cache.save(h, {}, true, 0);
-    }
+        cache.save(h, images, true, 0);
+    };
+    if (heads.save_boundary) save_head(heads.boundary);
+    if (heads.save_history) save_head(heads.history);
     e.length = static_cast<int>(prompt.size());
     cache.set_live(prompt);
     cache.set_last_prompt(prompt);
-    int kv_from = cache.end_kv_from(prompt, history);
-    if (kv_from == 0) kv_from = cache.end_kv_from(prompt, head);
-    cache.save(prompt, {}, false, kv_from);
+    if (!cache.boundary_only) cache.save(prompt, images, false, cache.end_kv_from(prompt, heads));
 }
 
 size_t resume(PrefixSlotCache& cache, const std::vector<int>& prompt, const std::vector<uint64_t>& images = {}) {
@@ -268,6 +268,126 @@ void test_chat_saves_no_history() {
     CHECK(resume(cache, cat(history2, seq(10000, 30))) == history2.size());
 }
 
+void test_find_user_turns() {
+    std::printf("user turns are found by all of their marker tokens: the first and the last one, none at position 0\n");
+    const std::vector<int> marker = {50000, 50001};
+    const auto turn = [&](int from) { return cat(marker, seq(from, 10)); };
+    const auto prompt = cat(cat(cat(seq(1, 5), turn(100)), turn(200)), turn(300));   // turns at 5, 17 and 29
+    auto t = PrefixSlotCache::find_user_turns(prompt, marker);
+    CHECK(t.first == 5 && t.last == 29);
+    t = PrefixSlotCache::find_user_turns(cat(turn(100), turn(200)), marker);
+    CHECK(t.first == 12 && t.last == 12);
+    t = PrefixSlotCache::find_user_turns(cat(seq(1, 5), {50000, 7, 50001}), marker);
+    CHECK(t.first == 0 && t.last == 0);
+    t = PrefixSlotCache::find_user_turns(prompt, {});
+    CHECK(t.first == 0 && t.last == 0);
+}
+
+void test_forked() {
+    std::printf("a prompt forks from the prompt before when that one holds the history and more, and the prompt does not continue it\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e);
+    const auto history = seq(1, 1000);
+    const auto p1 = cat(history, seq(5000, 100));
+    CHECK(!cache.forked(p1, 1000));                                   // no prompt before it
+    cache.set_last_prompt(p1);
+    CHECK(cache.forked(cat(history, seq(6000, 100)), 1000));          // another last message
+    CHECK(cache.forked(cat(history, seq(6000, 10)), 1000));           // a shorter one
+    CHECK(cache.forked(cat(history, seq(5000, 50)), 1000));           // it ends inside the prompt before (an earlier turn again)
+    CHECK(!cache.forked(p1, 1000));                                   // the same prompt again (a retry)
+    CHECK(!cache.forked(cat(p1, seq(7000, 50)), 1000));               // it continues the prompt before (a chat turn)
+    CHECK(!cache.forked(cat(seq(1, 999), seq(6000, 101)), 1000));     // it differs before the history ends
+    CHECK(!cache.forked(cat(history, seq(6000, 100)), 1200));         // the history is longer than the prompt
+    cache.forget_all();
+    CHECK(!cache.forked(cat(history, seq(6000, 100)), 1000));
+}
+
+void test_plan_heads() {
+    std::printf("plan_heads: which heads a prompt saves in prefill passes of their own\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e, 100000, 8);
+    const auto prompt = cat(seq(1, 2000), seq(5000, 100));
+    const PrefixSlotCache::user_turns_t turns{600, 2000};
+    cache.set_last_prompt(cat(seq(1, 2000), seq(6000, 100)));        // the prompt before forked at 2000
+    auto h = cache.plan_heads(prompt, turns, 0, true);
+    CHECK(h.boundary == 600 && h.history == 2000 && h.save_boundary && h.save_history);
+    // pictures still to read: the prompt is not split
+    h = cache.plan_heads(prompt, turns, 0, false);
+    CHECK(h.boundary == 600 && h.history == 2000 && !h.save_boundary && !h.save_history);
+    // resumed at the boundary: only the history is left to save
+    h = cache.plan_heads(prompt, turns, 600, true);
+    CHECK(!h.save_boundary && h.save_history);
+    // resumed less than --prefix-min-gain (64 here) before the history, or the history that close to the boundary
+    h = cache.plan_heads(prompt, turns, 1950, true);
+    CHECK(!h.save_boundary && !h.save_history);
+    h = cache.plan_heads(prompt, {1950, 2000}, 0, true);
+    CHECK(h.save_boundary && !h.save_history);
+    // a head before min_boundary (512) is none, and a single user turn has no history
+    h = cache.plan_heads(prompt, {500, 2000}, 0, true);
+    CHECK(h.boundary == 0 && h.history == 2000 && !h.save_boundary && h.save_history);
+    h = cache.plan_heads(prompt, {600, 600}, 0, true);
+    CHECK(h.boundary == 600 && h.history == 0 && h.save_boundary && !h.save_history);
+    h = cache.plan_heads(prompt, {100, 400}, 0, true);
+    CHECK(h.boundary == 0 && h.history == 0 && !h.save_boundary && !h.save_history);
+    // a prompt which continues the prompt before (a chat turn) is no fork
+    cache.set_last_prompt(seq(1, 1500));
+    h = cache.plan_heads(prompt, turns, 0, true);
+    CHECK(h.save_boundary && !h.save_history);
+}
+
+void test_head_not_kept_not_split() {
+    std::printf("a head whose slot would not be kept costs no prefill pass\n");
+    const auto prompt = cat(seq(1, 3000), seq(5000, 100));
+    const auto before = cat(seq(1, 3000), seq(6000, 100));
+    // 1 MiB state + 1 KiB per row: 3 MiB holds a 1000-row slot, not a 3000-row one
+    fake_engine e;
+    PrefixSlotCache cache = make(e, 3, 8);
+    cache.set_last_prompt(before);
+    auto h = cache.plan_heads(prompt, {1000, 3000}, 0, true);
+    CHECK(h.save_boundary && !h.save_history);
+    fake_engine off_e;
+    PrefixSlotCache off = make(off_e, -1, 0);
+    off.set_last_prompt(before);
+    h = off.plan_heads(prompt, {1000, 3000}, 0, true);
+    CHECK(!h.save_boundary && !h.save_history);
+}
+
+void test_history_with_pictures() {
+    std::printf("an end slot keeps the rows of a head with pictures itself, so another picture's rows never go under it\n");
+    fake_engine e;
+    PrefixSlotCache cache = make(e, 100000, 8);
+    cache.image_token_id = 99999;   // not a token of seq()
+    const auto sys = seq(1, 600);
+    prefill(cache, e, cat(sys, seq(3000, 100)), 600);                          // a text conversation: B
+    // a chat with picture A in its first turn, then an edited second turn: a history slot with picture A
+    const auto c1 = cat(cat(sys, std::vector<int>(16, 99999)), seq(2000, 100));
+    CHECK(resume(cache, c1, {111}) == sys.size());
+    prefill(cache, e, c1, 600, 600, sys.size(), {111}, false);              // E1 from row 600, picture A read
+    const auto history = cat(c1, seq(2500, 300));                           // the reply, up to the second user turn
+    const auto c2 = cat(history, seq(4000, 100));
+    CHECK(resume(cache, c2, {111}) == c1.size());
+    prefill(cache, e, c2, 600, history.size(), c1.size(), {111});
+    const auto c3 = cat(history, seq(4500, 100));
+    CHECK(resume(cache, c3, {111}) == c1.size());
+    cache.begin_report();
+    prefill(cache, e, c3, 600, history.size(), c1.size(), {111});           // a fork of c2: H with picture A
+    auto rep = cache.report();
+    CHECK(rep.saved.size() == 2 && rep.saved[0].boundary && rep.saved[0].tokens == static_cast<int>(history.size()));
+    CHECK(rep.saved[1].kv_from == static_cast<int>(sys.size()));            // the end slot keeps the picture's rows
+    // the same tokens with picture B: H does not serve it, and its end slot keeps the rows from the boundary on
+    const auto p4 = cat(history, seq(8000, 100));
+    CHECK(resume(cache, p4, {222}) == sys.size());
+    cache.begin_report();
+    prefill(cache, e, p4, 600, history.size(), sys.size(), {222}, false);
+    rep = cache.report();
+    CHECK(rep.saved.size() == 1 && rep.saved[0].kv_from == static_cast<int>(sys.size()));
+    // once the live context is gone, its head rows come from B, not from H with picture A
+    cache.clear_live();
+    e.kv_written.clear();
+    CHECK(resume(cache, cat(p4, seq(9000, 5)), {222}) == p4.size());
+    CHECK(e.kv_written == std::vector<int>{600});
+}
+
 void test_small_tail_not_saved() {
     std::printf("a side call a few tokens past the shared head is not saved, so it cannot push out the main conversation\n");
     fake_engine e;
@@ -405,9 +525,11 @@ void test_picture_replaced_keeps_others() {
     CHECK(resume(cache, y, {111}) == sys.size());
     e.length = static_cast<int>(y.size());
     cache.set_live(y);
-    cache.save(y, {111}, false, cache.end_kv_from(y, 600));                    // EY
+    PrefixSlotCache::heads_t at_sys;
+    at_sys.boundary = 600;
+    cache.save(y, {111}, false, cache.end_kv_from(y, at_sys));                 // EY
     CHECK(cache.slot_count() == 3);
-    cache.save(y, {222}, false, cache.end_kv_from(y, 600));                    // the same question about another picture
+    cache.save(y, {222}, false, cache.end_kv_from(y, at_sys));                 // the same question about another picture
     CHECK(cache.slot_count() == 3);
     CHECK(resume(cache, cat(y, seq(7000, 5)), {222}) == y.size());
     CHECK(resume(cache, cat(y, seq(7000, 5)), {111}) == sys.size());
@@ -487,6 +609,11 @@ int main() {
     test_boundary_kept_for_dependents();
     test_shared_history();
     test_chat_saves_no_history();
+    test_find_user_turns();
+    test_forked();
+    test_plan_heads();
+    test_head_not_kept_not_split();
+    test_history_with_pictures();
     test_small_tail_not_saved();
     test_min_end_gain();
     test_budget();
