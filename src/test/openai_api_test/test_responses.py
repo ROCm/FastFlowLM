@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import urllib.error
+import urllib.request
+
 import flm_api
 from flm_api import Api, case, expect
 
@@ -35,6 +38,17 @@ def background_is_refused(api: Api) -> None:
 
 
 @case
+def rejects_mixed_tool_lists(api: Api) -> None:
+    function = {"type": "function", "name": "read", "parameters": {"type": "object"}}
+    for tools, field in (([function, {"type": "web_search"}], "tools[1].type"),
+                         ([{"type": "namespace", "name": "group"}, function], "tools[0].type")):
+        reply = api.post({"model": api.model, "input": "Hi", "tools": tools}, url=responses_url(api))
+        err = reply.body.get("error")
+        expect(reply.status == 400 and isinstance(err, dict) and err.get("param") == field,
+               f"expected 400 naming {field}: {reply.status} {reply.body}")
+
+
+@case
 def unknown_model_is_not_a_route_miss(api: Api) -> None:
     reply = api.post({"model": "wp49-no-such-model:1b", "input": "Hi"}, url=responses_url(api))
     err = reply.body.get("error")
@@ -53,6 +67,18 @@ def creates_a_response(api: Api) -> None:
            f"missing output or terminal status: {obj}")
     expect(isinstance(obj.get("usage"), dict) and obj["usage"].get("input_tokens", 0) > 0,
            f"missing input token usage: {obj}")
+
+
+@case
+def store_does_not_create_a_lookup_route(api: Api) -> None:
+    root = responses_url(api)
+    created = api.post({"model": api.model, "input": "Say OK.", "max_output_tokens": 8, "store": True}, url=root)
+    expect(created.status == 200 and created.body.get("store") is False, f"not stateless: {created.body}")
+    try:
+        with urllib.request.urlopen(root + "/" + created.body["id"], timeout=api.timeout) as r:
+            expect(False, f"unexpected retrieval: {r.status}")
+    except urllib.error.HTTPError as e:
+        expect(e.code == 404, f"lookup should be unrouted, got {e.code}")
 
 
 @case

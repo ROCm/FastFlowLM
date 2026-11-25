@@ -41,7 +41,7 @@ inline std::string route_path(std::string_view target) {
 inline bool requires_npu_access(const std::string& method, const std::string& path) {
     if (method != "POST") return false;
     return path == "/api/generate" || path == "/api/chat" || path == "/api/embeddings" ||
-           path == "/v1/chat/completions" || path == "/v1/completions" ||
+           path == "/v1/chat/completions" || path == "/v1/completions" || path == "/v1/responses" ||
            path == "/v1/audio/transcriptions" || path == "/v1/embeddings" ||
            path == "/v1/systemone" || path == "/v1/decisions";
 }

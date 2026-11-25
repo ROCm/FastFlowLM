@@ -401,6 +401,87 @@ int main(int argc, char* argv[]) {
         failures += error_routing();
         failures += flush_hook();
 
+        // Feed the same ordered text and tool fragments to the streaming sink, then
+        // compare the terminal object with the one-shot output (IDs vary per request).
+        {
+            json request = {{"model","m"}}, final;
+            std::vector<json> frames;
+            int last_count = 0;
+            auto stream = [&](const json& raw, bool last) {
+                const auto wire = raw.get<std::string>();
+                const auto start = wire.find("\ndata: ");
+                if (start == std::string::npos) throw std::runtime_error("missing SSE data");
+                auto e = json::parse(wire.substr(start + 7));
+                if (wire.substr(0, start) != "event: " + e.at("type").get<std::string>() ||
+                    e.at("sequence_number") != frames.size()) throw std::runtime_error("bad SSE envelope");
+                frames.push_back(std::move(e));
+                if (last) ++last_count;
+            };
+            chat_msg m;
+            m.reasoning = "why"; m.content = "answer"; m.tool_calls = {{"call_A","read","{\"x\":1}"}};
+            chat_turn_end end; end.message = &m; end.finish = chat_finish::TOOL_CALLS;
+            flm::responses::sink streamed(request, [&](const json& j) { final = j; }, stream);
+            streamed.on_begin({"m",true}); streamed.on_start({});
+            chat_msg_delta d; d.reasoning = m.reasoning; streamed.on_delta(d);
+            d = {}; d.content = m.content; streamed.on_delta(d);
+            d = {}; d.tool_index = 0; d.tool_id = "call_A"; d.tool_name = "read"; d.tool_arguments = "{\"x\":";
+            streamed.on_delta(d);
+            d = {}; d.tool_index = 0; d.tool_arguments = "1}"; streamed.on_delta(d);
+            streamed.on_end(end); streamed.on_error({}); // no second terminal frame
+            auto items = frames.back().at("response").at("output");
+            failures += check("responses terminal", frames.back()["type"].dump(), "\"response.completed\"");
+            failures += check("one final frame", std::to_string(last_count), "1");
+            std::string arguments;
+            for (const auto& frame : frames) {
+                if (frame["type"] == "response.function_call_arguments.delta") {
+                    const auto i = frame.at("output_index").get<size_t>();
+                    failures += check("stable tool item",frame.at("item_id").dump(),items.at(i)["id"].dump());
+                    arguments += frame.at("delta").get<std::string>();
+                }
+            }
+            failures += check("reconstructed arguments", arguments, m.tool_calls[0].arguments);
+            flm::responses::sink one(request, [&](const json& j) { final = j; }, stream);
+            one.on_begin({"m",false}); one.on_end(end);
+            for (auto& it : items) it.erase("id");
+            for (auto& it : final.at("output")) it.erase("id");
+            failures += check("stream/one-shot item parity", items.dump(), final.at("output").dump());
+            for (const bool error : {false, true}) {
+                frames.clear(); last_count = 0;
+                flm::responses::sink partial(request, [&](const json& j) { final = j; }, stream);
+                partial.on_begin({"m",true}); partial.on_start({});
+                d = {}; d.content = "partial"; partial.on_delta(d);
+                d = {}; d.tool_index = 0; d.tool_name = "read"; d.tool_id = "call_A";
+                d.tool_arguments = "{\"x\":"; partial.on_delta(d);
+                if (error) partial.on_error({503,"model_error","busy","",true});
+                else { end.finish = chat_finish::LENGTH; partial.on_end(end); }
+                partial.on_error({});
+                failures += check("only one terminal after error/limit", std::to_string(last_count), "1");
+                for (const auto& e : frames)
+                    if (e["type"] == "response.function_call_arguments.done" ||
+                        (e["type"] == "response.output_item.done" && e["item"]["type"] == "function_call"))
+                        throw std::runtime_error("partial function call advertised as done");
+                failures += check("incomplete/failed terminal", frames.back()["type"].get<std::string>(),
+                                  error ? "response.failed" : "response.incomplete");
+                failures += check("partial item",frames.back()["response"]["output"][0]["status"].dump(),"\"incomplete\"");
+            }
+        }
+
+        const auto simple = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":"hello","reasoning":{"effort":"low"},"max_output_tokens":42,
+            "text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}
+        })"));
+        failures += check("string input", simple.at("messages").dump(), R"([{"role":"user","content":"hello"}])");
+        failures += check("effort", simple.at("reasoning_effort").dump(), "\"low\"");
+        failures += check("output budget", simple.at("max_completion_tokens").dump(), "42");
+        failures += check("response schema", simple.at("response_format").at("json_schema").dump(),
+                          R"({"name":"answer","schema":{"type":"object"}})");
+        const auto replay = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"why"}]},
+            {"role":"assistant","content":[{"type":"input_text","text":"answer"}]},
+            {"role":"user","content":"next"}]})")).at("messages");
+        failures += check("explicit assistant history", replay[0].dump(),
+                          R"({"role":"assistant","content":"answer","reasoning_content":"why"})");
+
         // Function result IDs, not the order of the results, bind them to calls.
         const auto history = json::parse(R"({
             "model":"m", "instructions":"Be brief.", "input":[

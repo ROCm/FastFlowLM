@@ -55,6 +55,7 @@ The following endpoints are actively supported and maintained:
 
 - `v1/models`
 - `v1/chat/completions`
+- [`v1/responses`](../responses/) (stateless text generation and client-executed function calls)
 - `v1/audio/transcriptions` (Whisper with `--asr 1`, or a speech model such as [`r2t2:1.7b`](/docs/models/r2t2/) when it is the requested `model`)
 - [`v1/embeddings`](../../models/embeddinggemma.md)
 
