@@ -73,10 +73,20 @@ def benchable(mid: str, catalog: dict[str, dict]) -> bool:
 
 
 def size_of(mid: str, catalog: dict[str, dict]) -> float:
-    try:
-        return float(catalog.get(mid, {}).get("size") or 0)
-    except (TypeError, ValueError):
-        return 0.0
+    """What "smallest first" orders by, in bytes: the model's footprint (GB,
+    the memory it runs in), else its download size. The download size alone
+    misleads for a model that reuses another's package: the dflash drafts
+    list 270 MB of their own files but run in the 8.7 GB of
+    nemotron3.5-bolt:e4b."""
+    entry = catalog.get(mid, {})
+    for key, scale in (("footprint", 1e9), ("size", 1.0)):
+        try:
+            value = float(entry.get(key) or 0) * scale
+        except (TypeError, ValueError):
+            value = 0.0
+        if value > 0:
+            return value
+    return 0.0
 
 
 def ordered(models: Iterable[str], catalog: dict[str, dict]) -> list[str]:

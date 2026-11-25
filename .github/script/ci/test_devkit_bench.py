@@ -450,6 +450,20 @@ class SelectModels(unittest.TestCase):
         self.assertEqual(res["dropped"], [])
         self.assertIn("embed-gemma:300m", res["skipped"])
 
+    def test_smallest_is_by_footprint(self):
+        # A draft package lists a small download but runs in its base model's
+        # memory: the footprint (GB) orders it, the size only without one.
+        catalog = select_models.changes.load_catalog(json.dumps({"models": {
+            "draft": {"e4b": {"size": 2.7e8, "footprint": 8.7, "details": {"family": "draft"}}},
+            "tiny": {"1b": {"size": 6e8, "footprint": 0.65, "details": {"family": "tiny"}}},
+            "nofoot": {"2b": {"size": 2e9, "details": {"family": "nofoot"}}},
+        }}))
+        self.assertEqual(select_models.ordered(["draft:e4b", "tiny:1b", "nofoot:2b"], catalog),
+                         ["tiny:1b", "nofoot:2b", "draft:e4b"])
+        self.assertEqual(select_models.size_of("draft:e4b", catalog), 8.7e9)
+        self.assertEqual(select_models.size_of("nofoot:2b", catalog), 2e9)
+        self.assertEqual(select_models.size_of("nosuch:1b", catalog), 0.0)
+
     def test_real_maps_load(self):
         engines = select_models.changes.DevkitEngines.parse(
             (REPO / "flm-dev-kit/FLM_DLL/engines.json").read_text(encoding="utf-8"))
@@ -461,6 +475,10 @@ class SelectModels(unittest.TestCase):
         res = select_models.select(mode="pr", catalog=catalog, engines=engines, assignment=assignment,
                                    families=engines.all_families())
         self.assertLessEqual(len(res["models"]), select_models.PR_CAP)
+        # Shared code samples the engines' smallest models, by what they run
+        # in: no 8.7 GB dflash draft ahead of the sub-1 GB models.
+        footprints = [float(catalog[m["model"]].get("footprint") or 0) for m in res["models"]]
+        self.assertLess(max(footprints), 2.0, res["models"])
 
 
 def run(**kw):
