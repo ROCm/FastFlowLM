@@ -329,8 +329,6 @@ void control_norm(const float* x, const float* m, const loop_ctrl& c, const floa
 
 /// \brief logits[VOCAB] = softcap(lm_head . x) of one final-normed token
 void lm_head(const weights& w, const float* x, float* logits);
-void diag_prof(bool on);                    // TEMPORARY diagnostic
-std::string diag_prof_report(int steps);    // TEMPORARY diagnostic
 
 /// \brief the whole model on the host, one sequence
 class model {

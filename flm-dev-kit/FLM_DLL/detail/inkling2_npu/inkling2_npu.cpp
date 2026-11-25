@@ -7,7 +7,6 @@
 #include "inkling2_vision_npu.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -15,9 +14,6 @@
 #include <thread>
 #include <limits>
 #include <stdexcept>
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 using namespace inkling2_host;
 
@@ -48,78 +44,6 @@ void check_config(const LM_Config& config) {
     expect("sconv_kernel_size", NCONV);
     expect("vocab_size", VOCAB_PAD);
     expect("unpadded_vocab_size", VOCAB);
-}
-
-// TEMPORARY diagnostic, reverted before the swap: why the host decode is slower on Windows HRX. CPU read bandwidth of
-// an NPU buffer vs the same bytes on the heap, and the cost of an empty OpenMP parallel region.
-double diag_read_gbs(const uint8_t* p, size_t n, int threads) {
-    double best = 0;
-    for (int rep = 0; rep < 3; rep++) {
-        int64_t sink = 0;
-        const auto t0 = std::chrono::steady_clock::now();
-#pragma omp parallel for num_threads(threads) reduction(+ : sink) schedule(static)
-        for (int c = 0; c < (int)(n >> 20); c++) {
-            const int64_t* q = (const int64_t*)(p + ((size_t)c << 20));
-            int64_t s = 0;
-            for (int i = 0; i < (1 << 17); i++) s += q[i];
-            sink += s;
-        }
-        const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        static volatile int64_t keep;
-        keep = sink;
-        best = std::max(best, (double)n / sec / 1e9);
-    }
-    return best;
-}
-
-double diag_region_us(int threads, int gap_us) {
-    volatile int slot[64] = {};
-    const int N = 2000;
-    const auto t0 = std::chrono::steady_clock::now();
-    for (int i = 0; i < N; i++) {
-#pragma omp parallel num_threads(threads)
-        {
-#ifdef _OPENMP
-            slot[omp_get_thread_num() & 63] = i;
-#endif
-        }
-        if (gap_us) {
-            const auto g = std::chrono::steady_clock::now();
-            while (std::chrono::steady_clock::now() - g < std::chrono::microseconds(gap_us)) {
-            }
-        }
-    }
-    return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / N - gap_us;
-}
-
-void diag_host(inkling2_prefill* pf, inkling2_host::model& m) {
-    if (!pf || std::getenv("INKLING2_NODIAG")) return;
-    {   // host decode steps from position 0: ms per step, per part
-        std::vector<float> logits(VOCAB);
-        int id = 1000;
-        for (int i = 0; i < 4; i++) m.run(&id, 1, logits.data());
-        const int N = 16;
-        inkling2_host::diag_prof(true);
-        const auto t0 = std::chrono::steady_clock::now();
-        for (int i = 0; i < N; i++) m.run(&id, 1, logits.data());
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / N;
-        const std::string parts = inkling2_host::diag_prof_report(N);
-        inkling2_host::diag_prof(false);
-        m.reset();
-        header_print("inkling2", "DIAG host decode " << ms << " ms/step:" << parts);
-    }
-    const int T = std::max(1, (int)std::thread::hardware_concurrency() / 2);
-    buffer<uint8_t>* w = pf->device_layer(0).w;
-    const size_t n = std::min(w->size(), (size_t)512 << 20) & ~(((size_t)1 << 20) - 1);
-    const double bo = diag_read_gbs(w->data(), n, T);
-    std::vector<uint8_t> h(n);
-    std::memcpy(h.data(), w->data(), n);
-    const double heap = diag_read_gbs(h.data(), n, T);
-    const double r0 = diag_region_us(T, 0), r20 = diag_region_us(T, 20), r100 = diag_region_us(T, 100);
-    header_print("inkling2", "DIAG threads " << T << " of " << std::thread::hardware_concurrency() << ", read " << (n >> 20)
-                                             << " MB: npu buffer " << bo << " GB/s, heap " << heap
-                                             << " GB/s; empty parallel region " << r0 << " us, after a 20 us gap " << r20
-                                             << " us, after a 100 us gap " << r100 << " us");
 }
 
 }  // namespace
@@ -376,7 +300,6 @@ void inkling2_npu::load_weights(Q4NX& q4nx) {
             d->prefill->prewarm(std::min(inkling2_host::model::chunk(), d->MAX_L));
             d->model.set_offload(d->prefill.get());
             d->make_fused();
-            diag_host(d->prefill.get(), d->model);
         } catch (...) {
             err = std::current_exception();
         }

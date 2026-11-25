@@ -197,7 +197,7 @@ act make_act(size_t n) {
 /// INKLING2_PROF=1: time per part of the model, printed at exit
 enum prof_part { P_MIX, P_CTRL, P_NORM, P_PROJ, P_CONV, P_ATTN, P_OPROJ, P_ROUTER, P_EXPERT, P_LMHEAD, P_X_SINK, P_X_CLIP, P_X_KVW, P_X_GATE, P_X_RES, P_X_ATTNPU, P_X_MSGMIX, P_X_FFNMIX, P_X_FFNCTRL, P_NPART };
 struct profiler {
-    bool on = std::getenv("INKLING2_PROF") != nullptr;
+    const bool on = std::getenv("INKLING2_PROF") != nullptr;
     double sec[P_NPART] = {};
     double hsec[2][P_NPART] = {};   // DIAG
     ~profiler() {
@@ -1403,23 +1403,6 @@ act layer(const layer_weights& L, int il, int ip, int slot, model::state& s, int
 }
 
 }  // namespace
-
-void diag_prof(bool on) {   // TEMPORARY diagnostic
-    prof.on = on;
-    for (double& v : prof.sec) v = 0;
-}
-std::string diag_prof_report(int steps) {   // TEMPORARY diagnostic: ms per step of each part
-    static const char* names[P_NPART] = {"mix", "ctrl", "norm", "proj", "conv", "attn", "oproj", "router", "experts", "lm_head",
-                                         "x_sink", "x_clip", "x_kvw", "x_gate", "x_res", "x_attnpu", "x_msgmix", "x_ffnmix", "x_ffnctrl"};
-    std::string r;
-    char b[64];
-    for (int i = 0; i < P_NPART; i++)
-        if (prof.sec[i] > 0) {
-            std::snprintf(b, sizeof b, " %s %.2f", names[i], 1e3 * prof.sec[i] / steps);
-            r += b;
-        }
-    return r;
-}
 
 void control_norm(const float* x, const float* m, const loop_ctrl& c, const float* g, float* out) {
     const act y = control(x, m, c, 1);
