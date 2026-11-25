@@ -89,6 +89,15 @@ void pack_x(uint8_t* out, const float* x, int rows, uint32_t rows_padded, uint32
     }
 }
 
+/// byte offset in pack_x's layout of the 8 values at k (a multiple of 8) of row `row`
+inline size_t x_offset(int row, uint32_t k, uint32_t Din, uint32_t nb) {
+    const uint32_t ms = 8 / nb, m_pass = seqg::mix_pass_rows(nb), k_rounds = Din / 512;
+    const uint32_t mp = row / m_pass, rr = row % m_pass, b = mp * seqg::MIX_CORE_ROWS + rr / (16 * ms);
+    const uint32_t kr = k / 512, j = k / 256 % 2, v = k / 128 % 2, kt = k / 8 % 16;
+    return ((size_t)b * k_rounds + kr) * 4 * ms * seqg::MIX_X_PACKET_BYTES + (j * ms + rr / 16 % ms) * 2 * 16 * 2 * 72 +
+           ((v * 16 + kt) * 2 + rr / 8 % 2) * 72 + rr % 8 / 2 * 18 + rr % 2 * 9;
+}
+
 double ms_since(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
 }
@@ -134,7 +143,7 @@ void qwen3_asr_prefill_npu::run(int layer, const std::vector<job>& jobs) {
     for (size_t j = 0; j < n; j++) {
         const call_t& call = calls_[jobs[j].c];
         rp[j] = seqg::mix_rows_padded(jobs[j].rows, call.dout);
-        x_bytes = std::max(x_bytes, (size_t)rp[j] * call.din / 8 * 9);
+        if (!jobs[j].packed) x_bytes = std::max(x_bytes, (size_t)rp[j] * call.din / 8 * 9);
         y_elems = std::max(y_elems, (size_t)rp[j] * call.dout);
     }
     for (int s = 0; s < 2; s++) {
@@ -143,14 +152,18 @@ void qwen3_asr_prefill_npu::run(int layer, const std::vector<job>& jobs) {
     }
     std::vector<flm_rt::run> runs;
     runs.reserve(n);
-    for (size_t j = 0; j < n; j++) runs.push_back(app_for(jobs[j].c, rp[j]).create_run(y_[j % 2], x_[j % 2], weights_.at(layer)));
+    for (size_t j = 0; j < n; j++)
+        runs.push_back(app_for(jobs[j].c, rp[j]).create_run(y_[j % 2], jobs[j].packed ? *jobs[j].packed : x_[j % 2], weights_.at(layer)));
 
     const auto pack = [&](size_t j) {
         const job& J = jobs[j];
         const call_t& call = calls_[J.c];
         const auto t = std::chrono::steady_clock::now();
-        pack_x(x_[j % 2].data(), J.x, J.rows, rp[j], call.din, seqg::mix_nb(J.rows, call.dout));
-        x_[j % 2].sync_to_device_bytes((size_t)rp[j] * call.din / 8 * 9);
+        if (J.packed) J.packed->sync_to_device_bytes((size_t)rp[j] * call.din / 8 * 9);
+        else {
+            pack_x(x_[j % 2].data(), J.x, J.rows, rp[j], call.din, seqg::mix_nb(J.rows, call.dout));
+            x_[j % 2].sync_to_device_bytes((size_t)rp[j] * call.din / 8 * 9);
+        }
         if (prof_) prof_ms_[J.c][0] += ms_since(t);
     };
     const auto unpack = [&](size_t j) {
@@ -220,22 +233,41 @@ void qwen3_asr_prefill_npu::o(int layer, const float* att, int n, float* out) {
 void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, float* out) {
     std::lock_guard<std::mutex> lock(mu_);
     const int D = l_.D, I = l_.I;
-    if (act_.size() < (size_t)n * I) act_.resize((size_t)n * I);
-    float* act = act_.data();
+    // down's X, packed by the up_gate unpack: two buffers in turn (down s runs before up_gate s + 2 is unpacked)
+    const size_t xd_bytes = (size_t)seqg::mix_rows_padded(step(n), D) * I / 8 * 9;
+    for (int s = 0; s < 2; s++)
+        if (xd_[s].size() < xd_bytes) xd_[s] = io_app_.create_bo_buffer<u8>(xd_bytes);
     // fused row c is up row (c / 1024) 512 + c % 1024 when c % 1024 < 512, else that gate row (512 earlier); silu and the
-    // product are rounded to bf16 as on the CPU path
-    const auto silu_up = [=](const uint16_t* Y, int r0, int rows) {
-#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-        for (int r = 0; r < rows; r++) {
-            const uint16_t* y = Y + (size_t)r * 2 * I;
-            float* a = act + (size_t)(r0 + r) * I;
-            for (int c = 0; c < I; c += 16) {
-                const int f = c / 512 * 1024 + c % 512;
-                const __m512 u = simd::load_bf16(y + f), g = simd::load_bf16(y + f + 512);
-                const __m512 s = simd::round_bf16(_mm512_div_ps(g, _mm512_add_ps(_mm512_set1_ps(1.f), simd::exp(_mm512_sub_ps(_mm512_setzero_ps(), g)))));
-                _mm512_storeu_ps(a + c, simd::round_bf16(_mm512_mul_ps(s, u)));
+    // product are rounded to bf16 as on the CPU path, then packed as pack_x would (padding rows 0); a task is 16 rows (one
+    // row group: whole 72-byte tiles) by 512 k
+    const auto silu_up = [=](uint8_t* xd, const uint16_t* Y, int rows) {
+        const uint32_t nb = seqg::mix_nb(rows, D), ms = 8 / nb;
+        const int groups = (int)seqg::mix_rows_padded(rows, D) / 16;
+#pragma omp parallel for collapse(2) schedule(dynamic, 2) num_threads(qwen3_asr_cpu::asr_threads())
+        for (int kr = 0; kr < I / 512; kr++)
+            for (int g = 0; g < groups; g++) {
+                uint8_t* base = xd + x_offset(g * 16, kr * 512, I, nb);
+                if (g * 16 >= rows) {   // a group past the rows: its two 256 k slices
+                    std::memset(base, 0, 2 * 16 * 2 * 72);
+                    std::memset(base + ms * 2 * 16 * 2 * 72, 0, 2 * 16 * 2 * 72);
+                    continue;
+                }
+                for (int rl = 0; rl < 16; rl++) {
+                    const int r = g * 16 + rl;
+                    uint8_t* p = base + rl / 8 * 72 + rl % 8 / 2 * 18 + rl % 2 * 9;
+                    if (r >= rows) {   // padding: zero blocks
+                        for (int t = 0; t < 64; t++) std::memset(p + t / 32 * ms * 2 * 16 * 2 * 72 + t % 32 * 144, 0, 9);
+                        continue;
+                    }
+                    const uint16_t* y = Y + (size_t)r * 2 * I + kr * 1024;
+                    for (int c = 0; c < 512; c += 16, p += 2 * 144) {
+                        if (c == 256) p += (ms - 1) * 2 * 16 * 2 * 72;   // the second 256 k slice follows this row's ms groups
+                        const __m512 u = simd::load_bf16(y + c), gt = simd::load_bf16(y + c + 512);
+                        const __m512 s = simd::round_bf16(_mm512_div_ps(gt, _mm512_add_ps(_mm512_set1_ps(1.f), simd::exp(_mm512_sub_ps(_mm512_setzero_ps(), gt)))));
+                        encode2(simd::round_bf16(_mm512_mul_ps(s, u)), p, p + 144);
+                    }
+                }
             }
-        }
     };
     const auto unpack = [=](const uint16_t* y, int r0, int rows) {
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
@@ -246,11 +278,15 @@ void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, float* out) {
     // unpack, which is two jobs earlier, or (one step) the job just before
     std::vector<job> jobs;
     const int steps = (n + step(n) - 1) / step(n);
-    const auto ug = [&](int s) { const int r0 = s * step(n); jobs.push_back({UP_GATE, r0, std::min(step(n), n - r0), x + (size_t)r0 * D, silu_up}); };
+    const auto ug = [&](int s) {
+        const int r0 = s * step(n);
+        uint8_t* xd = xd_[s % 2].data();
+        jobs.push_back({UP_GATE, r0, std::min(step(n), n - r0), x + (size_t)r0 * D, [=](const uint16_t* y, int, int rows) { silu_up(xd, y, rows); }});
+    };
     const auto dn = [&](int s) {
         const int r0 = s * step(n);
         const bool prev = jobs.back().c == UP_GATE && jobs.back().r0 == r0;
-        jobs.push_back({DOWN, r0, std::min(step(n), n - r0), act + (size_t)r0 * I, unpack, prev});
+        jobs.push_back({DOWN, r0, std::min(step(n), n - r0), nullptr, unpack, prev, &xd_[s % 2]});
     };
     ug(0);
     for (int s = 1; s < steps; s++) {

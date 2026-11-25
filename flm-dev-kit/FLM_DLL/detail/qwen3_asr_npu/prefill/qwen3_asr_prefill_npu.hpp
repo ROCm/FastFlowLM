@@ -7,7 +7,7 @@
 /// The kernel reads the decode weights in place: per layer one buffer of Q4_1 (k, q, o, up, gate) and Q8_0 (v, down)
 /// units, K|V|Q, o, up|gate (interleaved 512 rows at a time), down (qwen3_asr_desc). A layer is four calls: K, V and Q in
 /// one, o, up and gate in one, down. The host packs X as block float (8 values share an exponent, rounded to nearest),
-/// unpacks the bf16 results, and computes silu(gate) * up between the last two calls. With attn.xclbin (the shared prefill
+/// unpacks the bf16 results, and computes silu(gate) * up between the last two calls, packing it straight into down's X. With attn.xclbin (the shared prefill
 /// attention, modules/mha.hpp) long prompts also run their attention on the NPU, between the first two calls. The CPU decoder
 /// keeps the rest of the layer (norms, RoPE, short attention, the KV cache), so the streaming and background prefill paths
 /// are unchanged.
@@ -60,6 +60,7 @@ private:
         const float* x;
         std::function<void(const uint16_t* y, int r0, int rows)> unpack;
         bool needs_prev = false;   // x is written by the unpack of the job just before
+        buffer<u8>* packed = nullptr;   // X already packed here (by an earlier job's unpack) instead of x
     };
     npu_app& app_for(call_id c, uint32_t rows_padded);
     /// the jobs of `layer` in order, in two buffer slots: while the NPU runs job j the host packs job j + 1 and unpacks job j - 1
@@ -80,7 +81,7 @@ private:
     npu_app io_app_;   // owns no sequence: creates the X and Y buffers
     buffer<u8> x_[2];
     buffer<u16> y_[2];
-    std::vector<float> act_;   // silu(gate) * up, [n][I]
+    buffer<u8> xd_[2];   // silu(gate) * up of a down job, packed
     // attention: the sequence is made for one (L0, L1); the K/V buffer holds K of kv heads 0-3, K 4-7, V 0-3, V 4-7, L1 rows each
     npu_app_manager* attn_mgr_ = nullptr;
     std::unique_ptr<MHA> mha_;
