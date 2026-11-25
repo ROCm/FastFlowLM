@@ -116,7 +116,7 @@ BACKEND_SUITES = {"api", "shutdown"}
 # Models that reason even when asked not to. Their answer comes after the
 # reasoning, so they need a larger token budget before any content appears.
 ALWAYS_THINKS_FAMILIES = {"qwen3-tk", "lfm2.5-tk", "deepseek-r1", "deepseek-r1-0528",
-                          "nanbeige", "gpt-oss"}
+                          "nanbeige", "gpt-oss", "inkling-2"}
 
 # Per-suite model lists for the tiers that do not derive from PR_CHAT.
 SUITE_MODELS = {
