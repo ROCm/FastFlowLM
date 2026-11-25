@@ -536,7 +536,9 @@ struct decoder::impl {
 
             const double att_start = now_ms();
             static const bool att_scalar = std::getenv("QWEN3_ASR_ATT_SCALAR") != nullptr;   // the per-(token, head) loop below, for A/B
-            if (DH == 128 && H / KV <= 2 && n >= 4 && !att_scalar) {   // one-token decode: the transpose would cost more than it saves
+            if (P && P->attention(li, q.data(), pos0, n, Kc.data(), Vc.data(), att.data())) {
+                // done elsewhere
+            } else if (DH == 128 && H / KV <= 2 && n >= 4 && !att_scalar) {   // one-token decode: the transpose would cost more than it saves
                 attention_blocked(q.data(), Kc, Vc, pos0, n, H, KV, DH, att.data(), kt_scratch);
             } else {
                 // causal attention; 16 query heads share 8 kv heads (2 per group); fp32 inside, bf16 out

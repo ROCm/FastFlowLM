@@ -95,8 +95,16 @@ double ms_since(std::chrono::steady_clock::time_point t) {
 
 }  // namespace
 
-qwen3_asr_prefill_npu::qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights)
-    : mgr_(mgr), l_(l), weights_(weights), io_app_(mgr->create_app()) {
+qwen3_asr_prefill_npu::qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr)
+    : mgr_(mgr), l_(l), weights_(weights), io_app_(mgr->create_app()), attn_mgr_(attn_mgr) {
+    if (attn_mgr_) {
+        mha_type_t ty = mha_d128_q2;
+        mha_ = std::make_unique<MHA>(ty, l.DK / 128);
+        attn_app_ = std::make_unique<npu_app>(attn_mgr_->create_app());
+        const char* min_env = std::getenv("QWEN3_ASR_NPU_ATTENTION_MIN");
+        const int64_t rows = min_env ? std::max(0, std::atoi(min_env)) : 1024;
+        attn_min_work_ = rows * (rows + 1);
+    }
     using seqg::MIX_FMT_Q4_1;
     using seqg::MIX_FMT_Q8_0;
     if (l.D % 512 || l.DQ % 512 || l.I % 512) throw std::runtime_error("qwen3_asr_prefill_npu: dimensions must be multiples of 512");
@@ -254,10 +262,78 @@ void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, float* out) {
     if (prof_ && layer + 1 == (int)weights_.size()) report(n);
 }
 
+bool qwen3_asr_prefill_npu::attention(int /*layer*/, const float* q, int pos0, int n, const uint16_t* k, const uint16_t* v, float* att) {
+    if (!attn_mgr_ || (int64_t)n * (2 * (int64_t)pos0 + n + 1) < attn_min_work_) return false;
+    std::lock_guard<std::mutex> lock(mu_);
+    const int DQ = l_.DQ, DK = l_.DK, half = DK / 2;
+    const int chunk = mha_->get_chunk_size(), L = pos0 + n;
+    const int L0 = pos0 / chunk * chunk, L1 = (L + chunk - 1) / chunk * chunk, rows = L1 - L0, off = pos0 - L0;
+    auto t = std::chrono::steady_clock::now();
+    if ((uint32_t)L0 != attn_l0_ || (uint32_t)L1 != attn_l1_) {
+        mha_->generate_mha_sequence(attn_app_->seq(), L0, L1, L1, false);   // MAX_L = L1: the bands are L1 rows apart
+        attn_l0_ = L0;
+        attn_l1_ = L1;
+    }
+    if (attn_q_.size() < (size_t)rows * DQ) {
+        attn_q_ = attn_app_->create_bo_buffer<u16>((size_t)rows * DQ);
+        attn_y_ = attn_app_->create_bo_buffer<u16>((size_t)rows * DQ);
+    }
+    if (attn_kv_.size() < (size_t)L1 * 2 * DK) attn_kv_ = attn_app_->create_bo_buffer<u16>((size_t)L1 * 2 * DK);
+    // q rows (bf16 values: the top halves), 0 outside the prompt; cache rows split into the bands, 0 past the last row (the
+    // dropped rows' keys: finite, so their zero weights stay zero)
+    uint16_t* Q = attn_q_.data();
+    uint16_t* KV = attn_kv_.data();
+    const size_t band = (size_t)L1 * half;
+#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
+    for (int r = 0; r < rows; r++) {
+        uint16_t* d = Q + (size_t)r * DQ;
+        if (r < off || r >= off + n) {
+            std::memset(d, 0, (size_t)DQ * sizeof(u16));
+            continue;
+        }
+        const float* s = q + (size_t)(r - off) * DQ;
+        for (int c = 0; c < DQ; c += 16)
+            _mm256_storeu_si256((__m256i*)(d + c), _mm512_cvtepi32_epi16(_mm512_srli_epi32(_mm512_castps_si512(_mm512_loadu_ps(s + c)), 16)));
+    }
+#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
+    for (int j = 0; j < L1; j++) {
+        uint16_t* d[4] = {KV + (size_t)j * half, KV + band + (size_t)j * half, KV + 2 * band + (size_t)j * half, KV + 3 * band + (size_t)j * half};
+        if (j >= L) {
+            for (int b = 0; b < 4; b++) std::memset(d[b], 0, (size_t)half * sizeof(u16));
+            continue;
+        }
+        std::memcpy(d[0], k + (size_t)j * DK, (size_t)half * sizeof(u16));
+        std::memcpy(d[1], k + (size_t)j * DK + half, (size_t)half * sizeof(u16));
+        std::memcpy(d[2], v + (size_t)j * DK, (size_t)half * sizeof(u16));
+        std::memcpy(d[3], v + (size_t)j * DK + half, (size_t)half * sizeof(u16));
+    }
+    attn_q_.sync_to_device_bytes((size_t)rows * DQ * sizeof(u16));
+    attn_kv_.sync_to_device_bytes((size_t)L1 * 2 * DK * sizeof(u16));
+    if (prof_) {
+        prof_ms_[CALLS][0] += ms_since(t);
+        t = std::chrono::steady_clock::now();
+    }
+    (*attn_app_)(attn_y_, attn_q_, attn_kv_);
+    if (prof_) {
+        prof_ms_[CALLS][1] += ms_since(t);
+        // QK and PV over each real row's causal length: 2 x 2 x DQ x (pos0 + i + 1) for i in [0, n)
+        prof_flop_[CALLS] += 4.0 * DQ * ((double)n * pos0 + (double)n * (n + 1) / 2);
+        t = std::chrono::steady_clock::now();
+    }
+    attn_y_.sync_from_device_bytes((size_t)(off + n) * DQ * sizeof(u16));
+    const uint16_t* Y = attn_y_.data() + (size_t)off * DQ;
+#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
+    for (int r = 0; r < n; r++)
+        for (int c = 0; c < DQ; c += 16) _mm512_storeu_ps(att + (size_t)r * DQ + c, simd::load_bf16(Y + (size_t)r * DQ + c));
+    if (prof_) prof_ms_[CALLS][2] += ms_since(t);
+    return true;
+}
+
 void qwen3_asr_prefill_npu::report(int n) {
-    static const char* names[CALLS] = {"kvq", "o", "up_gate", "down"};
+    static const char* names[CALLS + 1] = {"kvq", "o", "up_gate", "down", "attn"};
     double npu = 0, flop = 0;
-    for (int c = 0; c < CALLS; c++) {
+    for (int c = 0; c <= CALLS; c++) {
+        if (c == CALLS && prof_ms_[c][1] == 0) break;   // the CPU did the attention
         std::fprintf(stderr, "[prefill npu] n=%d %-7s pack %.1f npu %.1f unpack %.1f ms, %.2f TOPS\n", n, names[c], prof_ms_[c][0], prof_ms_[c][1],
                      prof_ms_[c][2], prof_ms_[c][1] > 0 ? prof_flop_[c] / prof_ms_[c][1] * 1e-9 : 0.0);
         npu += prof_ms_[c][1];

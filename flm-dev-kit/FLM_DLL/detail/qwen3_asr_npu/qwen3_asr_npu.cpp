@@ -117,7 +117,19 @@ void qwen3_asr_npu::Impl::load_weights(Q4NX &q4nx)
             l.o = l0.attn_output.offset;
             l.up = l0.ffn_up.offset;
             l.down = l0.ffn_down.offset;
-            this->prefill_mm = std::make_unique<qwen3_asr_prefill_npu>(npu->register_xclbin(prefill_xclbin), l, this->proj_weights);
+            // the prompt's attention on attn.xclbin too, unless QWEN3_ASR_CPU_ATTENTION=1 (or the package lacks it)
+            const char* cpu_attn_env = std::getenv("QWEN3_ASR_CPU_ATTENTION");
+            const std::string attn_xclbin = utils::path_join(config.exec_path, "xclbins", config.model_name, "attn.xclbin");
+            npu_app_manager* attn_mgr = nullptr;
+            if (cpu_attn_env && std::atoi(cpu_attn_env) != 0)
+                header_print("FLM", "qwen3_asr_npu: prompt attention on the CPU (QWEN3_ASR_CPU_ATTENTION)");
+            else if (desc.DK % 128 != 0 || desc.DQ != 2 * desc.DK)
+                header_print("FLM", "qwen3_asr_npu: attention shape not supported by attn.xclbin, prompt attention on the CPU");
+            else if (!std::filesystem::exists(attn_xclbin))
+                header_print("FLM", "qwen3_asr_npu: attn.xclbin not found, prompt attention on the CPU");
+            else
+                attn_mgr = npu->register_xclbin(attn_xclbin);
+            this->prefill_mm = std::make_unique<qwen3_asr_prefill_npu>(npu->register_xclbin(prefill_xclbin), l, this->proj_weights, attn_mgr);
             this->cpu_decoder->set_projections(this->prefill_mm.get());
         }
     }

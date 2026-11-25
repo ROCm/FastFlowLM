@@ -6,8 +6,8 @@
 ///
 /// This is the "full CPU path first" of the engine (FLM_DLL/ADDING_A_NEW_MODEL.md): every semantic question
 /// (norm form, rope, rounding points) is settled here against the BF16 PyTorch reference before any NPU work.
-/// It is also the planned prefill of the shipped engine (short prompts: CPU beats the NPU prefill below ~300-400
-/// tokens) and the fallback when the NPU is busy.
+/// It also runs the shipped engine's prompt prefill, handing the matrix products (and the attention of long prompts) to
+/// the NPU through `projections` (prefill/qwen3_asr_prefill_npu.hpp), and all of it with QWEN3_ASR_CPU_PREFILL=1.
 ///
 /// Weight format: model.q4nx from FLM_Q4NX_Converter/configs/qwen3_asr.json: Q8_0 projections in 32x256 blocks
 /// (512 B of bf16 scales [8 groups][32 rows], then 8192 B of int8 stored column major [256 cols][32 rows]).
@@ -31,8 +31,8 @@ struct decoder_config {
     float rope_theta = 1000000.0f;
 };
 
-/// The matrix products of a decoder layer, done elsewhere for a prompt (the NPU prefill). Inputs and outputs are row-major
-/// floats holding bf16 values; the decoder keeps the norms, RoPE, attention, the KV cache and the logits.
+/// The matrix products (and optionally the attention) of a decoder layer, done elsewhere for a prompt (the NPU prefill). Inputs
+/// and outputs are row-major floats holding bf16 values; the decoder keeps the norms, RoPE, the KV cache and the logits.
 class projections {
 public:
     virtual ~projections() = default;
@@ -44,6 +44,11 @@ public:
     virtual void o(int layer, const float* att, int n, float* out) = 0;
     /// out [n][hidden] = down(silu(gate x) * up x) of the normed input x [n][hidden]
     virtual void mlp(int layer, const float* x, int n, float* out) = 0;
+    /// causal attention of the n new positions pos0 .. over the cache rows [0, pos0 + n): q [n][heads * head_dim] after norm and
+    /// RoPE, k and v the layer's cache [pos0 + n][kv_heads * head_dim] (bf16), att [n][heads * head_dim]; false: the decoder does it
+    virtual bool attention(int /*layer*/, const float* /*q*/, int /*pos0*/, int /*n*/, const uint16_t* /*k*/, const uint16_t* /*v*/, float* /*att*/) {
+        return false;
+    }
 };
 
 class decoder {

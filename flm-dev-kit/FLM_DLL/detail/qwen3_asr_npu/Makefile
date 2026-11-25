@@ -90,6 +90,7 @@ SOURCES = $(wildcard *.cpp)
 SOURCES += $(wildcard ../dequant/*.cpp)
 SOURCES += $(wildcard ../gemm/*.cpp)
 SOURCES += $(wildcard ../lm_head/*.cpp)
+SOURCES += $(wildcard ../mha/*.cpp)
 SOURCES += decoder/qwen3_asr_cpu_decoder.cpp
 SOURCES += audio/qwen3_asr_audio_encoder.cpp
 SOURCES += audio/qwen3_asr_audio_gemm_npu.cpp

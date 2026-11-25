@@ -14,12 +14,14 @@ a 24-layer audio encoder (0.32 B) and a Qwen3-1.7B text decoder. Public header: 
 |---|---|---|
 | log-mel (128 bins, hop 160) | host, in FastFlowLM (the wrapper) | `FastFlowLM/src/common/AutoModel/modeling_qwen3_asr*.cpp` |
 | audio encoder (conv x3, 24 pre-LN layers, 104-token window attention, projector) | matrix products (conv2/3, conv_out, qkv, o, fc1, fc2, proj1/2; ~99 % of the FLOPs) on the NPU (`audio_gemm.xclbin`, `FLM_Xclbin/bfp16_gemm`); conv1, LayerNorm, window attention, residuals on the host (AVX-512), BF16 rounding points of the reference | `audio/` |
-| prompt prefill (system + audio tokens + text so far) | host, AVX-512, Q8_0 weights read in place from `model.q4nx` | `decoder/` |
-| decode (28 layers + tied lm_head) | NPU, `generic_decoding_layer` model type `QWEN3_ASR_1_7B` (Q8_0, `QMM_LIMB_PRECISION 1`) | `qwen3_asr_npu*.{hpp,cpp}` |
+| prompt prefill (system + audio tokens + text so far) | matrix products (q/k/v, o, up/gate, down) on the NPU (`prefill.xclbin`, `FLM_Xclbin/dequant_mm_mix_bfp16`), reading the mixed decode weights in place; attention on the NPU too for prompts of about 1024 tokens or more (`attn.xclbin`, the shared prefill attention); norms, RoPE, shorter attention, the KV cache and the LM head on the host (AVX-512) | `decoder/`, `prefill/` |
+| decode (28 layers + tied lm_head) | NPU, `generic_decoding_layer` model type `QWEN3_ASR_1_7B_MIX` (Q4_1 + Q8_0) | `qwen3_asr_npu*.{hpp,cpp}` |
 
-Why the prefill is on the host: speech prompts are short (about 100-400 tokens) and the NPU prefill has a floor of about a second
-below ~300 tokens, so the CPU is faster, and it needs no prefill kernels (the Q8_0 prefill dequant path of the Qwen3 engine is not
-used by any model). The prefill hands its K/V rows to the NPU's striped KV cache with `kv_rows_copy`.
+The prefill is the CPU decoder (`decoder/`) with its matrix products handed to `prefill/` (the `projections` interface): one
+32-core call per product and layer, in jobs of up to 512 rows; the host packs the activations as block float and unpacks the bf16
+results while the NPU runs the next job. The attention moves to `attn.xclbin` only when its work reaches that of a 1024-row
+prompt: switching between the two kernels costs about 2.5 ms twice per layer, more than the CPU attention of shorter prompts.
+The prefill hands its K/V rows to the NPU's striped KV cache with `kv_rows_copy`.
 
 ## Weights: why Q8_0
 
@@ -51,7 +53,10 @@ products drift the conv stack on quiet input.
 
 `QWEN3_ASR_NPU_LAYERS=n` runs only n decoder layers on the NPU (bisecting a hang). `QWEN3_ASR_CPU_DECODE=1` decodes on the host
 (accuracy A/B of the NPU decode kernel). `QWEN3_ASR_CPU_ENCODER=1` runs the whole audio encoder on the host (also the case
-when the package has no `audio_gemm.xclbin`); `QWEN3_ASR_GEMM_PROF=1` prints pack / NPU / unpack times of each encoder product. `TRACE_STEPS=1` makes `tools/qwen3_asr_engine_run` print the top-5 logits of the first steps.
+when the package has no `audio_gemm.xclbin`). `QWEN3_ASR_CPU_PREFILL=1` prefills the prompt on the host (also without
+`prefill.xclbin`); `QWEN3_ASR_CPU_ATTENTION=1` keeps only the prompt attention there (also without `attn.xclbin`);
+`QWEN3_ASR_NPU_ATTENTION_MIN=rows` moves the NPU attention threshold (0: always). `QWEN3_ASR_PROF=1` prints the prefill's
+matmul / attention / rest split and the pack / NPU / unpack times of each NPU call. `QWEN3_ASR_GEMM_PROF=1` prints pack / NPU / unpack times of each encoder product. `TRACE_STEPS=1` makes `tools/qwen3_asr_engine_run` print the top-5 logits of the first steps.
 
 ## Test
 
