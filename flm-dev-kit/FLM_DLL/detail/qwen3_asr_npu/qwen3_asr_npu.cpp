@@ -129,7 +129,7 @@ void qwen3_asr_npu::Impl::load_weights(Q4NX &q4nx)
                 header_print("FLM", "qwen3_asr_npu: attn.xclbin not found, prompt attention on the CPU");
             else
                 attn_mgr = npu->register_xclbin(attn_xclbin);
-            this->prefill_mm = std::make_unique<qwen3_asr_prefill_npu>(npu->register_xclbin(prefill_xclbin), l, this->proj_weights, attn_mgr);
+            this->prefill_mm = std::make_unique<qwen3_asr_prefill_npu>(npu->register_xclbin(prefill_xclbin), l, this->proj_weights, attn_mgr, &this->npu_mu);
             this->cpu_decoder->set_projections(this->prefill_mm.get());
         }
     }
@@ -144,7 +144,7 @@ void qwen3_asr_npu::Impl::load_weights(Q4NX &q4nx)
         else if (!std::filesystem::exists(gemm_xclbin))
             header_print("FLM", "qwen3_asr_npu: audio_gemm.xclbin not found, audio encoder on the CPU");
         else
-            this->audio_gemm = std::make_unique<qwen3_asr_audio_gemm_npu>(npu->register_xclbin(gemm_xclbin));
+            this->audio_gemm = std::make_unique<qwen3_asr_audio_gemm_npu>(npu->register_xclbin(gemm_xclbin), &this->npu_mu);
         this->audio_encoder = std::make_unique<qwen3_asr_audio_encoder>(audio_path, qwen3_asr_audio_config{}, this->audio_gemm.get());
     }
     this->clear_context();
@@ -217,6 +217,7 @@ buffer<bf16> qwen3_asr_npu::Impl::forward(int ids)
             this->prefill_logits.data()[i] = (bf16)cpu_logits[i];
         return this->prefill_logits;
     }
+    std::lock_guard<std::mutex> lock(this->npu_mu);   // the next step's background encode waits between tokens
     // the token's row of the bf16 embedding table, which the CPU decoder maps from model.q4nx (no second copy in memory)
     std::memcpy(this->x.data(), this->cpu_decoder->embed_row(ids), desc.D * sizeof(bf16));
     this->x.sync_to_device();
@@ -519,6 +520,7 @@ buffer<bf16> qwen3_asr_npu::Impl::get_v_cache(int layer_idx, int idx)
 
 buffer<bf16> qwen3_asr_npu::Impl::get_logits(buffer<bf16> &predict)
 {
+    std::lock_guard<std::mutex> lock(this->npu_mu);
     memcpy(this->x.data(), predict.data(), desc.D * sizeof(bf16));
     this->x.sync_to_device();
     this->lm_head_run.start();

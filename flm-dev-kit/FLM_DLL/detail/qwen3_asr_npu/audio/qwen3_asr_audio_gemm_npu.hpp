@@ -32,7 +32,8 @@
 class qwen3_asr_audio_gemm_npu : public qwen3_asr_audio_gemm {
 public:
     /// \param mgr the app manager of audio_gemm.xclbin
-    explicit qwen3_asr_audio_gemm_npu(npu_app_manager* mgr);
+    /// \param npu_lock held during each call: the engine's lock of the NPU (nullptr: a lock of its own)
+    explicit qwen3_asr_audio_gemm_npu(npu_app_manager* mgr, std::mutex* npu_lock = nullptr);
     int add_weight(const float* W, int N, int K, const float* bias, bool exact_a, bool exact_w) override;
     void run(int weight, const rows_fn& A, int M, float* C, bool gelu) override;
     /// encodes each input pixel once (cin values = cin / 8 blocks, so a block never spans two pixels), then gathers the blocks
@@ -61,5 +62,6 @@ private:
     buffer<u16> y_;
     std::vector<float> tmp_;   // 16 rows of A per thread
     std::vector<uint8_t> px_hi_, px_lo_;   // run_conv: the input pixels as blocks, [pixel][cin / 8][9 B]
-    std::mutex mu_;
+    std::mutex own_mu_;
+    std::mutex& mu_;
 };

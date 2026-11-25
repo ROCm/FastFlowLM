@@ -155,7 +155,8 @@ void pack_w(uint8_t* dst, const float* W, const float* bias, int N, int K, int n
 
 }  // namespace
 
-qwen3_asr_audio_gemm_npu::qwen3_asr_audio_gemm_npu(npu_app_manager* mgr) : mgr_(mgr), io_app_(mgr->create_app()) {}
+qwen3_asr_audio_gemm_npu::qwen3_asr_audio_gemm_npu(npu_app_manager* mgr, std::mutex* npu_lock)
+    : mgr_(mgr), io_app_(mgr->create_app()), mu_(npu_lock ? *npu_lock : own_mu_) {}
 
 int qwen3_asr_audio_gemm_npu::add_weight(const float* W, int N, int K, const float* bias, bool exact_a, bool exact_w) {
     if (N % 16) throw std::runtime_error("qwen3_asr_audio_gemm_npu: N must be a multiple of 16");

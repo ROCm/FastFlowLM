@@ -104,8 +104,9 @@ double ms_since(std::chrono::steady_clock::time_point t) {
 
 }  // namespace
 
-qwen3_asr_prefill_npu::qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr)
-    : mgr_(mgr), l_(l), weights_(weights), io_app_(mgr->create_app()), attn_mgr_(attn_mgr) {
+qwen3_asr_prefill_npu::qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr,
+                                             std::mutex* npu_lock)
+    : mgr_(mgr), l_(l), weights_(weights), io_app_(mgr->create_app()), attn_mgr_(attn_mgr), mu_(npu_lock ? *npu_lock : own_mu_) {
     if (attn_mgr_) {
         mha_type_t ty = mha_d128_q2;
         mha_ = std::make_unique<MHA>(ty, l.DK / 128);

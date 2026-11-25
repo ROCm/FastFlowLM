@@ -38,7 +38,9 @@ public:
     /// \param weights the decode layer's weight buffers, one per layer (read in place)
     /// \param attn_mgr the app manager of attn.xclbin (prefill attention, head_dim 128, 2 q heads per kv head); nullptr: the
     /// decoder keeps the attention
-    qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr = nullptr);
+    /// \param npu_lock held during each call: the engine's lock of the NPU (nullptr: a lock of its own)
+    qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr = nullptr,
+                          std::mutex* npu_lock = nullptr);
     int min_rows() const override { return min_rows_; }
     void qkv(int layer, const float* x, int n, const rows_sink& out) override;
     void o(int layer, const float* att, int n, const rows_sink& out) override;
@@ -93,7 +95,8 @@ private:
     // attn.xclbin (~2.5 ms each) cost more than the CPU attention
     int64_t attn_min_work_ = 0;
     buffer<u16> attn_q_, attn_kv_, attn_y_;
-    std::mutex mu_;
+    std::mutex own_mu_;
+    std::mutex& mu_;
     // QWEN3_ASR_PROF: per call, ms of packing, NPU and unpacking, and its multiply-adds, summed over the layers (ATTN: the
     // causal products QK and PV of the real rows)
     bool prof_ = false;
