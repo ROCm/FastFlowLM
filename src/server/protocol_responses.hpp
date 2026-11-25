@@ -21,7 +21,7 @@ public:
             {"model",begin.model},{"status","in_progress"},{"output",json::array()},
             {"error",nullptr},{"incomplete_details",nullptr},{"usage",nullptr},{"store",false},
             {"tools",request_.value("tools", json::array())},{"tool_choice",request_.value("tool_choice", json("auto"))},
-            {"parallel_tool_calls",request_.value("parallel_tool_calls", true)}};
+            {"parallel_tool_calls",!provided(request_,"parallel_tool_calls") || request_["parallel_tool_calls"].get<bool>()}};
         for (auto key : {"instructions", "max_output_tokens", "reasoning", "text", "temperature", "top_p"})
             if (request_.contains(key)) response_[key] = request_[key];
     }

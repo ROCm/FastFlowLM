@@ -17,7 +17,7 @@ not store a response for later retrieval, even when the request says `store: tru
 | `tools` | Accept only flat `{"type":"function","name":...}` declarations. Any other type, even in a mixed list, rejects the whole request with HTTP 400 and `error.param` such as `tools[1].type`. A client function may have any supported function name, including `web_search`. |
 | `tool_choice`, `parallel_tool_calls` | Use the same constraints as [Chat Completions](../structured_output/). A named choice has the form `{"type":"function","name":"read"}`. |
 | `max_output_tokens`, `temperature`, `top_p` | Pass the output budget and sampling settings to the chat engine. |
-| `reasoning.effort` | Pass the effort to the model. Support and accepted levels depend on the [model](../reasoning_and_tools/). FLM can replay text reasoning, not an encrypted reasoning item from another service. |
+| `reasoning.effort` | Pass the effort to the model. Support and accepted levels depend on the [model](../reasoning_and_tools/). The client can resend reasoning items as part of `input`; the chat core removes past reasoning before rendering the next prompt. Encrypted reasoning is rejected. |
 | `text.format` | `text`, `json_object`, or `json_schema`. For `json_schema`, put `name` and `schema` directly in `format`. Model and schema limits match Chat Completions. |
 | `stream` | `false` returns one `response` object. `true` returns named SSE events, not `chat.completion.chunk` objects. |
 | `store` | Accept either boolean; always report `store: false`. There is no GET or DELETE by response ID. |
@@ -27,7 +27,9 @@ The `output` array can contain assistant text (`message`), model reasoning
 (`reasoning` summary text), and `function_call` items. The stream identifies
 each item by `output_index` and item ID. Check the terminal status before
 using the output: `completed`, `incomplete` with `reason: "max_output_tokens"`,
-or `failed` with an error. Errors before streaming use an HTTP error response.
+or `failed` with an error. A partial function call stays in the terminal snapshot
+with `status: "incomplete"`; it does not receive a callable `done` event.
+Errors before streaming use an HTTP error response.
 Usage counts include reasoning in output tokens; a separate reasoning-token
 count is not measured and is reported as zero.
 

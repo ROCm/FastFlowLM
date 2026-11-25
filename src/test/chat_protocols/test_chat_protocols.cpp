@@ -475,6 +475,12 @@ int main(int argc, char* argv[]) {
         failures += check("output budget", simple.at("max_completion_tokens").dump(), "42");
         failures += check("response schema", simple.at("response_format").at("json_schema").dump(),
                           R"({"name":"answer","schema":{"type":"object"}})");
+        const auto defaults = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":"x","store":null,"temperature":null,"parallel_tool_calls":null,
+            "top_p":null,"max_output_tokens":null,"reasoning":{"effort":null}
+        })"));
+        failures += check("nullable generation controls", defaults.dump(),
+                          R"({"model":"m","messages":[{"role":"user","content":"x"}]})");
         const auto replay = flm::responses::to_chat_request(json::parse(R"({
             "model":"m","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"why"}]},
             {"role":"assistant","content":[{"type":"input_text","text":"answer"}]},
@@ -487,6 +493,7 @@ int main(int argc, char* argv[]) {
             "model":"m", "instructions":"Be brief.", "input":[
                 {"role":"user","content":"Both places?"},
                 {"type":"function_call","name":"weather","call_id":"call_A","arguments":"{\"city\":\"Paris\"}"},
+                {"type":"reasoning","summary":[]},
                 {"type":"function_call","name":"weather","call_id":"call_B","arguments":"{\"city\":\"Rome\"}"},
                 {"type":"function_call_output","call_id":"call_B","output":"rain"},
                 {"type":"function_call_output","call_id":"call_A","output":"sun"}
@@ -508,7 +515,7 @@ int main(int argc, char* argv[]) {
         failures += check("parallel calls", json(calls).dump(),
                           json::array({"call_A:{\"city\":\"Paris\"}", "call_B:{\"city\":\"Rome\"}"}).dump());
         failures += check("reversed tool outputs", json(results).dump(),
-                          json::array({"call_B:rain", "call_A:sun"}).dump());
+                          json::array({"call_A:sun", "call_B:rain"}).dump());
     } catch (const std::exception& e) {
         std::printf("  FAIL: %s\n", e.what());
         failures++;

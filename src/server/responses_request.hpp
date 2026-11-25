@@ -8,6 +8,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
+#include "chat/positional_tool_results.hpp"
 
 namespace flm::responses {
 using json = nlohmann::ordered_json;
@@ -24,6 +25,11 @@ inline const json& member(const json& obj, const char* key, const std::string& p
     if (it == obj.end() || it->type() != kind)
         throw request_error(prefix + key, "missing or invalid value");
     return *it;
+}
+
+inline bool provided(const json& obj, const char* key) {
+    const auto it = obj.find(key);
+    return it != obj.end() && !it->is_null();
 }
 
 inline std::string text_parts(const json& parts, const std::string& field,
@@ -47,25 +53,25 @@ inline json to_chat_request(const json& req) {
 
     json chat = {{"model", member(req, "model", "", json::value_t::string)}};
     for (auto key : {"stream", "store", "parallel_tool_calls"}) {
-        if (!req.contains(key)) continue;
+        if (!provided(req, key)) continue;
         member(req, key, "", json::value_t::boolean);
         if (std::string_view(key) != "store") chat[key] = req[key];
     }
-    if (req.contains("max_output_tokens")) {
+    if (provided(req, "max_output_tokens")) {
         const auto& n = req.at("max_output_tokens");
         if (!n.is_number_integer() || n < 1 || n > (std::numeric_limits<int>::max)())
             throw request_error("max_output_tokens", "expected a positive integer within the token limit");
         chat["max_completion_tokens"] = n;
     }
     for (auto key : {"temperature", "top_p"}) {
-        if (req.contains(key)) {
+        if (provided(req, key)) {
             if (!req[key].is_number()) throw request_error(key, "expected a number");
             chat[key] = req[key];
         }
     }
-    if (req.contains("reasoning")) {
+    if (provided(req, "reasoning")) {
         const auto& r = member(req, "reasoning", "", json::value_t::object);
-        if (r.contains("effort")) chat["reasoning_effort"] = member(r, "effort", "reasoning.", json::value_t::string);
+        if (provided(r, "effort")) chat["reasoning_effort"] = member(r, "effort", "reasoning.", json::value_t::string);
     }
     if (req.contains("text")) {
         const auto& t = member(req, "text", "", json::value_t::object);
@@ -122,20 +128,24 @@ inline json to_chat_request(const json& req) {
             const auto p = "input[" + std::to_string(i) + "].";
             const auto& item = input[i];
             const json type = item.contains("type") ? item["type"] : json("message");
+            const bool waiting_for_results = !pending.empty();
+            const bool receiving_results = waiting_for_results && messages.back()["role"] == "tool";
             if (type == "message") {
                 auto role = member(item, "role", p, json::value_t::string);
                 if (role != "user" && role != "assistant" && role != "system" && role != "developer")
                     throw request_error(p + "role", "unsupported message role");
-                if (!pending.empty()) throw request_error(p + "role", "expected outstanding function results first");
+                if (waiting_for_results && (role != "assistant" || receiving_results))
+                    throw request_error(p + "role", "expected outstanding function results first");
                 if (!item.contains("content")) throw request_error(p + "content", "missing message content");
                 const auto& c = item["content"];
                 const auto text = c.is_string() ? c.get<std::string>() :
                     text_parts(c, p + "content", role == "assistant" ? "output_text" : "input_text", role == "assistant");
-                if (role == "assistant" && !messages.empty() && messages.back().contains("reasoning_content") &&
+                if (waiting_for_results) assistant()["content"].get_ref<std::string&>() += text;
+                else if (role == "assistant" && !messages.empty() && messages.back().contains("reasoning_content") &&
                     messages.back()["content"] == "") messages.back()["content"] = text;
                 else messages.push_back({{"role",role},{"content",text}});
             } else if (type == "reasoning") {
-                if (!pending.empty()) throw request_error(p + "type", "expected outstanding function results first");
+                if (receiving_results) throw request_error(p + "type", "expected outstanding function results first");
                 if (item.contains("encrypted_content") && !item["encrypted_content"].is_null())
                     throw request_error(p + "encrypted_content", "cannot replay encrypted reasoning");
                 auto reasoning = text_parts(member(item, "summary", p, json::value_t::array), p + "summary", "summary_text");
@@ -148,6 +158,7 @@ inline json to_chat_request(const json& req) {
                 const auto id = member(item, "call_id", p, json::value_t::string).get<std::string>();
                 if (id.empty()) throw request_error(p + "call_id", "expected a non-empty call ID");
                 if (type == "function_call") {
+                    if (receiving_results) throw request_error(p + "type", "expected outstanding function results first");
                     if (!seen.insert(id).second) throw request_error(p + "call_id", "duplicate call ID");
                     pending.insert(id);
                     assistant()["tool_calls"].push_back({{"id",id},{"type","function"},{"function",{
@@ -163,6 +174,10 @@ inline json to_chat_request(const json& req) {
             } else throw request_error(p + "type", "unsupported input item");
         }
         if (!pending.empty()) throw request_error("input", "missing output for a function call");
+        // Some local templates print tool results without IDs. Put each result next
+        // to its corresponding call position even if the client replied in reverse.
+        if (auto error = flm::chat::order_parallel_tool_results(messages))
+            throw request_error("input", error->message);
     } else throw request_error("input", "expected text or a non-empty array of input items");
     chat["messages"] = std::move(messages);
     return chat;
