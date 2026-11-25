@@ -39,7 +39,8 @@ Package: `FLM_Q4NX_Converter -f qwen3-asr` (`configs/qwen3_asr.json`): `model.q4
 |---|---|
 | English WER (120 clips) | 2.98 vs 2.89 (+0.09, 95% CI -0.09 .. +0.27) |
 | Chinese CER (60 clips) | 8.96 vs 8.96 (+0.00) |
-| decode | 35 ms/token (28 layers + head) |
+| decode | 26-29 ms/token with the mixed package (28 layers + head) |
+| prompt prefill, decoder (NPU products) | 85 tokens 77-83 ms (host 121), 150 tokens 115 ms, 904 tokens 485 ms (host 1069), 2048 tokens 931 ms (host 2589; NPU attention from 1024 tokens) |
 | encoder (host) | 21-35 ms per second of audio |
 | encoder (NPU products) | 6.3 ms per second of audio on a 68 s clip (host 11), 8-10 ms/s at 7-18 s; 1 s clips ~44 ms/s (host ~21: the weights are read once per layer) |
 | prefill + encoder, median clip (~7 s) | about 0.85 s |
