@@ -47,12 +47,13 @@ u16 f2bf(float f) { uint32_t u; memcpy(&u, &f, 4); u += 0x7FFF + ((u >> 16) & 1)
 npu_it_channel chn(int r) { return r ? it_channel_1 : it_channel_0; }
 
 // A run that does not complete leaves cores stalled; tearing its hw context down right away can wedge amdxdna. On a
-// timeout: mark the device suspect, keep the context alive past the driver's 60 s job timeout, then report.
+// timeout: mark the device suspect (a test harness's INKLING2_SUSPECT_FILE), keep the context alive past the driver's
+// 60 s job timeout, then report.
 ert_cmd_state wait_run(xrt::run& run, int ms) {
     ert_cmd_state st = ERT_CMD_STATE_TIMEOUT;
     try { st = run.wait(std::chrono::milliseconds(ms)); } catch (const std::exception& e) { std::fprintf(stderr, "inkling2 fused: wait: %s\n", e.what()); }
     if (st != ERT_CMD_STATE_COMPLETED) {
-        if (FILE* f = fopen((std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.npu_suspect").c_str(), "w")) {
+        if (FILE* f = getenv("INKLING2_SUSPECT_FILE") ? fopen(getenv("INKLING2_SUSPECT_FILE"), "w") : nullptr) {
             std::fprintf(f, "inkling2 fused run state %d\n", (int)st);
             fclose(f);
         }
@@ -887,7 +888,7 @@ bool inkling2_fused::wait_window(std::unique_ptr<window> w) {
     bool failed = false;
     try { cs = w->rl.wait(std::chrono::milliseconds(5000)); } catch (const std::exception& e) { failed = true; std::fprintf(stderr, "inkling2 fused: window: %s\n", e.what()); }
     if (failed || cs != std::cv_status::no_timeout) {
-        if (FILE* f = fopen((std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.npu_suspect").c_str(), "w")) {
+        if (FILE* f = getenv("INKLING2_SUSPECT_FILE") ? fopen(getenv("INKLING2_SUSPECT_FILE"), "w") : nullptr) {
             std::fprintf(f, "inkling2 fused window (lm %d) did not complete\n", (int)lm);
             fclose(f);
         }

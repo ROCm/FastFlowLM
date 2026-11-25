@@ -444,22 +444,26 @@ struct mm_job {
 /// \brief all jobs in one parallel region, one work item per 32-row block
 void qmm(const std::vector<mm_job>& jobs) {
     std::vector<std::pair<int, int>> work;
-    int kmax = 0;
+    int kmax = 0;   // the widest job that needs a dequantized tile
+    // NPU-order blocks, few tokens (decode, short prompts): straight from the blocks, no tile
+    auto direct = [](const mm_job& jb) { return jb.w.grouped && jb.w.fmt == qfmt::q4k && jb.T <= NPU_DIRECT_T; };
     for (int j = 0; j < (int)jobs.size(); j++) {
         if (jobs[j].T <= 0) continue;
-        kmax = std::max(kmax, jobs[j].w.K);
+        if (!direct(jobs[j])) kmax = std::max(kmax, jobs[j].w.K);
         for (int rb = 0; rb < jobs[j].w.row_blocks(); rb++) work.emplace_back(j, rb);
     }
     if (work.empty()) return;
     #pragma omp parallel
     {
-        std::vector<float> tile((size_t)kmax * QROWS);
+        // each thread's tile lives as long as the thread: a fresh one per call (up to 384 KB, zero-filled, a
+        // decode step makes hundreds of calls) costs page faults and a heap lock on Windows
+        static thread_local std::vector<float> tile;
+        if (tile.size() < (size_t)kmax * QROWS) tile.resize((size_t)kmax * QROWS);
         #pragma omp for schedule(dynamic)
         for (int i = 0; i < (int)work.size(); i++) {
             const mm_job& jb = jobs[work[i].first];
             const int rb = work[i].second;
-            // NPU-order blocks, few tokens (decode, short prompts): straight from the blocks
-            if (jb.w.grouped && jb.w.fmt == qfmt::q4k && jb.T <= NPU_DIRECT_T) {
+            if (direct(jb)) {
                 mm_npu(jb.y, jb.ldy, jb.w, rb, jb.x, jb.ldx, jb.T);
                 continue;
             }
@@ -779,13 +783,16 @@ void attention(float* O, const float* Q, const float* R, const float* sinks, con
     nsplit = std::min(nsplit, std::max(1, span / 1024));
     const int ntask = nqb * NKV * nsplit;
     constexpr int NQ = BQ * G;
-    // partial results per task: m, l, acc[DH] per query
-    std::vector<float> part((size_t)ntask * NQ * (DH + 2));
+    // partial results per task: m, l, acc[DH] per query, each written before it is read. This buffer and the
+    // workers' below live as long as their threads (fresh ones on every call cost page faults on Windows).
+    static thread_local std::vector<float> part_tl;
+    if (part_tl.size() < (size_t)ntask * NQ * (DH + 2)) part_tl.resize((size_t)ntask * NQ * (DH + 2));
+    float* const part = part_tl.data();
 
     #pragma omp parallel
     {
-        std::vector<float> tab((size_t)NQ * (REL_EXT + 1));
-        std::vector<float> kf((size_t)KB * DH), vf((size_t)KB * DH), s(KB);
+        static thread_local std::vector<float> tab((size_t)NQ * (REL_EXT + 1));
+        static thread_local std::vector<float> kf((size_t)KB * DH), vf((size_t)KB * DH), s(KB);
         #pragma omp for schedule(dynamic)
         for (int task = 0; task < ntask; task++) {
             const int split = task % nsplit;
@@ -799,7 +806,7 @@ void attention(float* O, const float* Q, const float* R, const float* sinks, con
             const int n_all = pmax - lo_all + 1;
             const int per = (n_all + nsplit - 1) / nsplit;
             const int lo = lo_all + split * per, hi = std::min(pmax, lo + per - 1);
-            float* pr = part.data() + (size_t)task * NQ * (DH + 2);
+            float* pr = part + (size_t)task * NQ * (DH + 2);
             // relative bias table per query: tab[d] = rel_bias[d] . r (distance >= REL_EXT: 0)
             for (int qi = 0; qi < nq; qi++) {
                 const int t = t0 + qi / G, h = g * G + qi % G;
@@ -875,7 +882,7 @@ void attention(float* O, const float* Q, const float* R, const float* sinks, con
             float l = 0;
             float o[DH] = {};
             for (int sp = 0; sp < nsplit; sp++) {
-                const float* st = part.data() + ((size_t)((qb * NKV + g) * nsplit + sp) * NQ + qi) * (DH + 2);
+                const float* st = part + ((size_t)((qb * NKV + g) * nsplit + sp) * NQ + qi) * (DH + 2);
                 if (st[1] == 0) continue;
                 const float f = std::exp(st[0] - m);
                 l += st[1] * f;

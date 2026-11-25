@@ -173,7 +173,7 @@ bool inkling2_lm_head::run(const uint16_t* xv, float* logits) {
     try { st = this->run_.wait(std::chrono::milliseconds(5000)); } catch (const std::exception& e) { std::fprintf(stderr, "inkling2 lm_head: wait: %s\n", e.what()); }
     if (st != ERT_CMD_STATE_COMPLETED) {
         // a stalled array: keep the context past the driver's job timeout before anything tears it down
-        if (FILE* f = fopen((std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.npu_suspect").c_str(), "w")) {
+        if (FILE* f = getenv("INKLING2_SUSPECT_FILE") ? fopen(getenv("INKLING2_SUSPECT_FILE"), "w") : nullptr) {
             std::fprintf(f, "inkling2 lm_head run state %d\n", (int)st);
             fclose(f);
         }
