@@ -591,6 +591,7 @@
     "r2t2:1.7b": {
       "folder": "Confucius4-R2T2-NPU2",
       "kernels": {
+        "audio_gemm.xclbin": "xclbins-bfp16_gemm",
         "layer.xclbin": "xclbins-generic_decoding_layer_QWEN3_ASR_1_7B_MIX"
       }
     },

@@ -60,6 +60,7 @@ file(GLOB SOURCES
     "*.cpp"
     "decoder/qwen3_asr_cpu_decoder.cpp"
     "audio/qwen3_asr_audio_encoder.cpp"
+    "audio/qwen3_asr_audio_gemm_npu.cpp"
 )
 file(GLOB HEADERS "../../include/*.hpp" "*.hpp")
 

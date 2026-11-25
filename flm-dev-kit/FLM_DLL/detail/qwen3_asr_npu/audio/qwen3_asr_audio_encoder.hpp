@@ -14,10 +14,11 @@
 /// layer norm statistics, softmax and erf-GELU run in fp32. Activations are held as fp32 values that are exactly
 /// bf16-representable; only the result of encode() is converted to bf16 bits.
 ///
-/// This file has no NPU / XRT dependency so it can be built and tested standalone. The per-stage methods are the
-/// seams for the NPU port (matmuls on the MM kernel, window attention on a window-attention kernel).
+/// This file has no NPU / XRT dependency so it can be built and tested standalone. The matrix products go to a
+/// qwen3_asr_audio_gemm when one is given (the NPU in the engine); layer norm, attention and conv1 stay here.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -45,10 +46,30 @@ struct qwen3_asr_audio_config {
 /// number of audio tokens for `frames` mel frames (= _get_feat_extract_output_lengths)
 int qwen3_asr_audio_tokens(int frames);
 
+/// Matrix products of the encoder on another device (the engine passes the NPU's, qwen3_asr_audio_gemm_npu.hpp):
+/// C[M][N] = bf16(A[M][K] W[N][K]^T + bias), then bf16(erf GELU) when asked. A and C hold bf16 values in fp32; C is row-major.
+/// The device may round the operands further (the NPU: block float, 8 values share an exponent).
+class qwen3_asr_audio_gemm {
+public:
+    /// row r of A (K values): a pointer into the caller's data, or `tmp` (K floats) after filling it. Called from several threads.
+    using rows_fn = std::function<const float*(int r, float* tmp)>;
+    virtual ~qwen3_asr_audio_gemm() = default;
+    /// W row-major [N][K] (bf16 values), bias [N] or nullptr; `exact_a` / `exact_w`: the device keeps A / W at bf16 precision
+    /// (the NPU then also runs the product on the rest of A rounded to its format / on the rest of W). Returns the id run()
+    /// takes. Called while loading only.
+    virtual int add_weight(const float* W, int N, int K, const float* bias, bool exact_a, bool exact_w) = 0;
+    virtual void run(int weight, const rows_fn& A, int M, float* C, bool gelu) = 0;
+    /// Conv2d(3x3, stride 2, pad 1) of `count` NHWC images in[count][H][W][cin]: A = their im2col rows, (image, ho, wo) order, K
+    /// values each in (kh, kw, cin) order (K >= 9 cin, zero past 9 cin), as the weight was added. The default builds the rows.
+    virtual void run_conv(int weight, const float* in, int count, int H, int W, int cin, int K, float* C, bool gelu);
+};
+
 class qwen3_asr_audio_encoder {
 public:
     /// \param audio_weight_q4nx path to audio_weight.q4nx (BF16, matrices in the audio MM tile layout)
-    qwen3_asr_audio_encoder(const std::string& audio_weight_q4nx, const qwen3_asr_audio_config& cfg = {});
+    /// \param gemm runs the projections, conv2, conv3 and conv_out when given (the host keeps no copy of those weights)
+    qwen3_asr_audio_encoder(const std::string& audio_weight_q4nx, const qwen3_asr_audio_config& cfg = {},
+                            qwen3_asr_audio_gemm* gemm = nullptr);
     ~qwen3_asr_audio_encoder();
 
     /// \param mel row-major [frames][num_mel_bins] fp32 (the feature extractor output, time-major)

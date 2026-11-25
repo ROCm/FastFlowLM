@@ -748,12 +748,16 @@ conv1d runs on the host.
 
 #### `r2t2:1.7b` → `Confucius4-R2T2-NPU2`
 
-Decode only: the prompt is prefilled on the host (AVX-512), the audio encoder is host code too. Mixed decode weights
-(`QWEN3_ASR_1_7B_MIX`): Q4_1 for q/k/o/gate/up and the LM head, Q8_0 for v_proj and down_proj (4-bit everywhere breaks this
-fine-tune); the package's `npu_q41.q4nx` holds the Q4_1 copies. `QWEN3_ASR_1_7B` is the all-Q8_0 build (packages without that file).
+The prompt is prefilled on the host (AVX-512). The audio encoder's matrix products (conv2/3, conv_out, qkv, o, fc1, fc2,
+proj1/2) run on `audio_gemm.xclbin`, a 32-core block-float GEMM for its bf16 weights; the host keeps conv1 (K = 9),
+LayerNorm and window attention. Without that file, or with `QWEN3_ASR_CPU_ENCODER=1`, the encoder runs on the host. Mixed
+decode weights (`QWEN3_ASR_1_7B_MIX`): Q4_1 for q/k/o/gate/up and the LM head, Q8_0 for v_proj and down_proj (4-bit
+everywhere breaks this fine-tune); the package's `npu_q41.q4nx` holds the Q4_1 copies. `QWEN3_ASR_1_7B` is the all-Q8_0
+build (packages without that file).
 
 | Kernels | Artifacts | Compiler |
 |---|---|---|
+| `audio_gemm.xclbin` | `xclbins-bfp16_gemm` | Peano |
 | `layer.xclbin` | `xclbins-generic_decoding_layer_QWEN3_ASR_1_7B_MIX` | Peano |
 
 ### Whisper

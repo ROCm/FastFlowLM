@@ -7,6 +7,7 @@
 #include "qwen3_asr_npu_def.hpp"
 #include "decoder/qwen3_asr_cpu_decoder.hpp"
 #include "audio/qwen3_asr_audio_encoder.hpp"
+#include "audio/qwen3_asr_audio_gemm_npu.hpp"
 #include "utils/kv_rows_state.hpp"
 #include <future>
 #include <optional>
@@ -70,7 +71,9 @@ struct qwen3_asr_npu::Impl{
     qwen3_asr_desc desc;
     /// @brief CPU prefill (created in load_weights, it reads the same model.q4nx)
     std::unique_ptr<qwen3_asr_cpu::decoder> cpu_decoder;
-    /// @brief host audio encoder (created in load_weights when audio_weight.q4nx is in the package)
+    /// @brief the audio encoder's matrix products on the NPU (audio_gemm.xclbin); declared before audio_encoder, which uses it
+    std::unique_ptr<qwen3_asr_audio_gemm_npu> audio_gemm;
+    /// @brief audio encoder (created in load_weights when audio_weight.q4nx is in the package)
     std::unique_ptr<qwen3_asr_audio_encoder> audio_encoder;
     /// @brief logits of the last prompt token, in plain host memory. NOT the NPU's `logits` buffer: writing that one from the
     ///        host leaves dirty cache lines that are written back over the NPU's output at the next sync_from_device()

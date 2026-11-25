@@ -13,7 +13,7 @@ a 24-layer audio encoder (0.32 B) and a Qwen3-1.7B text decoder. Public header: 
 | Stage | Where | Code |
 |---|---|---|
 | log-mel (128 bins, hop 160) | host, in FastFlowLM (the wrapper) | `FastFlowLM/src/common/AutoModel/modeling_qwen3_asr*.cpp` |
-| audio encoder (conv x3, 24 pre-LN layers, 104-token window attention, projector) | host, AVX-512, BF16 rounding points of the reference | `audio/` |
+| audio encoder (conv x3, 24 pre-LN layers, 104-token window attention, projector) | matrix products (conv2/3, conv_out, qkv, o, fc1, fc2, proj1/2; ~99 % of the FLOPs) on the NPU (`audio_gemm.xclbin`, `FLM_Xclbin/bfp16_gemm`); conv1, LayerNorm, window attention, residuals on the host (AVX-512), BF16 rounding points of the reference | `audio/` |
 | prompt prefill (system + audio tokens + text so far) | host, AVX-512, Q8_0 weights read in place from `model.q4nx` | `decoder/` |
 | decode (28 layers + tied lm_head) | NPU, `generic_decoding_layer` model type `QWEN3_ASR_1_7B` (Q8_0, `QMM_LIMB_PRECISION 1`) | `qwen3_asr_npu*.{hpp,cpp}` |
 
@@ -39,12 +39,19 @@ Package: `FLM_Q4NX_Converter -f qwen3-asr` (`configs/qwen3_asr.json`): `model.q4
 | Chinese CER (60 clips) | 8.96 vs 8.96 (+0.00) |
 | decode | 35 ms/token (28 layers + head) |
 | encoder (host) | 21-35 ms per second of audio |
+| encoder (NPU products) | 6.3 ms per second of audio on a 68 s clip (host 11), 8-10 ms/s at 7-18 s; 1 s clips ~44 ms/s (host ~21: the weights are read once per layer) |
 | prefill + encoder, median clip (~7 s) | about 0.85 s |
+
+NPU encoder, mixed package, 180 clips: English WER 2.76, Chinese CER 6.32 (host encoder on the same build: 2.85 / 5.88; the
+paired 95% CI of the Chinese set is about ±5 points, so the two are not told apart). The NPU products keep A and W at bf16
+precision: each is split into its bfp16 value and the scaled rest (more rows of A, more columns of W in the same call); plain bfp16
+products drift the conv stack on quiet input.
 
 ## Debug switches
 
 `QWEN3_ASR_NPU_LAYERS=n` runs only n decoder layers on the NPU (bisecting a hang). `QWEN3_ASR_CPU_DECODE=1` decodes on the host
-(accuracy A/B of the NPU decode kernel). `TRACE_STEPS=1` makes `tools/qwen3_asr_engine_run` print the top-5 logits of the first steps.
+(accuracy A/B of the NPU decode kernel). `QWEN3_ASR_CPU_ENCODER=1` runs the whole audio encoder on the host (also the case
+when the package has no `audio_gemm.xclbin`); `QWEN3_ASR_GEMM_PROF=1` prints pack / NPU / unpack times of each encoder product. `TRACE_STEPS=1` makes `tools/qwen3_asr_engine_run` print the top-5 logits of the first steps.
 
 ## Test
 
@@ -54,6 +61,7 @@ make harness                      # libqwen3_asr_npu.so + tools/qwen3_asr_engine
 build/qwen3_asr_npu/bin/qwen3_asr_engine_run <pkg> <xclbin_root> <goldens> <clip>... [--mel] [--out-ids f]
 cd decoder && make && ./test_decoder_goldens <model.q4nx> <goldens> <clip>...   # CPU decoder alone, no NPU
 cd audio/test && make run                                                         # CPU encoder alone, no NPU
+cd audio/test && make run_npu XCLBIN=<audio_gemm.xclbin> WEIGHTS=... GOLDENS=...   # the encoder with its products on the NPU
 ```
 
 ## Gotchas

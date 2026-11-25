@@ -94,7 +94,18 @@ void qwen3_asr_npu::Impl::load_weights(Q4NX &q4nx)
     this->cpu_kv_length = 0;
     const std::string audio_path = utils::path_join(config.model_path, "audio_weight.q4nx");
     if (std::filesystem::exists(audio_path))
-        this->audio_encoder = std::make_unique<qwen3_asr_audio_encoder>(audio_path);
+    {
+        // matrix products of the encoder on the NPU unless QWEN3_ASR_CPU_ENCODER=1 (or the package lacks the kernel)
+        const char* cpu_env = std::getenv("QWEN3_ASR_CPU_ENCODER");
+        const std::string gemm_xclbin = utils::path_join(config.exec_path, "xclbins", config.model_name, "audio_gemm.xclbin");
+        if (cpu_env && std::atoi(cpu_env) != 0)
+            header_print("FLM", "qwen3_asr_npu: audio encoder on the CPU (QWEN3_ASR_CPU_ENCODER)");
+        else if (!std::filesystem::exists(gemm_xclbin))
+            header_print("FLM", "qwen3_asr_npu: audio_gemm.xclbin not found, audio encoder on the CPU");
+        else
+            this->audio_gemm = std::make_unique<qwen3_asr_audio_gemm_npu>(npu->register_xclbin(gemm_xclbin));
+        this->audio_encoder = std::make_unique<qwen3_asr_audio_encoder>(audio_path, qwen3_asr_audio_config{}, this->audio_gemm.get());
+    }
     this->clear_context();
 }
 
