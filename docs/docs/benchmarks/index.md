@@ -33,5 +33,6 @@ Browse detailed NPU benchmark results for each major model family supported by F
 - [Flash Models](flash_results/)
 - [Whisper](whisper_results/)
 - [Confucius4-R2T2](r2t2_results/)
+- [Inkling](inkling_results/) (FLM v1.0.14 or later)
 
 Each page includes decoding and prefill speed metrics (tokens per second; real-time factor for Whisper) and notes about the test setup and hardware. 

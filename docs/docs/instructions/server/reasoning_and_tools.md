@@ -52,6 +52,7 @@ FLM detects the format once, when the model loads, from its chat template and to
 | `lfm2_pythonic` | LFM2, LFM2.5 | `<think>…</think>` (thinking variants) | `<|tool_call_start|>[f(a=1, b="x")]<|tool_call_end|>` |
 | `gemma4` | Gemma4 | `<|channel>thought … <channel|>` | `<|tool_call>call:f{a:<|"|>x<|"|>}<tool_call|>` |
 | `harmony` | gpt-oss | `analysis` channel | `commentary to=functions.f` channel |
+| `inkling` | Inkling-2 | `<|content_thinking|>` message | `<|message_model|>f<|content_invoke_tool_json|>{"name":"f","args":{…}}` message |
 | `content_only` | everything else | `<think>…</think>` if the model uses it (e.g. DeepSeek-R1) | none: the model has no tool call syntax |
 
 Your code doesn't depend on any of this. The table explains why a model can or can't call tools, and what its raw output looks like if you ever read the server log.
@@ -251,7 +252,7 @@ client.chat.completions.create(model="qwen3.5:9b", messages=msgs,
 
 `chat_template_kwargs.enable_thinking` means the same as `think`. Only this one key is read; other keys in `chat_template_kwargs` are ignored. A `null` container or value counts as not sent. A value that is not `true` or `false`, a `chat_template_kwargs` that is not an object, or a request whose `think` or `reasoning_effort` says the opposite is rejected with HTTP 400 before any output. Other models ignore the field.
 
-> ℹ️ **The setting applies to its own request.** A request that doesn't mention `think` or `reasoning_effort` gets the model's default, not what an earlier request set. This holds for the `reasoning_effort` levels of GPT-OSS and Hy-Memory too.
+> ℹ️ **The setting applies to its own request.** A request that doesn't mention `think` or `reasoning_effort` gets the model's default, not what an earlier request set. This holds for the `reasoning_effort` levels of GPT-OSS, Hy-Memory and Inkling-2 too.
 
 What changes when thinking is off:
 
