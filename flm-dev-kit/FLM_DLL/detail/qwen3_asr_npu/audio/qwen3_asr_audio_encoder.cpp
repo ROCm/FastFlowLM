@@ -227,7 +227,7 @@ void layer_norm(const float* x, int rows, int D, const float* w, const float* b,
 /// x = rbf(x + t), n a multiple of 16
 void add_residual(float* x, const float* t, size_t n) {
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-    for (size_t i = 0; i < n; i += 16) _mm512_storeu_ps(x + i, simd::round_bf16(_mm512_add_ps(_mm512_loadu_ps(x + i), _mm512_loadu_ps(t + i))));
+    for (int64_t i = 0; i < (int64_t)n; i += 16) _mm512_storeu_ps(x + i, simd::round_bf16(_mm512_add_ps(_mm512_loadu_ps(x + i), _mm512_loadu_ps(t + i))));
 }
 
 /// one (window, head) of attention: o[i] = rbf(softmax_j(q[i] . k[j] * scale) v[j]) for i, j < m. q, k, v rows have stride rs,

@@ -90,7 +90,6 @@ SOURCES = $(wildcard *.cpp)
 SOURCES += $(wildcard ../dequant/*.cpp)
 SOURCES += $(wildcard ../gemm/*.cpp)
 SOURCES += $(wildcard ../lm_head/*.cpp)
-SOURCES += $(wildcard ../mha/*.cpp)
 SOURCES += decoder/qwen3_asr_cpu_decoder.cpp
 SOURCES += audio/qwen3_asr_audio_encoder.cpp
 SOURCES += audio/qwen3_asr_audio_gemm_npu.cpp
@@ -108,14 +107,16 @@ directories:
 	mkdir -p $(BIN_DIR)
 	mkdir -p $(LIB_DIR)
 
+# The prompt attention (modules/mha.hpp) comes from libmha.so, as in the Windows build: a copy compiled in here would
+# export MHA's symbols a second time (see the note in ../qwen3_5_omni/Makefile)
 $(TARGET): $(SOURCES)
-	$(CXX) $(LIB_FLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(LIB_FLAGS) -o $@ $^ -lmha $(LDFLAGS)
 
 
 # Engine-level harness (tools/qwen3_asr_engine_run.cpp): CPU prefill + NPU decode against the goldens
 harness: all
 	$(CXX) $(CXX_FLAGS) -Idecoder -o $(BIN_DIR)/qwen3_asr_engine_run tools/qwen3_asr_engine_run.cpp \
-		-L$(LIB_DIR) -L$(FINAL_LIB_DIR) -lqwen3_asr_npu -lq4_npu_eXpress $(LDFLAGS) \
+		-L$(LIB_DIR) -L$(FINAL_LIB_DIR) -lqwen3_asr_npu -lq4_npu_eXpress -lmha $(LDFLAGS) \
 		-Wl,-rpath,'$$ORIGIN/../lib' -Wl,-rpath,'$$ORIGIN/../../lib'
 
 clean:

@@ -232,10 +232,10 @@ void qwen3_asr_audio_gemm_npu::run_conv(int weight, const float* in, int count, 
     if (w.split && px_lo_.size() < npix * pb + pb) px_lo_.resize(npix * pb + pb);
     uint8_t* lo_px = w.split ? px_lo_.data() : nullptr;
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-    for (size_t p = 0; p <= npix; p++) {
+    for (int64_t p = 0; p <= (int64_t)npix; p++) {   // signed: MSVC's OpenMP
         uint8_t* h = px_hi_.data() + p * pb;
         uint8_t* l = lo_px ? lo_px + p * pb : nullptr;
-        if (p == npix) {
+        if (p == (int64_t)npix) {
             std::memset(h, 0, pb);
             if (l) std::memset(l, 0, pb);
             continue;
