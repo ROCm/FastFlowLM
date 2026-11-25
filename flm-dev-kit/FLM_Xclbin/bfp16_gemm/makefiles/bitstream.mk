@@ -39,7 +39,7 @@ ${BITSTREAM_O_DIR}/from_iron/%.xclbin: ${MLIR_O_DIR}/%.mlir ${KERNEL_OBJS}
 	@python3 ${HOME_DIR}/check_memtile_bds.py ${@D}
 	mkdir -p build/$(MODEL_TYPE)/xclbins
 	cp ${@} build/$(MODEL_TYPE)/xclbins/
-	@# host/seq_gen.hpp CT_RTP_ADDR
+	@# the test host's seq_gen.hpp CT_RTP_ADDR
 	cat ${@D}/*/input_with_addresses.mlir | grep "%rtp_" | grep "aie.buffer" | awk '{print $$1, $$6}' | sed 's/%//g' | sort | tee build/$(MODEL_TYPE)/xclbins/rtp_addresses.txt
 
 ${BITSTREAM_O_DIR}/from_iron/%.txt: ${MLIR_O_DIR}/%.mlir
