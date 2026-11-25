@@ -63,7 +63,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think`, `reasoning_effort` (GPT-OSS's and Hy-Memory's levels too), `conversational_mode` and `image-max-tokens` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).
+> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think`, `reasoning_effort` (GPT-OSS's, Hy-Memory's and Inkling-2's levels too), `conversational_mode` and `image-max-tokens` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).
 
 > ⚠️ **Out-of-range values are ignored, not rejected.** A negative `temperature` or `presence_penalty`, or a `top_p` above 1, gets HTTP 200: the server logs a warning and keeps the value it had. OpenAI accepts penalties from −2 to 2, but FLM ignores negative ones, so a penalty can't be used to *encourage* repetition. `repeat_last_n` and `seed` are stricter: a value that isn't an integer, or a `repeat_last_n` below −1, is rejected with HTTP 400.
 
