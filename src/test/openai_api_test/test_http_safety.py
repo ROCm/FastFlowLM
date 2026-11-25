@@ -86,11 +86,17 @@ def alive(api: Api) -> bool:
         return False
 
 
-def expect_400(status: int, body: Any, param: str | None, where: str) -> None:
+def expect_400(status: int, body: Any, param: str | None, where: str, *, path: str = "") -> None:
     expect(status == 400, f"{where}: status {status}, want 400 (body {body!r:.200})")
     err = body.get("error") if isinstance(body, dict) else None
+    if path.startswith("/api/"):
+        expect(isinstance(err, str) and bool(err), f"{where}: /api/* error must be a non-empty string: {body!r:.200}")
+        if param is not None:
+            expect(param in err, f"{where}: message {err!r} does not name {param!r}")
+        return
     expect(isinstance(err, dict), f"{where}: error is not an object: {body!r:.200}")
     expect(err.get("code") == 400 and err.get("type") == "invalid_request_error", f"{where}: {err}")
+    expect("param" in err, f"{where}: missing 'param' key: {err}")
     if param is not None:
         expect(err.get("param") == param, f"{where}: param {err.get('param')!r}, want {param!r}")
 
@@ -133,7 +139,7 @@ def missing_fields_are_400_and_the_server_lives(api: Api) -> None:
     for path, body, param in MISSING:
         for ctype in ("application/json", "text/plain"):
             status, _, parsed = call(api, "POST", path, body, content_type=ctype)
-            expect_400(status, parsed, param, f"POST {path} {body} [{ctype}]")
+            expect_400(status, parsed, param, f"POST {path} {body} [{ctype}]", path=path)
     for path in ("/api/show", "/api/chat", "/v1/embeddings"):
         status, _, parsed = call(api, "POST", path, "", content_type="text/plain")
         expect(400 <= status < 500, f"POST {path} empty body: status {status} {parsed!r:.200}")
@@ -155,7 +161,7 @@ def cancel_rejects_non_string_request_id(api: Api) -> None:
     """/api/cancel with a numeric request_id is a 400, whatever the Content-Type."""
     for ctype in ("application/json", "text/plain"):
         status, _, parsed = call(api, "POST", "/api/cancel", '{"request_id": 123}', content_type=ctype)
-        expect_400(status, parsed, "request_id", f"/api/cancel [{ctype}]")
+        expect_400(status, parsed, "request_id", f"/api/cancel [{ctype}]", path="/api/cancel")
 
 
 # ---------------------------------------------------------------- routing
@@ -220,11 +226,20 @@ def foreign_origin_refused(api: Api) -> None:
     if cors_mode(api) == "any":
         raise Skip("server allows every origin")
     for method, path, body in (("GET", "/v1/models", None), ("POST", "/api/cancel", {"request_id": "req_0"}),
-                               ("POST", "/api/pull", {"model": "x"})):
+                               ("POST", "/api/pull", {"model": "x"}), ("POST", "/v1/systemone", {})):
         status, headers, parsed = call(api, method, path, body, content_type="text/plain",
                                        headers={"Origin": FOREIGN_ORIGIN})
         expect(status == 403, f"{method} {path} from {FOREIGN_ORIGIN}: {status}")
-        expect(isinstance(parsed, dict) and parsed.get("error", {}).get("code") == 403, f"body {parsed!r:.200}")
+        if path.startswith("/api/"):
+            expect(isinstance(parsed, dict) and isinstance(parsed.get("error"), str) and bool(parsed["error"]),
+                   f"{method} {path} body {parsed!r:.200}")
+        elif path.startswith("/v1/systemone"):
+            expect(isinstance(parsed, dict) and list(parsed.keys()) == ["detail"] and isinstance(parsed["detail"], str),
+                   f"{method} {path} body {parsed!r:.200}")
+        else:
+            err = parsed.get("error") if isinstance(parsed, dict) else None
+            expect(isinstance(err, dict) and err.get("code") == 403 and "param" in err,
+                   f"{method} {path} body {parsed!r:.200}")
         expect("access-control-allow-origin" not in headers, f"403 grants the origin: {cors_of(headers)}")
 
 
@@ -267,14 +282,28 @@ def over_connection_cap_reply_follows_cors(api: Api) -> None:
             time.sleep(0.05)
             probe = socket.create_connection((host, port), timeout=5)
             probe.sendall(b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\nOrigin: " + LOCAL_ORIGIN.encode() + b"\r\n\r\n")
-            reply = probe.recv(4096)
+            chunks: list[bytes] = []
+            while True:
+                part = probe.recv(4096)
+                if not part:
+                    break
+                chunks.append(part)
             probe.close()
+            reply = b"".join(chunks)
             if reply.startswith(b"HTTP/1.1 503"):
                 break
         if not reply.startswith(b"HTTP/1.1 503"):
             raise Skip("could not reach the connection cap with 64 idle sockets")
         has_acao = b"access-control-allow-origin" in reply.lower()
         expect(has_acao == (mode == "any"), f"mode {mode}: 503 reply ACAO present={has_acao}")
+        expect(b"retry-after: 1" in reply.lower(), f"503 reply missing Retry-After: 1: {reply[:300]!r}")
+        head, _, raw_body = reply.partition(b"\r\n\r\n")
+        body_json = json.loads(raw_body.decode("utf-8"))
+        err = body_json.get("error") if isinstance(body_json, dict) else None
+        expect(isinstance(err, dict) and err.get("code") == 503
+               and err.get("type") == "service_unavailable_error"
+               and "param" in err and err["param"] is None,
+               f"503 reply not OpenAI service_unavailable_error: {body_json!r:.200}")
     finally:
         for s in held:
             s.close()

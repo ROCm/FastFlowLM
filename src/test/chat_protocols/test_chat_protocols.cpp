@@ -396,7 +396,7 @@ int main(int argc, char* argv[]) {
         }
         failures += check("model error that kept the conversation",
                           openai_error_json({503, "model_error", "busy", "", false}).dump(),
-                          R"({"error":{"message":"busy","type":"model_error","code":503,"session_cleared":false}})");
+                          R"({"error":{"message":"busy","type":"service_unavailable_error","param":null,"code":503,"session_cleared":false}})");
         failures += error_routing();
         failures += flush_hook();
     } catch (const std::exception& e) {
