@@ -16,10 +16,6 @@
 #include <stdexcept>
 #include <thread>
 
-#if !defined(_WIN32)
-#include <sys/mman.h>
-#endif
-
 #if !defined(FLM_USE_HRX)   // see inkling2_fused.hpp
 
 using namespace inkling2_host;
@@ -71,26 +67,7 @@ void inkling2_lm_head::init(npu_xclbin_manager* npu, const weights& w) {
     this->app = this->mgr->create_app();
     const int rb_all = ROWS / QROWS, rb_real = q.row_blocks(), cbs = q.col_blocks();
     const size_t wbytes = (size_t)rb_all * cbs * Q80_BYTES;
-#if !defined(_WIN32)   // 2 MB pages: Linux only
-    if (getenv("INKLING2_LMH_HUGE") && atoi(getenv("INKLING2_LMH_HUGE"))) {
-        constexpr size_t HP = (size_t)2 << 20;
-        this->huge.n = (wbytes + HP - 1) / HP * HP;
-        void* p = mmap(nullptr, this->huge.n + HP, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (p == MAP_FAILED) throw std::runtime_error("inkling2 lm_head: mmap failed");
-        // keep the 2 MB-aligned span, give back the rest
-        const uintptr_t a = ((uintptr_t)p + HP - 1) / HP * HP;
-        if (a > (uintptr_t)p) munmap(p, a - (uintptr_t)p);
-        if ((uintptr_t)p + HP > a) munmap((void*)(a + this->huge.n), (uintptr_t)p + HP - a);
-        this->huge.p = (void*)a;
-        madvise(this->huge.p, this->huge.n, MADV_HUGEPAGE);
-        memset(this->huge.p, 0, this->huge.n);
-        this->huge_bo = std::make_unique<xrt::ext::bo>(*this->mgr->get_device(), this->huge.p, this->huge.n);
-        this->wb = buffer<uint8_t>(*this->huge_bo);
-    } else
-#endif
-    {
-        this->wb = npu->create_bo_buffer<uint8_t>(wbytes);
-    }
+    this->wb = npu->create_bo_buffer<uint8_t>(wbytes);
     this->y = npu->create_bo_buffer<uint16_t>(ROWS);
     this->x = npu->create_bo_buffer<uint16_t>(2 * D);
     // per 4 row blocks (a column's 128 rows): stream a (row blocks 0-1), then stream b (2-3), each column block by
@@ -154,12 +131,6 @@ void inkling2_lm_head::gen_seq() {
     for (int col = 0; col < COLS; col++)
         for (int i = 0; i < std::min(LOOKAHEAD, steps); i++) seq->npu_dma_wait(IT[col], S2MM, it_channel_0);
     seq->cmds2seq();
-}
-
-inkling2_lm_head::huge_mem::~huge_mem() {
-#if !defined(_WIN32)
-    if (this->p) munmap(this->p, this->n);
-#endif
 }
 
 bool inkling2_lm_head::run(const uint16_t* xv, float* logits) {

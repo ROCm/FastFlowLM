@@ -941,8 +941,7 @@ void inkling2_fused::add_steps(int j, int stages) {
     const app_info I = info(j);
     const proj_plan& PP = I.three ? this->pp3 : this->pp1;
     const size_t H = I.three ? this->H3 : this->H1;
-    static const bool same_w = getenv("INKLING2_FUSED_SAMEW") && atoi(getenv("INKLING2_FUSED_SAMEW"));   // timing test only
-    const layer_src& Ls = this->src[same_w ? 0 : I.il];
+    const layer_src& Ls = this->src[I.il];
     const uint64_t wa = Ls.w->bo().address() + 0x80000000ull;
     npu_sequence* seq = this->app().seq();
     // an MM2S BD at an absolute device address (any buffer): written unpushed, its address patched, then pushed
@@ -1069,16 +1068,6 @@ bool inkling2_fused::submit(int stages) {
     npu_sequence* seq = this->app().seq();
     const auto t0 = this->t_build;
     seq->cmds2seq();
-    if (const char* dd = getenv("INKLING2_DUMP_TXN")) {   // test only: the first token's streams
-        static int nd = 0;
-        if (nd < 49) {
-            const auto d = seq->dump();
-            if (FILE* f = fopen((std::string(dd) + "/s" + std::to_string(nd++) + ".txn").c_str(), "wb")) {
-                fwrite(d.first, 4, d.second, f);
-                fclose(f);
-            }
-        }
-    }
     const auto t1 = std::chrono::steady_clock::now();
     xrt::run run = this->app().create_run(this->io, this->wt, this->gl[0], this->gl[1], this->cw);
     this->t_create += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();

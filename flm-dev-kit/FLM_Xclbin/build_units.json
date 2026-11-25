@@ -341,12 +341,6 @@
         "xclbins-Hy_mem_30BA3B_prefill_overlay"
       ]
     },
-    "Inkling2/decode": {
-      "model_types": [],
-      "artifacts": [
-        "xclbins-Inkling2_decode"
-      ]
-    },
     "Inkling2/decode_layer": {
       "model_types": [],
       "artifacts": [
