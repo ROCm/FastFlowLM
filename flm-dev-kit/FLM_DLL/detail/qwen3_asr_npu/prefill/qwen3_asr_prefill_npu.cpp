@@ -197,40 +197,21 @@ void qwen3_asr_prefill_npu::run(int layer, const std::vector<job>& jobs) {
     }
 }
 
-void qwen3_asr_prefill_npu::qkv(int layer, const float* x, int n, float* q, float* k, float* v) {
+void qwen3_asr_prefill_npu::qkv(int layer, const float* x, int n, const rows_sink& out) {
     std::lock_guard<std::mutex> lock(mu_);
-    const int DK = l_.DK, DQ = l_.DQ, dout = (int)calls_[KVQ].dout;
-    const auto unpack = [=](const uint16_t* Y, int r0, int rows) {
-#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-        for (int r = 0; r < rows; r++) {
-            const uint16_t* y = Y + (size_t)r * dout;   // [K | V | Q]
-            const size_t row = (size_t)(r0 + r);
-            for (int c = 0; c < DK; c += 16) {
-                _mm512_storeu_ps(k + row * DK + c, simd::load_bf16(y + c));
-                _mm512_storeu_ps(v + row * DK + c, simd::load_bf16(y + DK + c));
-            }
-            for (int c = 0; c < DQ; c += 16) _mm512_storeu_ps(q + row * DQ + c, simd::load_bf16(y + 2 * DK + c));
-        }
-    };
     std::vector<job> jobs;
-    for (int r0 = 0; r0 < n; r0 += step(n)) jobs.push_back({KVQ, r0, std::min(step(n), n - r0), x + (size_t)r0 * l_.D, unpack});
+    for (int r0 = 0; r0 < n; r0 += step(n)) jobs.push_back({KVQ, r0, std::min(step(n), n - r0), x + (size_t)r0 * l_.D, out});
     run(layer, jobs);
 }
 
-void qwen3_asr_prefill_npu::o(int layer, const float* att, int n, float* out) {
+void qwen3_asr_prefill_npu::o(int layer, const float* att, int n, const rows_sink& out) {
     std::lock_guard<std::mutex> lock(mu_);
-    const int D = l_.D;
-    const auto unpack = [=](const uint16_t* y, int r0, int rows) {
-#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-        for (int r = 0; r < rows; r++)
-            for (int c = 0; c < D; c += 16) _mm512_storeu_ps(out + (size_t)(r0 + r) * D + c, simd::load_bf16(y + (size_t)r * D + c));
-    };
     std::vector<job> jobs;
-    for (int r0 = 0; r0 < n; r0 += step(n)) jobs.push_back({O, r0, std::min(step(n), n - r0), att + (size_t)r0 * l_.DQ, unpack});
+    for (int r0 = 0; r0 < n; r0 += step(n)) jobs.push_back({O, r0, std::min(step(n), n - r0), att + (size_t)r0 * l_.DQ, out});
     run(layer, jobs);
 }
 
-void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, float* out) {
+void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, const rows_sink& out) {
     std::lock_guard<std::mutex> lock(mu_);
     const int D = l_.D, I = l_.I;
     // down's X, packed by the up_gate unpack: two buffers in turn (down s runs before up_gate s + 2 is unpacked)
@@ -269,11 +250,6 @@ void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, float* out) {
                 }
             }
     };
-    const auto unpack = [=](const uint16_t* y, int r0, int rows) {
-#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-        for (int r = 0; r < rows; r++)
-            for (int c = 0; c < D; c += 16) _mm512_storeu_ps(out + (size_t)(r0 + r) * D + c, simd::load_bf16(y + (size_t)r * D + c));
-    };
     // up_gate 0, up_gate 1, down 0, up_gate 2, down 1, ..., down last: a down job's input is written by its up_gate job's
     // unpack, which is two jobs earlier, or (one step) the job just before
     std::vector<job> jobs;
@@ -286,7 +262,7 @@ void qwen3_asr_prefill_npu::mlp(int layer, const float* x, int n, float* out) {
     const auto dn = [&](int s) {
         const int r0 = s * step(n);
         const bool prev = jobs.back().c == UP_GATE && jobs.back().r0 == r0;
-        jobs.push_back({DOWN, r0, std::min(step(n), n - r0), nullptr, unpack, prev, &xd_[s % 2]});
+        jobs.push_back({DOWN, r0, std::min(step(n), n - r0), nullptr, out, prev, &xd_[s % 2]});
     };
     ug(0);
     for (int s = 1; s < steps; s++) {

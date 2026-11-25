@@ -13,6 +13,7 @@
 /// (512 B of bf16 scales [8 groups][32 rows], then 8192 B of int8 stored column major [256 cols][32 rows]).
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,18 +33,22 @@ struct decoder_config {
 };
 
 /// The matrix products (and optionally the attention) of a decoder layer, done elsewhere for a prompt (the NPU prefill). Inputs
-/// and outputs are row-major floats holding bf16 values; the decoder keeps the norms, RoPE, the KV cache and the logits.
+/// are row-major floats holding bf16 values; results go, a block of rows at a time, to a sink of the decoder, which keeps the
+/// norms, RoPE, the KV cache, the residual stream and the logits.
 class projections {
 public:
+    /// rows [r0, r0 + rows) of a product's result, bf16 [rows][outputs]; may be called while the next rows are computed, so
+    /// it must not write input rows it has not been given yet
+    using rows_sink = std::function<void(const uint16_t* y, int r0, int rows)>;
     virtual ~projections() = default;
     /// prompts of fewer positions stay on the CPU
     virtual int min_rows() const = 0;
-    /// q [n][heads * head_dim], k and v [n][kv_heads * head_dim] of the normed input x [n][hidden]
-    virtual void qkv(int layer, const float* x, int n, float* q, float* k, float* v) = 0;
-    /// out [n][hidden] = o_proj(att [n][heads * head_dim])
-    virtual void o(int layer, const float* att, int n, float* out) = 0;
-    /// out [n][hidden] = down(silu(gate x) * up x) of the normed input x [n][hidden]
-    virtual void mlp(int layer, const float* x, int n, float* out) = 0;
+    /// [k | v | q] [n][2 kv_heads * head_dim + heads * head_dim] of the normed input x [n][hidden]
+    virtual void qkv(int layer, const float* x, int n, const rows_sink& out) = 0;
+    /// o_proj(att [n][heads * head_dim]), [n][hidden]
+    virtual void o(int layer, const float* att, int n, const rows_sink& out) = 0;
+    /// down(silu(gate x) * up x) of the normed input x [n][hidden], [n][hidden]; out may write rows of x it was given
+    virtual void mlp(int layer, const float* x, int n, const rows_sink& out) = 0;
     /// causal attention of the n new positions pos0 .. over the cache rows [0, pos0 + n): q [n][heads * head_dim] after norm and
     /// RoPE, k and v the layer's cache [pos0 + n][kv_heads * head_dim] (bf16), att [n][heads * head_dim]; false: the decoder does it
     virtual bool attention(int /*layer*/, const float* /*q*/, int /*pos0*/, int /*n*/, const uint16_t* /*k*/, const uint16_t* /*v*/, float* /*att*/) {

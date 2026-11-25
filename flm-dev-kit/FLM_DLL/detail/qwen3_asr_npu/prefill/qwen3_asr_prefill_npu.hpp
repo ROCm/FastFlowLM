@@ -7,7 +7,8 @@
 /// The kernel reads the decode weights in place: per layer one buffer of Q4_1 (k, q, o, up, gate) and Q8_0 (v, down)
 /// units, K|V|Q, o, up|gate (interleaved 512 rows at a time), down (qwen3_asr_desc). A layer is four calls: K, V and Q in
 /// one, o, up and gate in one, down. The host packs X as block float (8 values share an exponent, rounded to nearest),
-/// unpacks the bf16 results, and computes silu(gate) * up between the last two calls, packing it straight into down's X. With attn.xclbin (the shared prefill
+/// hands the bf16 results to the decoder's row sinks, and computes silu(gate) * up between the last two calls, packing it
+/// straight into down's X. With attn.xclbin (the shared prefill
 /// attention, modules/mha.hpp) long prompts also run their attention on the NPU, between the first two calls. The CPU decoder
 /// keeps the rest of the layer (norms, RoPE, short attention, the KV cache), so the streaming and background prefill paths
 /// are unchanged.
@@ -39,9 +40,9 @@ public:
     /// decoder keeps the attention
     qwen3_asr_prefill_npu(npu_app_manager* mgr, const layout& l, std::vector<buffer<u8>>& weights, npu_app_manager* attn_mgr = nullptr);
     int min_rows() const override { return min_rows_; }
-    void qkv(int layer, const float* x, int n, float* q, float* k, float* v) override;
-    void o(int layer, const float* att, int n, float* out) override;
-    void mlp(int layer, const float* x, int n, float* out) override;
+    void qkv(int layer, const float* x, int n, const rows_sink& out) override;
+    void o(int layer, const float* att, int n, const rows_sink& out) override;
+    void mlp(int layer, const float* x, int n, const rows_sink& out) override;
     /// one run of attn.xclbin for all heads: rows [L0, L1) (pos0 and pos0 + n rounded out to 128) against the cache copied into
     /// its K/V buffer of L1 rows; the rows outside [pos0, pos0 + n) have zero queries and are dropped. False (the CPU decoder
     /// does it) for short work, see attn_min_work_
@@ -58,7 +59,7 @@ private:
         call_id c;
         int r0, rows;
         const float* x;
-        std::function<void(const uint16_t* y, int r0, int rows)> unpack;
+        rows_sink unpack;
         bool needs_prev = false;   // x is written by the unpack of the job just before
         buffer<u8>* packed = nullptr;   // X already packed here (by an earlier job's unpack) instead of x
     };

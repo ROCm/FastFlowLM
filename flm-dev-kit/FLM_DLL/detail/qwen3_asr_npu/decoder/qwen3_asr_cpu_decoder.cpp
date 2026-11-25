@@ -492,46 +492,74 @@ struct decoder::impl {
         auto timed = [](auto&& f) { const double s = now_ms(); f(); g_prof.mm += now_ms() - s; };
 
         std::vector<float> h(embeds, embeds + (size_t)n * D);          // residual stream, bf16-valued
-        std::vector<float> x((size_t)n * D), q((size_t)n * DQ), k((size_t)n * DK), v((size_t)n * DK);
-        std::vector<float> att((size_t)n * DQ), o((size_t)n * D);
-        std::vector<float> g(P ? 0 : (size_t)n * I), u(P ? 0 : (size_t)n * I), dn((size_t)n * D);
+        std::vector<float> x((size_t)n * D), q((size_t)n * DQ), att((size_t)n * DQ);
+        // the CPU products' results; with P they go to the row sinks below instead
+        std::vector<float> k(P ? 0 : (size_t)n * DK), v(P ? 0 : (size_t)n * DK), o(P ? 0 : (size_t)n * D), dn(P ? 0 : (size_t)n * D);
+        std::vector<float> g(P ? 0 : (size_t)n * I), u(P ? 0 : (size_t)n * I);
         std::vector<float> cos_t((size_t)n * DH), sin_t((size_t)n * DH);
         for (int t = 0; t < n; ++t) rope_tables(pos0 + t, &cos_t[(size_t)t * DH], &sin_t[(size_t)t * DH]);
 
+        // row t after the products: q (in place) and k per-head norm, then rope; the cache rows of k and v
+        const auto qkv_row = [&](int li, int t, float* qt, float* kt, const float* vt) {
+            const layer_weights& L = layers[li];
+            for (int hd = 0; hd < H; ++hd) {
+                rmsnorm_row(qt + hd * DH, L.q_norm.data(), qt + hd * DH, DH, cfg.rms_eps);
+                apply_rope(qt + hd * DH, &cos_t[(size_t)t * DH], &sin_t[(size_t)t * DH]);
+            }
+            for (int hd = 0; hd < KV; ++hd) {
+                rmsnorm_row(kt + hd * DH, L.k_norm.data(), kt + hd * DH, DH, cfg.rms_eps);
+                apply_rope(kt + hd * DH, &cos_t[(size_t)t * DH], &sin_t[(size_t)t * DH]);
+            }
+            uint16_t* kc = &k_cache[li][(size_t)(pos0 + t) * DK];
+            uint16_t* vc = &v_cache[li][(size_t)(pos0 + t) * DK];
+            for (int i = 0; i < DK; ++i) {
+                kc[i] = f2bf(kt[i]);
+                vc[i] = f2bf(vt[i]);
+            }
+        };
+        // row t: h = bf16(h + a) (residual), then x = the next norm of h (none after the last layer)
+        const auto residual_row = [&](int t, const float* a, const float* norm) {
+            float* ht = &h[(size_t)t * D];
+            for (int i = 0; i < D; ++i) ht[i] = bf16r(ht[i] + a[i]);
+            if (norm) rmsnorm_row(ht, norm, &x[(size_t)t * D], D, cfg.rms_eps);
+        };
+        const auto to_float = [](const uint16_t* s, float* d, int count) {
+            for (int c = 0; c < count; c += 16) _mm512_storeu_ps(d + c, load_bf16x16(s + c));
+        };
+
+#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
+        for (int t = 0; t < n; ++t) rmsnorm_row(&h[(size_t)t * D], layers[0].input_norm.data(), &x[(size_t)t * D], D, cfg.rms_eps);
         for (int li = 0; li < cfg.layers; ++li) {
             layer_weights& L = layers[li];
-            // ---- attention block ----
-#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-            for (int t = 0; t < n; ++t) rmsnorm_row(&h[(size_t)t * D], L.input_norm.data(), &x[(size_t)t * D], D, cfg.rms_eps);
-            if (P) {
-                timed([&] { P->qkv(li, x.data(), n, q.data(), k.data(), v.data()); });
-            } else {
-                matmul_q8(L.q, x.data(), n, q.data());
-                matmul_q8(L.k, x.data(), n, k.data());
-                matmul_q8(L.v, x.data(), n, v.data());
-            }
-
+            const float* next_norm = li + 1 < cfg.layers ? layers[li + 1].input_norm.data() : nullptr;
+            // ---- attention block (x: the input norm of h) ----
             std::vector<uint16_t>& Kc = k_cache[li];
             std::vector<uint16_t>& Vc = v_cache[li];
             Kc.resize((size_t)(pos0 + n) * DK);
             Vc.resize((size_t)(pos0 + n) * DK);
+            if (P) {
+                timed([&] {
+                    P->qkv(li, x.data(), n, [&](const uint16_t* y, int r0, int rows) {
+#pragma omp parallel num_threads(qwen3_asr_cpu::asr_threads())
+                        {
+                            std::vector<float> kv((size_t)2 * DK);
+#pragma omp for
+                            for (int r = 0; r < rows; ++r) {
+                                const uint16_t* yr = y + (size_t)r * (2 * DK + DQ);   // [k | v | q]
+                                float* qt = &q[(size_t)(r0 + r) * DQ];
+                                to_float(yr, kv.data(), 2 * DK);
+                                to_float(yr + 2 * DK, qt, DQ);
+                                qkv_row(li, r0 + r, qt, kv.data(), kv.data() + DK);
+                            }
+                        }
+                    });
+                });
+            } else {
+                matmul_q8(L.q, x.data(), n, q.data());
+                matmul_q8(L.k, x.data(), n, k.data());
+                matmul_q8(L.v, x.data(), n, v.data());
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-            for (int t = 0; t < n; ++t) {
-                float* qt = &q[(size_t)t * DQ];
-                float* kt = &k[(size_t)t * DK];
-                for (int hd = 0; hd < H; ++hd) {          // per-head q norm (over head_dim), then rope
-                    rmsnorm_row(qt + hd * DH, L.q_norm.data(), qt + hd * DH, DH, cfg.rms_eps);
-                    apply_rope(qt + hd * DH, &cos_t[(size_t)t * DH], &sin_t[(size_t)t * DH]);
-                }
-                for (int hd = 0; hd < KV; ++hd) {
-                    rmsnorm_row(kt + hd * DH, L.k_norm.data(), kt + hd * DH, DH, cfg.rms_eps);
-                    apply_rope(kt + hd * DH, &cos_t[(size_t)t * DH], &sin_t[(size_t)t * DH]);
-                }
-                const float* vt = &v[(size_t)t * DK];
-                for (int i = 0; i < DK; ++i) {
-                    Kc[(size_t)(pos0 + t) * DK + i] = f2bf(kt[i]);
-                    Vc[(size_t)(pos0 + t) * DK + i] = f2bf(vt[i]);
-                }
+                for (int t = 0; t < n; ++t) qkv_row(li, t, &q[(size_t)t * DQ], &k[(size_t)t * DK], &v[(size_t)t * DK]);
             }
 
             const double att_start = now_ms();
@@ -582,18 +610,31 @@ struct decoder::impl {
                 }
             }
             g_prof.att += now_ms() - att_start;
-            if (P) timed([&] { P->o(li, att.data(), n, o.data()); });
-            else matmul_q8(L.o, att.data(), n, o.data());
-#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-            for (long long i = 0; i < (long long)n * D; ++i) h[i] = bf16r(h[i] + o[i]);   // residual
-
-            // ---- MLP block (SwiGLU) ----
-#pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-            for (int t = 0; t < n; ++t) rmsnorm_row(&h[(size_t)t * D], L.post_norm.data(), &x[(size_t)t * D], D, cfg.rms_eps);
+            // a product's rows as the residual of h, then x = norm of h (residual_row)
+            const auto residual_sink = [&](const float* norm) {
+                return [&, norm](const uint16_t* y, int r0, int rows) {
+#pragma omp parallel num_threads(qwen3_asr_cpu::asr_threads())
+                    {
+                        std::vector<float> a(D);
+#pragma omp for
+                        for (int r = 0; r < rows; ++r) {
+                            to_float(y + (size_t)r * D, a.data(), D);
+                            residual_row(r0 + r, a.data(), norm);
+                        }
+                    }
+                };
+            };
             if (P) {
-                timed([&] { P->mlp(li, x.data(), n, dn.data()); });
+                timed([&] { P->o(li, att.data(), n, residual_sink(L.post_norm.data())); });
+            } else {
+                matmul_q8(L.o, att.data(), n, o.data());
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-                for (long long i = 0; i < (long long)n * D; ++i) h[i] = bf16r(h[i] + dn[i]);   // residual
+                for (int t = 0; t < n; ++t) residual_row(t, &o[(size_t)t * D], L.post_norm.data());
+            }
+
+            // ---- MLP block (SwiGLU), then x = the next layer's input norm of h ----
+            if (P) {
+                timed([&] { P->mlp(li, x.data(), n, residual_sink(next_norm)); });
                 continue;
             }
             matmul_q8(L.gate, x.data(), n, g.data());
@@ -606,7 +647,7 @@ struct decoder::impl {
             }
             matmul_q8(L.down, g.data(), n, dn.data());
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
-            for (long long i = 0; i < (long long)n * D; ++i) h[i] = bf16r(h[i] + dn[i]);   // residual
+            for (int t = 0; t < n; ++t) residual_row(t, &dn[(size_t)t * D], next_norm);
         }
         ctx = pos0 + n;
         peak_ctx = std::max(peak_ctx, ctx);
