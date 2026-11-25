@@ -7,6 +7,7 @@
 ///       the Chat Completions response is changed on purpose. No NPU needed.
 #include "chat_core.hpp"
 #include "protocol_openai_chat.hpp"
+#include "protocol_responses.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -399,6 +400,34 @@ int main(int argc, char* argv[]) {
                           R"({"error":{"message":"busy","type":"model_error","code":503,"session_cleared":false}})");
         failures += error_routing();
         failures += flush_hook();
+
+        // Function result IDs, not the order of the results, bind them to calls.
+        const auto history = json::parse(R"({
+            "model":"m", "instructions":"Be brief.", "input":[
+                {"role":"user","content":"Both places?"},
+                {"type":"function_call","name":"weather","call_id":"call_A","arguments":"{\"city\":\"Paris\"}"},
+                {"type":"function_call","name":"weather","call_id":"call_B","arguments":"{\"city\":\"Rome\"}"},
+                {"type":"function_call_output","call_id":"call_B","output":"rain"},
+                {"type":"function_call_output","call_id":"call_A","output":"sun"}
+            ]})");
+        const auto messages = flm::responses::to_chat_request(history).at("messages");
+        failures += check("instructions", messages.at(0).at("content").get<std::string>(), "Be brief.");
+        failures += check("user input", messages.at(1).at("content").get<std::string>(), "Both places?");
+        std::vector<std::string> calls, results;
+        for (const auto& message : messages) {
+            if (message.contains("tool_calls")) {
+                for (const auto& call : message.at("tool_calls"))
+                    calls.push_back(call.at("id").get<std::string>() + ":" +
+                                    call.at("function").at("arguments").get<std::string>());
+            }
+            if (message.at("role") == "tool")
+                results.push_back(message.at("tool_call_id").get<std::string>() + ":" +
+                                  message.at("content").get<std::string>());
+        }
+        failures += check("parallel calls", json(calls).dump(),
+                          json::array({"call_A:{\"city\":\"Paris\"}", "call_B:{\"city\":\"Rome\"}"}).dump());
+        failures += check("reversed tool outputs", json(results).dump(),
+                          json::array({"call_B:rain", "call_A:sun"}).dump());
     } catch (const std::exception& e) {
         std::printf("  FAIL: %s\n", e.what());
         failures++;
