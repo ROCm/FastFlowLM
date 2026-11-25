@@ -303,6 +303,23 @@ flm run  qwen3.5-oga-hipep:9b
 
 ---
 
+### 📁 Run an OGA Model Folder Without a Catalog Entry (GPU)
+
+Run an OGA model package that is already on disk, and is not in `model_list.json`, with `--model-dir` and `--family`:
+
+```shell
+flm serve --model-dir C:\models\Qwen3.8-27B --family qwen3.5 --ctx-len 32768
+flm run   --model-dir C:\models\Qwen3.8-27B --family qwen3.5
+```
+
+- **The files say what it is.** `genai_config.json` marks an OGA package (backend `oga-hipep`, GPU). A folder without it is refused.
+- **`--family`** names the model family FLM runs the package with (`qwen3.5`, `qwen3.6` and `qwen3.8` OGA packages use `qwen3.5`). It is required with `--model-dir`, and the other way round. If the family cannot run a folder in this build, FLM lists the families that can.
+- **What FLM checks.** `genai_config.json`, `config.json`, `tokenizer.json`, and every model file `genai_config.json` names (`.onnx` and `.onnx.data`); `tokenizer_config.json`, `chat_template.jinja` and `processor_config.json` are used when present. FLM lists every missing file at once and starts nothing.
+- **How it runs.** FLM builds a catalog entry in memory from the folder. The tag is `<folder name>-oga-hipep:local` (lower case, other characters become `-`). Vision comes from `genai_config.json`; thinking and tools come from the chat template (`chat_template.jinja`, or `chat_template` in `tokenizer_config.json`). `/v1/models` and `/api/tags` list that tag; send it as `model`. `--ctx-len` and `--port` keep their usual defaults (the context length is the package's own limit, at most 32768).
+- **Nothing is downloaded or changed.** FLM never pulls, verifies, repairs or deletes files in a `--model-dir` folder, and `model_list.json` is not modified. `--model-dir` works with `run` and `serve` only, and not together with a model tag.
+
+---
+
 ### 🖧 Set Server Port at Launch
 
 Set a custom port at launch:
