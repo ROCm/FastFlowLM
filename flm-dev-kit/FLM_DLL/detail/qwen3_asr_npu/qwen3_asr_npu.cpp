@@ -145,7 +145,11 @@ void qwen3_asr_npu::Impl::load_weights(Q4NX &q4nx)
             header_print("FLM", "qwen3_asr_npu: audio_gemm.xclbin not found, audio encoder on the CPU");
         else
             this->audio_gemm = std::make_unique<qwen3_asr_audio_gemm_npu>(npu->register_xclbin(gemm_xclbin), &this->npu_mu);
-        this->audio_encoder = std::make_unique<qwen3_asr_audio_encoder>(audio_path, qwen3_asr_audio_config{}, this->audio_gemm.get());
+        // a host copy of its weights too: the background encode of the next streaming step runs on the CPU, hidden under the NPU
+        // decode (on the NPU it waits for the decode: npu_mu), unless QWEN3_ASR_NPU_STREAM_ENCODE=1
+        const char* stream_env = std::getenv("QWEN3_ASR_NPU_STREAM_ENCODE");
+        const bool host_copy = this->audio_gemm && !(stream_env && std::atoi(stream_env) != 0);
+        this->audio_encoder = std::make_unique<qwen3_asr_audio_encoder>(audio_path, qwen3_asr_audio_config{}, this->audio_gemm.get(), host_copy);
     }
     this->clear_context();
 }
@@ -466,7 +470,7 @@ void qwen3_asr_npu::Impl::_start_background(const qwen3_asr_payload_t &payload, 
             prefetch_t r;
             r.frames = frames;
             r.slice_start = next_start;
-            r.bits = this->audio_encoder->encode(slice.data(), frames - next_start, &this->stream_cache.conv);
+            r.bits = this->audio_encoder->encode(slice.data(), frames - next_start, &this->stream_cache.conv, /*host=*/true);
             r.mel_slice = std::move(slice);
             return r;
         });

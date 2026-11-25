@@ -67,9 +67,10 @@ public:
 class qwen3_asr_audio_encoder {
 public:
     /// \param audio_weight_q4nx path to audio_weight.q4nx (BF16, matrices in the audio MM tile layout)
-    /// \param gemm runs the projections, conv2, conv3 and conv_out when given (the host keeps no copy of those weights)
+    /// \param gemm runs the projections, conv2, conv3 and conv_out when given (the host keeps no copy of those weights unless
+    ///             host_copy: then encode(..., host = true) runs them on the host)
     qwen3_asr_audio_encoder(const std::string& audio_weight_q4nx, const qwen3_asr_audio_config& cfg = {},
-                            qwen3_asr_audio_gemm* gemm = nullptr);
+                            qwen3_asr_audio_gemm* gemm = nullptr, bool host_copy = false);
     ~qwen3_asr_audio_encoder();
 
     /// \param mel row-major [frames][num_mel_bins] fp32 (the feature extractor output, time-major)
@@ -96,7 +97,8 @@ public:
             chunks -= n;
         }
     };
-    std::vector<asr_bf16_bits> encode(const float* mel, int frames, conv_cache* cache = nullptr);
+    /// \param host every product on the host (needs host_copy; ignored otherwise)
+    std::vector<asr_bf16_bits> encode(const float* mel, int frames, conv_cache* cache = nullptr, bool host = false);
 
     // ------------------------------------------------------------------------------------------------------------
     // stage seams (all activations are [rows][cols] row-major fp32 holding bf16 values)

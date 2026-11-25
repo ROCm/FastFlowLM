@@ -288,7 +288,10 @@ void window_attention(const float* q, const float* k, const float* v, size_t rs,
     }
 }
 
-/// One projection: host-packed weights, or the id of the weights the gemm backend holds
+/// set by encode(..., host = true): this thread's products use the host copies of the backend's weights
+thread_local bool tl_host = false;
+
+/// One projection: host-packed weights, or the id of the weights the gemm backend holds (or both: host_copy)
 struct linear {
     packed_w w;
     std::vector<float> b;
@@ -304,6 +307,7 @@ struct layer_w {
 
 struct qwen3_asr_audio_encoder::Impl {
     qwen3_asr_audio_gemm* gemm = nullptr;
+    bool host_copy = false;   // with gemm: host weights too
     // conv stack: weights [480][Kpad] in (kh, kw, cin) order, so an im2col row is a run of cin-contiguous copies
     linear conv[3];
     int conv_cin[3] = {1, 480, 480};
@@ -326,19 +330,19 @@ struct qwen3_asr_audio_encoder::Impl {
         L.N = N;
         L.K = K;
         if (gemm && !host) L.id = gemm->add_weight(W.data(), N, K, b.empty() ? nullptr : b.data(), true, true);
-        else {
+        if (!gemm || host || host_copy) {
             L.w = pack_bf16(W, N, K);
             L.b = std::move(b);
         }
         return L;
     }
     void mm(const linear& L, const float* A, int M, float* C, bool gelu) {
-        if (L.id >= 0) gemm->run(L.id, [A, K = L.K](int r, float*) { return A + (size_t)r * K; }, M, C, gelu);
+        if (L.id >= 0 && !tl_host) gemm->run(L.id, [A, K = L.K](int r, float*) { return A + (size_t)r * K; }, M, C, gelu);
         else gemm_bias(A, M, L.K, L.w, L.b.empty() ? nullptr : L.b.data(), L.N, C, gelu);
     }
     /// the same with A given row by row (the backend packs each row as it comes; the host gathers A first, into rows_buf)
     void mm_rows(const linear& L, const qwen3_asr_audio_gemm::rows_fn& A, int M, float* C, bool gelu) {
-        if (L.id >= 0) return gemm->run(L.id, A, M, C, gelu);
+        if (L.id >= 0 && !tl_host) return gemm->run(L.id, A, M, C, gelu);
         rows_buf.resize((size_t)M * L.K);
 #pragma omp parallel for num_threads(qwen3_asr_cpu::asr_threads())
         for (int r = 0; r < M; r++) {
@@ -378,11 +382,13 @@ void qwen3_asr_audio_gemm::run_conv(int weight, const float* in, int count, int 
         }, count * rows, C, gelu);
 }
 
-qwen3_asr_audio_encoder::qwen3_asr_audio_encoder(const std::string& path, const qwen3_asr_audio_config& cfg, qwen3_asr_audio_gemm* gemm)
+qwen3_asr_audio_encoder::qwen3_asr_audio_encoder(const std::string& path, const qwen3_asr_audio_config& cfg, qwen3_asr_audio_gemm* gemm,
+                                                 bool host_copy)
     : cfg_(cfg) {
     impl_ = new Impl();
     Impl& I = *impl_;
     I.gemm = gemm;
+    I.host_copy = gemm && host_copy;
     if (const char* e = std::getenv("R2T2_ROUND_SCORES")) I.round_scores = std::atoi(e) != 0;
     if (const char* e = std::getenv("R2T2_ROUND_PROBS")) I.round_probs = std::atoi(e) != 0;
     safetensors_file f(path);
@@ -460,7 +466,7 @@ void qwen3_asr_audio_encoder::Impl::conv_chunks(const qwen3_asr_audio_config& cf
         const int cin = conv_cin[l], kpad = round_up(9 * cin, 16), Ho = (H + 1) / 2, Wo = (W + 1) / 2;
         const int rows = Ho * Wo;   // per chunk
         act[l].resize((size_t)count * rows * C);
-        if (conv[l].id >= 0)
+        if (conv[l].id >= 0 && !tl_host)
             gemm->run_conv(conv[l].id, src, count, H, W, cin, kpad, act[l].data(), /*gelu=*/true);
         else {
             auto row = [=](int r, float* tmp) {
@@ -558,7 +564,11 @@ void qwen3_asr_audio_encoder::post(const float* x, int n, float* out) {
     I.mm(I.proj2, b.data(), n, out, false);
 }
 
-std::vector<asr_bf16_bits> qwen3_asr_audio_encoder::encode(const float* mel, int frames, conv_cache* cache) {
+std::vector<asr_bf16_bits> qwen3_asr_audio_encoder::encode(const float* mel, int frames, conv_cache* cache, bool host) {
+    struct host_scope {
+        explicit host_scope(bool on) { tl_host = on; }
+        ~host_scope() { tl_host = false; }
+    } on_host(host && impl_->host_copy);
     const int D = cfg_.d_model, CF = cfg_.chunk_frames();
     const int n_tokens = qwen3_asr_audio_tokens(frames);
     const int nchunks = (frames + CF - 1) / CF;

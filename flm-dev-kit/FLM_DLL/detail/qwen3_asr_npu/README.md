@@ -23,6 +23,12 @@ results while the NPU runs the next job. The attention moves to `attn.xclbin` on
 prompt: switching between the two kernels costs about 2.5 ms twice per layer, more than the CPU attention of shorter prompts.
 The prefill hands its K/V rows to the NPU's striped KV cache with `kv_rows_copy`.
 
+Every NPU call of the engine (decode, prefill products, encoder products) takes one lock (`npu_mu`): the next step's work runs
+in the background during the decode, and a run of one hw_context while the decode runlist of another is in flight never
+completes. Streaming: that background job encodes the next step's open window on the host (the encoder keeps a host copy of its
+weights, 635 MB), hidden under the NPU decode; on the NPU it would wait for the decode, and so would the step. Offline: it
+encodes and prefills the next ~60 s piece on the NPU.
+
 ## Weights: why Q8_0
 
 4-bit round-to-nearest (Q4_0, Q4_1, Q4_K, even with a Q8_0 head) breaks this fine-tune: empty transcripts (Q4_1: 32 % of clips,
@@ -54,7 +60,8 @@ products drift the conv stack on quiet input.
 
 `QWEN3_ASR_NPU_LAYERS=n` runs only n decoder layers on the NPU (bisecting a hang). `QWEN3_ASR_CPU_DECODE=1` decodes on the host
 (accuracy A/B of the NPU decode kernel). `QWEN3_ASR_CPU_ENCODER=1` runs the whole audio encoder on the host (also the case
-when the package has no `audio_gemm.xclbin`). `QWEN3_ASR_CPU_PREFILL=1` prefills the prompt on the host (also without
+when the package has no `audio_gemm.xclbin`); `QWEN3_ASR_NPU_STREAM_ENCODE=1` runs the streaming background encode on the NPU
+as well (no host copy). `QWEN3_ASR_CPU_PREFILL=1` prefills the prompt on the host (also without
 `prefill.xclbin`); `QWEN3_ASR_CPU_ATTENTION=1` keeps only the prompt attention there (also without `attn.xclbin`);
 `QWEN3_ASR_NPU_ATTENTION_MIN=rows` moves the NPU attention threshold (0: always). `QWEN3_ASR_PROF=1` prints the prefill's
 matmul / attention / rest split and the pack / NPU / unpack times of each NPU call. `QWEN3_ASR_GEMM_PROF=1` prints pack / NPU / unpack times of each encoder product. `TRACE_STEPS=1` makes `tools/qwen3_asr_engine_run` print the top-5 logits of the first steps.
