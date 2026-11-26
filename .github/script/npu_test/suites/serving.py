@@ -220,9 +220,13 @@ def _queue_full(ctx, client, model: str, case) -> None:
     expect(not unexpected, f"expected only 200 or 503, got {unexpected[:1]}")
     for status, body, _ in results:
         if status == 503:
-            message = body.get("error") if isinstance(body, dict) else None
-            expect(isinstance(message, str) and "queue is full" in message,
-                   f"503 without the queue-full error: {str(body)[:200]}")
+            err = body.get("error") if isinstance(body, dict) else None
+            expect(isinstance(err, dict)
+                   and "queue is full" in str(err.get("message") or "")
+                   and err.get("type") == "service_unavailable_error"
+                   and err.get("code") == 503
+                   and "param" in err and err["param"] is None,
+                   f"503 without the OpenAI queue-full error: {str(body)[:200]}")
         else:
             expect(_content(body).strip(), "a queued request answered 200 with no content")
     expect(holder.error is None, f"the long request failed: {holder.error}")
