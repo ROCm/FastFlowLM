@@ -73,7 +73,9 @@ To see what a pull would fetch without changing the model store or contacting a 
 flm pull qwen3.8-dflash2:27b --dry-run
 ```
 
-The preview lists files to download or reuse under each tag, starting with the required base model. The total is the full manifest size of files to download, in bytes and GiB. A `.part` file may let a real pull resume and transfer less. The estimate excludes retries, protocol overhead, and peak disk usage. If local metadata is missing or the source can only be chosen online, the command exits with an error instead of guessing. Add `--force` to count the requested tag again without forcing its base.
+The preview lists files to download or reuse under each tag, starting with the required base model. The total is the full manifest size of files to download, in bytes and GiB. A `.part` file may let a real pull resume and transfer less. The estimate excludes retries, protocol overhead, and peak disk usage.
+
+Add `--force` to count the requested tag again without forcing its base. The preview checks pinned or outdated files locally, which can take time for large weights. It exits without a total if a package is incompatible, records are missing, or source selection requires an online check (including a forced pull that must reselect its preferred source).
 
 This code forces a re-download of the model, overwriting the current version.
 
