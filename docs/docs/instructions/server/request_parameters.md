@@ -280,7 +280,7 @@ Before generating, FLM reads the prompt into the model's KV cache. This is the *
 
 The prompt has to fit in the **context length**, with room left over to generate:
 
-- A prompt of as many tokens as the context length, or more, is **rejected whole** with HTTP 400. On most models the message is `"Max length reached!"` (`"type": "model_error"`). Models on the `core` backend check before reading anything, and they also reject a request whose `max_tokens` doesn't fit in what is left. FLM never truncates a prompt.
+- A prompt of as many tokens as the context length, or more, is **rejected whole** with HTTP 400. On most models the message is `"Max length reached!"` (`"type": "invalid_request_error"`). Models on the `core` backend check before reading anything, and they also reject a request whose `max_tokens` doesn't fit in what is left. FLM never truncates a prompt.
 - A prompt that fits starts generating, and generation stops when the context is full, with `finish_reason: "length"`.
 
 So for a 32k-token prompt, start the server with a context comfortably above 32k. The model must support that length (see its [model card](https://fastflowlm.com/docs/models/)):

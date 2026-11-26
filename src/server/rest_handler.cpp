@@ -7,6 +7,7 @@
  *  \version 0.9.24
  */
 #include "rest_handler.hpp"
+#include "error_model.hpp"
 #include "http_guard.hpp"
 #include "wstream_buf.hpp"
 #include "streaming_ostream.hpp"
@@ -43,21 +44,22 @@ namespace {
 
 /// \brief A failure the model reported about this request
 chat_error model_error(const ModelRequestError& error) {
-    return {error.http_code(), error.type(), error.what(), std::string(), error.session_cleared()};
+    return {error.http_code(), flm::error_model::normalize_type(error.type(), error.http_code()),
+            error.what(), error.param(), error.session_cleared()};
 }
 
-/// \brief An exception on a chat route: the model's own error, or an internal one
+/// \brief An exception on a chat route: the model's own error, a 400 client type/arg fault, or a 500
 chat_error exception_error(const std::exception& error) {
     if (const auto* request_error = dynamic_cast<const ModelRequestError*>(&error))
         return model_error(*request_error);
-    return {500, "server_error", error.what(), std::string(), std::nullopt};
+    const auto ev = flm::error_model::exception_error(error);
+    return {ev.status, ev.type, ev.message, ev.param, ev.session_cleared};
 }
 
 /// \brief insert() returned false without being cancelled: the reason the model gave, if any
 chat_error prefill_failed_error(const chat_meta_info_t& meta_info) {
-    const std::string message = meta_info.error_message.empty() ? "Prefill failed (see server log)" : meta_info.error_message;
-    return {meta_info.error_code, meta_info.error_code >= 500 ? "server_error" : "invalid_request_error",
-            message, std::string(), std::nullopt};
+    const auto ev = flm::error_model::prefill_error(meta_info.error_code, meta_info.error_message);
+    return {ev.status, ev.type, ev.message, ev.param, ev.session_cleared};
 }
 
 /// \brief A model name the catalog does not have: a 404, as OpenAI's
@@ -92,16 +94,9 @@ json ModelErrorResponse(const ModelRequestError& error) {
     return openai_error_json(model_error(error));
 }
 
+/// \brief Canonical error body for an exception escaping a handler; server.cpp formats it into the
+///        route's wire protocol (OpenAI on /v1/*, Ollama on /api/*, System One on /v1/systemone).
 json ExceptionResponse(const std::exception& error) {
-    if (const auto* model_error = dynamic_cast<const ModelRequestError*>(&error))
-        return ModelErrorResponse(*model_error);
-    return {{"error", error.what()}};
-}
-
-/// \brief The reply to an exception on a /v1 endpoint: an OpenAI error body whose code makes it an HTTP 500
-/// \note ExceptionResponse above keeps the Ollama shape ({"error": "..."}, no code, so HTTP 200)
-///       that the /api/* handlers send; only the /v1 handlers use this one.
-json OpenAIExceptionResponse(const std::exception& error) {
     return openai_error_json(exception_error(error));
 }
 
@@ -991,8 +986,7 @@ void RestHandler::handle_show(const json& request,
         send_response(info);
     }
     catch (const std::exception& e) {
-        json error_response = { {"error", e.what()} };
-        send_response(error_response);
+        send_response(ExceptionResponse(e));
     }
 }
 
@@ -1277,8 +1271,7 @@ void RestHandler::handle_models(const json& request,
         json models = supported_models.get_all_models_ollama();
         send_response(models);
     } catch (const std::exception& e) {
-        json error_response = ExceptionResponse(e);
-        send_response(error_response);
+        send_response(flm::error_model::make_error(500, e.what()));
     }
 }
 
@@ -1306,8 +1299,7 @@ void RestHandler::handle_models_openai(const json& request,
         send_response(supported_models.get_all_models_openai(this->ctx_length));
     }
     catch (const std::exception& e) {
-        json error_response = { {"error", e.what()} };
-        send_response(error_response);
+        send_response(flm::error_model::make_error(500, e.what()));
     }
 }
 
@@ -1465,8 +1457,8 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
     };
     try {
         // Extract OpenAI-style parameters
-        if (!has_value(request, "messages") || !request.at("messages").is_array()) {
-            bad_request("'messages' is required and must be an array");
+        if (!has_value(request, "messages") || !request.at("messages").is_array() || request.at("messages").empty()) {
+            bad_request("'messages' is required and must be a non-empty array", "messages");
             return;
         }
         json current_messages = request.at("messages");
@@ -1562,6 +1554,10 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 bad_request(raw_error);
                 return;
             }
+        }
+        if (current_messages.empty()) {
+            bad_request("'messages' must contain at least one non-empty message", "messages");
+            return;
         }
         if (positional_tool_results) {
             if (auto error = flm::chat::order_parallel_tool_results(current_messages, original_indices)) {
@@ -1729,6 +1725,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                     this->prompt_cache.reset();
                     return;
                 }
+            } catch (const ModelRequestError& error) {
+                sink.on_error(model_error(error));
+                if (error.session_cleared()) {
+                    this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
+                }
+                return;
             } catch (const std::exception& e) {
                 sink.on_error(exception_error(e));
                 this->auto_chat_engine->clear_context();
@@ -1802,6 +1805,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                     this->prompt_cache.reset();
                     return;
                 }
+            } catch (const ModelRequestError& error) {
+                sink.on_error(model_error(error));
+                if (error.session_cleared()) {
+                    this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
+                }
+                return;
             } catch (const std::exception& e) {
                 sink.on_error(exception_error(e));
                 this->auto_chat_engine->clear_context();
@@ -1819,6 +1829,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             try {
                 response_text = auto_chat_engine->generate(meta_info, length_limit, out, [&] { return cancellation_token->cancelled(); });
                 out.flush();
+            } catch (const ModelRequestError& error) {
+                sink.on_error(model_error(error));
+                if (error.session_cleared()) {
+                    this->auto_chat_engine->clear_context();
+                    this->prompt_cache.reset();
+                }
+                return;
             } catch (const std::exception& e) {
                 sink.on_error(exception_error(e));
                 this->auto_chat_engine->clear_context();
@@ -1841,7 +1858,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         }
 
     } catch (const std::exception& e) {
-        sink.on_error({500, "server_error", e.what(), std::string(), std::nullopt});
+        sink.on_error(exception_error(e));
     }
 }
 
@@ -2003,26 +2020,8 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         send_response(response);
         //this->whisper_engine->clear_context();
     }
-    catch (const std::invalid_argument& e) {
-        // A bad language or response_format. A 400, as OpenAI's: clients retry a 500.
-        json error_response = {
-            {"error", {
-                {"message", e.what()},
-                {"type", "invalid_request_error"},
-                {"code", 400}
-            }}
-        };
-        send_response(error_response);
-    }
     catch (const std::exception& e) {
-        json error_response = {
-            {"error", {
-                {"message", e.what()},
-                {"type", "server_error"},
-                {"code", 500}
-            }}
-        };
-        send_response(error_response);
+        send_response(ExceptionResponse(e));
     }
 }
 
@@ -2036,8 +2035,8 @@ void RestHandler::handle_openai_completion(const json& request,
     std::shared_ptr<CancellationToken> cancellation_token) {
     try {
         // Extract OpenAI-style parameters
-        if (!has_value(request, "prompt") || !request.at("prompt").is_string()) {
-            send_response({{"error", {{"message", "'prompt' is required and must be a string"}, {"type", "invalid_request_error"}, {"code", 400}}}});
+        if (!has_value(request, "prompt") || !request.at("prompt").is_string() || request.at("prompt").get<std::string>().empty()) {
+            send_response(flm::error_model::make_error(400, "'prompt' is required and must be a non-empty string", "prompt"));
             return;
         }
         std::string prompt = request.at("prompt");
@@ -2098,7 +2097,11 @@ void RestHandler::handle_openai_completion(const json& request,
             // client waits on it until its own timeout
             auto send_stream_error = [&](const json& error_response) {
                 if (stream_started) {
-                    send_streaming_response(json("data: " + error_response.dump() + "\n\n"), false);
+                    const auto ev = flm::error_model::extract_error(error_response);
+                    const std::string frame = ev
+                        ? flm::error_model::stream_error_frame(flm::error_model::Protocol::OpenAI, *ev)
+                        : "data: " + flm::error_model::dump_json(error_response) + "\n\n";
+                    send_streaming_response(json(frame), false);
                     send_streaming_response(json("data: [DONE]\n\n"), true);
                 } else {
                     send_response(error_response);
@@ -2120,7 +2123,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(ExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2130,7 +2133,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 send_stream_error(ModelErrorResponse(error));
                 return;
             } catch (const std::exception& e) {
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(ExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2138,7 +2141,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 ostream.finalize(meta_info);
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                send_stream_error(OpenAIExceptionResponse(e));
+                send_stream_error(ExceptionResponse(e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
 
@@ -2163,7 +2166,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = OpenAIExceptionResponse(e);
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -2171,7 +2174,7 @@ void RestHandler::handle_openai_completion(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = OpenAIExceptionResponse(e);
+                json error_response = ExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -2205,13 +2208,6 @@ void RestHandler::handle_openai_completion(const json& request,
         }
     }
     catch (const std::exception& e) {
-        json error_response = {
-            {"error", {
-                {"message", e.what()},
-                {"type", "server_error"},
-                {"code", 500}
-            }}
-        };
-        send_response(error_response);
+        send_response(ExceptionResponse(e));
     }
 }

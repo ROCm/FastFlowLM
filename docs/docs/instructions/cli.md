@@ -290,6 +290,18 @@ Asking for a backend this build does not ship fails at load with a message listi
 
 > A build carries the engines for one generation only, so there is no flag that moves it to the other catalog entry — that is a different build of FLM.
 
+#### core: an 8-bit KV cache
+
+A core model keeps its KV cache in BF16 unless you ask for corelib's 8-bit layout, about 60 % of the bytes, which leaves room for a longer context:
+
+```shell
+flm serve qwen3.6-moe-core:35b-a3b --kv-cache-bits 8
+```
+
+`--kv-cache-bits` takes 8 or 16 and wins over `FLM_KV_CACHE_BITS`; with neither the cache is BF16. It applies to every core model the process loads. corelib expects to lose a little accuracy against BF16; in its own measurements Qwen3.6 at 2048 tokens agrees on 96.9 % of greedy tokens with BF16, against 97.9 % for DD's BF16 attention, and Phi-4-mini loses the most, 93.8 % against 99.0 % at 8192. Qwen3.6 decodes level or faster from about 2048 tokens; for head-64 and head-128 models (Qwen3, Llama, Phi-4-mini) a short prompt prefills slower, every 8-bit pass running on NPU direct.
+
+An 8-bit cache needs NPU direct (see the core model card): `flm` refuses it at load when corelib runs without NPU direct, rather than run the attention off the NPU, and says so when corelib keeps no 8-bit cache for a model. `Backend detail:` ends in `8-bit KV cache)` when it is on.
+
 #### oga-hipep: OGA models on the GPU
 
 Models whose family ends in `-oga-hipep` run on the GPU through a hip-ep package. FLM reuses an existing package when it finds one, and on the standard Windows XRT build it can install the pinned runtime into the current user's profile the first time `run` or `serve` needs it.

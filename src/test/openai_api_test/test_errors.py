@@ -26,8 +26,10 @@ Usage::
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -227,6 +229,119 @@ def prefill_fault(api: Api) -> None:
     # the failed prefill must not leave anything behind for the next request
     flm_api.check_message_contract(api.ok(api.body(user("Say hi."), max_tokens=16)))
     flm_api.check_stream_contract(api.ok_stream(api.body(user("Say hi."), max_tokens=16)), include_usage=False)
+
+
+def _raw_request(api: Api, method: str, path: str, body: bytes | None = None, *,
+                 content_type: str | None = "application/json",
+                 content_length: int | None = None) -> tuple[int, dict[str, str], Any]:
+    u = urllib.parse.urlparse(api.url)
+    base_path = u.path.removesuffix("/v1/chat/completions").rstrip("/")
+    req_path = f"{base_path}{path}" if base_path else path
+    conn_cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    conn = conn_cls(u.hostname or "127.0.0.1", u.port, timeout=api.timeout)
+    try:
+        if content_length is not None:
+            conn.putrequest(method, req_path)
+            if content_type:
+                conn.putheader("Content-Type", content_type)
+            conn.putheader("Content-Length", str(content_length))
+            conn.endheaders()
+        else:
+            headers = {"Content-Type": content_type} if content_type is not None else {}
+            conn.request(method, req_path, body=body, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read().decode("utf-8", "replace")
+        hdrs = {k.lower(): v for k, v in resp.getheaders()}
+        try:
+            parsed: Any = json.loads(raw) if raw else None
+        except json.JSONDecodeError:
+            parsed = raw
+        return resp.status, hdrs, parsed
+    finally:
+        conn.close()
+
+
+def _check_openai_err(status: int, body: Any, want_status: int, want_type: str, where: str) -> None:
+    expect(status == want_status, f"{where}: status {status}, want {want_status} (body {body!r:.200})")
+    err = body.get("error") if isinstance(body, dict) else None
+    expect(isinstance(err, dict), f"{where}: expected OpenAI error object, got {body!r:.200}")
+    expect(err.get("code") == want_status, f"{where}: error.code {err.get('code')!r}, want {want_status}")
+    expect(err.get("type") == want_type, f"{where}: error.type {err.get('type')!r}, want {want_type!r}")
+    expect("param" in err, f"{where}: OpenAI error missing 'param': {err!r:.200}")
+    expect(isinstance(err.get("message"), str) and bool(err["message"]), f"{where}: empty message: {err!r:.200}")
+
+
+def _check_ollama_err(status: int, body: Any, want_status: int, where: str) -> None:
+    expect(status == want_status, f"{where}: status {status}, want {want_status} (body {body!r:.200})")
+    err = body.get("error") if isinstance(body, dict) else None
+    expect(isinstance(err, str) and bool(err), f"{where}: expected Ollama string error, got {body!r:.200}")
+
+
+@case
+def shape_follows_route(api: Api) -> None:
+    """Server-layer and guard errors use OpenAI on /v1/*, Ollama on /api/*, and {detail} on System One."""
+    for method, body in (("POST", b'{"model":"x"}'), ("GET", None)):
+        st, _, parsed = _raw_request(api, method, "/v1/wp02-no-such-route", body,
+                                     content_type="application/json" if body else None)
+        _check_openai_err(st, parsed, 404, "not_found_error", f"{method} /v1/wp02-no-such-route")
+
+    st, _, parsed = _raw_request(api, "POST", "/api/wp02-no-such-route", b"{}")
+    _check_ollama_err(st, parsed, 404, "POST /api/wp02-no-such-route")
+
+    st, _, parsed = _raw_request(api, "POST", "/v1/chat/completions", b'{"model": ')
+    _check_openai_err(st, parsed, 400, "invalid_request_error", "malformed JSON /v1")
+
+    st, _, parsed = _raw_request(api, "POST", "/api/chat", b'{"model": ')
+    _check_ollama_err(st, parsed, 400, "malformed JSON /api")
+
+    st, _, parsed = _raw_request(api, "POST", "/v1/chat/completions", content_length=300 * 1024 * 1024)
+    _check_openai_err(st, parsed, 413, "invalid_request_error", "413 /v1/chat/completions")
+
+    st, _, parsed = _raw_request(api, "POST", "/v1/systemone", content_length=300 * 1024 * 1024)
+    expect(st == 413, f"413 /v1/systemone: status {st}, body {parsed!r:.200}")
+    expect(isinstance(parsed, dict) and list(parsed.keys()) == ["detail"] and isinstance(parsed["detail"], str),
+           f"413 /v1/systemone: expected {{detail}}, got {parsed!r:.200}")
+
+    st, _, parsed = _raw_request(api, "GET", "/v1/systemone/wp02-no-such-route", content_type=None)
+    expect(st == 404, f"404 /v1/systemone/wp02-no-such-route: status {st}, body {parsed!r:.200}")
+    expect(isinstance(parsed, dict) and list(parsed.keys()) == ["detail"] and isinstance(parsed["detail"], str),
+           f"404 /v1/systemone: expected {{detail}}, got {parsed!r:.200}")
+
+    st, _, parsed = _raw_request(api, "POST", "/v1/audio/transcriptions", b'{"file":"x"}')
+    _check_openai_err(st, parsed, 400, "invalid_request_error", "non-multipart /v1/audio/transcriptions")
+
+    for path, payload in (("/api/chat", b'{"model":"x"}'), ("/api/embeddings", b'{"model":"x"}')):
+        st, _, parsed = _raw_request(api, "POST", path, payload)
+        _check_ollama_err(st, parsed, 400, f"missing field {path}")
+
+    st, _, parsed = _raw_request(api, "POST", "/v1/chat/completions", b'{"model":"no-such-model:1b","messages":[]}')
+    _check_openai_err(st, parsed, 400, "invalid_request_error", "empty messages /v1/chat/completions")
+    expect(parsed["error"]["param"] == "messages", f"empty messages param: {parsed!r:.200}")
+
+    st, _, parsed = _raw_request(api, "POST", "/v1/completions", b'{"model":"no-such-model:1b","prompt":""}')
+    _check_openai_err(st, parsed, 400, "invalid_request_error", "empty prompt /v1/completions")
+    expect(parsed["error"]["param"] == "prompt", f"empty prompt param: {parsed!r:.200}")
+
+
+@case
+def wrong_type_is_400(api: Api) -> None:
+    """Wrong field types return 400 on both /v1/* and /api/* instead of 500 or 200."""
+    msgs = [{"role": "user", "content": "hi"}]
+    for path, payload in (
+        ("/v1/chat/completions", {"model": "no-such-model:1b", "messages": msgs, "max_tokens": "x"}),
+        ("/v1/chat/completions", {"model": "no-such-model:1b", "messages": msgs, "stream": "yes"}),
+        ("/v1/completions", {"model": "no-such-model:1b", "prompt": "hi", "stream": "yes"}),
+    ):
+        st, _, parsed = _raw_request(api, "POST", path, json.dumps(payload).encode("utf-8"))
+        _check_openai_err(st, parsed, 400, "invalid_request_error", f"wrong type {path}")
+
+    for path, payload in (
+        ("/api/chat", {"model": "no-such-model:1b", "messages": msgs, "options": {"num_predict": "x"}}),
+        ("/api/chat", {"model": "no-such-model:1b", "messages": msgs, "stream": "yes"}),
+        ("/api/generate", {"model": "no-such-model:1b", "prompt": "hi", "max_tokens": "x"}),
+    ):
+        st, _, parsed = _raw_request(api, "POST", path, json.dumps(payload).encode("utf-8"))
+        _check_ollama_err(st, parsed, 400, f"wrong type {path}")
 
 
 @case

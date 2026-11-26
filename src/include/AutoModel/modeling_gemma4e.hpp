@@ -86,6 +86,9 @@ private:
 
     bool enable_think = false;
     bool enable_tool = false;
+    // the catalog entry's "vlm" and "asr": a text-only entry's engine has no vision or audio tower
+    bool accepts_images = false;
+    bool accepts_audio = false;
     void setup_tokenizer(std::string model_path);
     
     // Image processing functionality

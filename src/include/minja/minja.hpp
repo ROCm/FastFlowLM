@@ -655,6 +655,11 @@ struct Location {
     size_t pos;
 };
 
+class TemplateException : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 class Expression {
 protected:
     virtual Value do_evaluate(const std::shared_ptr<Context> & context) const = 0;
@@ -669,6 +674,8 @@ public:
     Value evaluate(const std::shared_ptr<Context> & context) const {
         try {
             return do_evaluate(context);
+        } catch (const TemplateException &) {
+            throw;
         } catch (const std::exception & e) {
             std::ostringstream out;
             out << e.what();
@@ -879,6 +886,8 @@ public:
             err << e.what();
             if (location_.source) err << error_location_suffix(*location_.source, location_.pos);
             throw LoopControlException(err.str(), e.control_type);
+        } catch (const TemplateException &) {
+            throw;
         } catch (const std::exception & e) {
             std::ostringstream err;
             err << e.what();
@@ -2748,7 +2757,7 @@ inline std::shared_ptr<Context> Context::builtins() {
   auto globals = Value::object();
 
   globals.set("raise_exception", simple_function("raise_exception", { "message" }, [](const std::shared_ptr<Context> &, Value & args) -> Value {
-    throw std::runtime_error(args.at("message").get<std::string>());
+    throw TemplateException(args.at("message").get<std::string>());
   }));
   // Upstream minja takes no ensure_ascii and throws on an argument it does not
   // know, so `x | tojson(ensure_ascii=False)` failed the whole render.

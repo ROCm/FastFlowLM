@@ -111,7 +111,7 @@ flm run qwen3:8b
 - **Backend:** `core` — one engine for all four sizes. The GGUF's own metadata selects the size and is cross-checked against it.
 - **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one, a tag below on an AMD file cannot be pulled, as corelib's own runner has no public fallback either. Only Qwen3-0.6B and Llama, which AMD ships no 4-bit file of, pull a public `Q8_0`, requantized to 4-bit groups on every load, which is lossy; corelib refuses `Q8_0` for Qwen3.5, Qwen3.6, Gemma 4 and Phi-4-mini.
 - **Context:** each tag's limit is the most corelib runs that model at; the default is lower where corelib or our own runs found answers going wrong past it. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
-- **Availability:** developer build against corelib 0.103.0 — see [Phi-4 on the core backend](phi.md).
+- **Availability:** developer build against corelib 0.116.0 — see [Phi-4 on the core backend](phi.md).
 
 The same corelib path runs every `-core` tag:
 
@@ -120,7 +120,7 @@ The same corelib path runs every `-core` tag:
 | `qwen3-core:0.6b` | unsloth `Q8_0`, refit to group 64 (lm_head 32) | 32768 | 32768 |
 | `qwen3-core:1.7b` / `4b` / `8b` | AMD `Q4_G128` | 32768 | 32768 |
 | `qwen3.5-core:4b` / `9b` | AMD `Q4_G128` | 262144 | 32768 |
-| `qwen3.6-moe-core:35b-a3b` | AMD `Q4_G32` | 262144 | 32768 |
+| `qwen3.6-moe-core:35b-a3b` | AMD `Q4_G32` | 262144 | 262144 |
 | `qwen3.8-core:27b` | AMD `Q4_G128`, on the NPU | 262144 | 32768 |
 | `gemma4-it-core:e2b` / `e4b` | AMD `Q4_G32` | 131072 | 65536 |
 | `phi4-mini-it-core:4b` | AMD `Q4_G128` | 131072 | 131072 |
@@ -132,7 +132,6 @@ FastFlowLM sends a long prompt in chunks of `max_prefill_len` (4096) tokens that
 
 Known limits, each corelib's (its `docs/known-problems.md` names them):
 
-- **Qwen3.6 past 32768.** Paged attention can return garbage: a passkey asked for after about 48k tokens came back as `!` repeated (on an AIE4 test machine). A context past 32768 still loads, and says so.
 - **Qwen3.8 on long prompts.** A long prompt can come back as `!` repeated, run to run and from corelib's own runner too: on an AIE4 test machine a passkey was answered at 6k and 14k tokens and garbled at 10k and 28k. Prefill passes shorter than a page past position 0 run their attention on the CPU (`PAGED_PREFILL_SHORT_CHUNK`).
 - **Qwen3.5 and Qwen3.8 decode** drift from the reference the more pages it reads (`PAGED_DECODE_PAGE_DRIFT`).
 - **Gemma 4 past position 65535** (`PAGED_ATTENTION_POSITION_WRAP`).
