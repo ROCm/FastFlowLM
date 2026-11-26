@@ -585,6 +585,21 @@ void test_reasoning_effort_levels() {
         CHECK(constraint.allow_reasoning == (canonical != "none"));
     }
 
+    // reasoning_effort is applied after think, so grammar allow_reasoning follows that precedence
+    {
+        chat_constraint_request constraint;
+        std::string constraint_error;
+        const json no_tools = json::array();
+        CHECK(chat_constraint_request_from_openai({{"think", false}}, no_tools, constraint, constraint_error));
+        CHECK(!constraint.allow_reasoning);
+        CHECK(chat_constraint_request_from_openai({{"think", false}, {"reasoning_effort", "xhigh"}}, no_tools, constraint, constraint_error));
+        CHECK(constraint.allow_reasoning);
+        CHECK(chat_constraint_request_from_openai({{"think", false}, {"reasoning_effort", "minimal"}}, no_tools, constraint, constraint_error));
+        CHECK(constraint.allow_reasoning);
+        CHECK(chat_constraint_request_from_openai({{"think", true}, {"reasoning_effort", "none"}}, no_tools, constraint, constraint_error));
+        CHECK(!constraint.allow_reasoning);
+    }
+
     // undefined strings and wrong JSON types are refused and name the field
     const std::vector<json> bad_values = {
         "bogus", "", "HIGH", "no_think", "0.5", 1, 0.5, true, false, json::array(), json::object(),

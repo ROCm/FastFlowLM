@@ -123,14 +123,32 @@ void Inkling2::setup_tokenizer(std::string model_path) {
     auto tokenizer_config = this->_shared_setup_tokenizer(model_path);
 }
 
+static bool parse_inkling_numeric_effort(const std::string& effort, double& level) {
+    if (effort.empty() || (!std::isdigit(static_cast<unsigned char>(effort[0])) && effort[0] != '.')) {
+        return false;
+    }
+    if (effort.find_first_of("xXpP") != std::string::npos) {
+        return false;
+    }
+    char* end = nullptr;
+    const double parsed = std::strtod(effort.c_str(), &end);
+    if (end == effort.c_str() || end != effort.c_str() + effort.size()) {
+        return false;
+    }
+    if (!std::isfinite(parsed) || parsed < 0.0 || parsed > 0.99) {
+        return false;
+    }
+    level = parsed;
+    return true;
+}
+
 bool Inkling2::valid_effort(const std::string& effort) {
     static const char* names[] = {"none", "minimal", "low", "medium", "high", "xhigh", "max"};
     for (const char* name : names) {
         if (effort == name) return true;
     }
-    char* end = nullptr;
-    const double level = std::strtod(effort.c_str(), &end);
-    return !effort.empty() && end && *end == '\0' && level >= 0.0 && level <= 0.99;
+    double level = 0.0;
+    return parse_inkling_numeric_effort(effort, level);
 }
 
 /// \note The package's chat_template.jinja is the reference template made to run in minja:
@@ -142,8 +160,9 @@ std::string Inkling2::apply_chat_template(nlohmann::ordered_json& messages, nloh
     opt.polyfill_tool_responses = false;
     inputs.extra_context = this->extra_context;
     // a number goes in as a number: the template prints it ("Thinking effort level: 0.5")
-    if (std::isdigit(static_cast<unsigned char>(this->reasoning_effort[0]))) {
-        inputs.extra_context["reasoning_effort"] = std::strtod(this->reasoning_effort.c_str(), nullptr);
+    double numeric_effort = 0.0;
+    if (parse_inkling_numeric_effort(this->reasoning_effort, numeric_effort)) {
+        inputs.extra_context["reasoning_effort"] = numeric_effort;
     } else {
         inputs.extra_context["reasoning_effort"] = this->reasoning_effort;
     }

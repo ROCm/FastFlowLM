@@ -119,12 +119,14 @@ bool chat_constraint_request_from_openai(const json& request, const json& tools,
     }
     out.parallel_tool_calls = parallel.is_null() || parallel.get<bool>();
     // thinking turned off: some models still get an empty think block fed in, but
-    // the grammar must not offer room to reason
+    // the grammar must not offer room to reason. reasoning_effort is applied after
+    // think in configure_chat_engine_parameters, so when both appear it decides.
     const json& think = field(request, "think");
     const json& effort = field(request, "reasoning_effort");
-    const bool effort_off =
-        effort.is_string() && canonical_reasoning_effort(effort.get<std::string>()) == std::optional<std::string>("none");
-    if ((think.is_boolean() && !think.get<bool>()) || effort_off) {
+    const auto canonical = effort.is_string() ? canonical_reasoning_effort(effort.get<std::string>()) : std::nullopt;
+    if (canonical.has_value()) {
+        out.allow_reasoning = (*canonical != "none");
+    } else if (think.is_boolean() && !think.get<bool>()) {
         out.allow_reasoning = false;
     }
 

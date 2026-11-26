@@ -94,6 +94,19 @@ def is_gpt_oss(api: Api) -> bool:
     return "gpt-oss" in api.model.lower()
 
 
+def is_inkling(api: Api) -> bool:
+    family = loaded_family(api)
+    if family is not None:
+        return family == "inkling-2"
+    return "inkling-2" in api.model.lower()
+
+
+def loaded_models(api: Api) -> list[str]:
+    url = api.url.removesuffix("/v1/chat/completions") + "/api/ps"
+    with urllib.request.urlopen(url, timeout=api.timeout) as reply:
+        return [m.get("model") or m.get("name") or "" for m in json.load(reply).get("models", [])]
+
+
 def effort_body(api: Api, level, *, max_tokens: int = THINK_BUDGET, **fields) -> dict:
     body = api.body(user(PROMPT), max_tokens=max_tokens, **fields)
     del body["think"]
@@ -105,6 +118,19 @@ def expect_effort_400(resp: flm_api.Response, label: str) -> None:
     expect(resp.status == 400, f"{label}: expected 400, got {resp.status} {resp.error_message()}")
     err = resp.body.get("error")
     expect(isinstance(err, dict), f"{label}: expected OpenAI error object, got {resp.body!r}")
+    expect(err.get("type") == "invalid_request_error",
+           f"{label}: expected type='invalid_request_error', got {err!r}")
+    expect(err.get("param") == "reasoning_effort",
+           f"{label}: expected param='reasoning_effort', got {err!r}")
+
+
+def expect_stream_effort_400(s: flm_api.StreamResult, label: str) -> None:
+    expect(s.status == 400, f"{label}: expected 400, got {s.status}")
+    expect(not s.chunks, f"{label}: emitted {len(s.chunks)} chunks before 400")
+    err = s.error.get("error") if isinstance(s.error, dict) else None
+    expect(isinstance(err, dict), f"{label}: expected OpenAI error object, got {s.error!r}")
+    expect(err.get("type") == "invalid_request_error",
+           f"{label}: expected type='invalid_request_error', got {err!r}")
     expect(err.get("param") == "reasoning_effort",
            f"{label}: expected param='reasoning_effort', got {err!r}")
 
@@ -125,38 +151,48 @@ def reasoning_effort_none(api: Api) -> None:
 @case
 def reasoning_effort_levels(api: Api) -> None:
     """Every OpenAI reasoning_effort level above 'none' enables reasoning on a thinking model."""
-    low = flm_api.check_message_contract(api.ok(effort_body(api, "low")))
-    require_reasoning(low)
-    for level in ("minimal", "medium", "high", "xhigh", "max"):
+    probe = flm_api.check_message_contract(api.ok(api.body(user(PROMPT), think=True, max_tokens=THINK_BUDGET)))
+    require_reasoning(probe)
+    for level in ("minimal", "low", "medium", "high", "xhigh", "max"):
         msg = flm_api.check_message_contract(api.ok(effort_body(api, level)))
         expect(bool(msg.get("reasoning_content")),
-               f"reasoning_effort={level!r} returned no reasoning_content (low did)")
+               f"reasoning_effort={level!r} returned no reasoning_content (think=true did)")
 
 
 @case
 def reasoning_effort_invalid_is_400(api: Api) -> None:
     """An undefined or ill-typed reasoning_effort is 400 naming the field, JSON and stream."""
-    for bad in ("bogus", "", 1, True):
+    bad_values: list[object] = ["bogus", "", 1, True]
+    if not is_inkling(api):
+        bad_values.append("0.5")
+    for bad in bad_values:
         expect_effort_400(api.post(effort_body(api, bad, max_tokens=64)),
                           f"reasoning_effort={bad!r}")
-    s = api.stream(effort_body(api, "bogus", max_tokens=64))
-    expect(s.status == 400, f"stream reasoning_effort='bogus': expected 400, got {s.status}")
-    expect(not s.chunks, f"stream reasoning_effort='bogus' emitted {len(s.chunks)} chunks before 400")
-    expect(isinstance(s.error, dict) and isinstance(s.error.get("error"), dict)
-           and s.error["error"].get("param") == "reasoning_effort",
-           f"stream reasoning_effort='bogus': expected param='reasoning_effort', got {s.error!r}")
+    for bad in ("bogus", 1):
+        expect_stream_effort_400(api.stream(effort_body(api, bad, max_tokens=64)),
+                                 f"stream reasoning_effort={bad!r}")
 
 
 @case
 def reasoning_effort_error_leaves_no_state(api: Api) -> None:
-    """A refused reasoning_effort changes nothing for the next request."""
+    """A refused reasoning_effort changes nothing and never unloads the active model."""
     default = api.body(user(PROMPT), max_tokens=THINK_BUDGET)
     del default["think"]
     before = flm_api.check_message_contract(api.ok(default))
+    loaded_before = loaded_models(api)
     # Change away from the default on a valid request, then fail, then check default returns.
     api.ok(effort_body(api, "low"))
     expect_effort_400(api.post(effort_body(api, "bogus", max_tokens=64)),
                       "reasoning_effort='bogus' state check")
+    if not is_gpt_oss(api):
+        # Cross-model refusal: gpt-oss + "none" must fail 400 before unloading api.model.
+        cross = effort_body(api, "none", max_tokens=64)
+        cross["model"] = "gpt-oss:20b"
+        resp = api.post(cross)
+        if resp.status != 404:
+            expect_effort_400(resp, "cross-model gpt-oss reasoning_effort='none'")
+            expect(loaded_models(api) == loaded_before,
+                   f"refused cross-model request changed loaded model: {loaded_before!r} -> {loaded_models(api)!r}")
     after = flm_api.check_message_contract(api.ok(default))
     expect(bool(before.get("reasoning_content")) == bool(after.get("reasoning_content")),
            "a request without reasoning_effort did not get the model's default back after a refused level")
