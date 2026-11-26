@@ -14,6 +14,7 @@ User docs for what's tested here:
 flm serve qwen3:4b                     # in another terminal
 python3 run_all.py qwen3:4b            # everything
 python3 test_tool_calls.py qwen3:4b    # one module
+python3 sdk_responses_smoke.py qwen3:4b  # optional: openai-python, a tool-capable local model
 python3 run_all.py qwen3:4b -k schema  # only cases whose name contains "schema"
 ```
 

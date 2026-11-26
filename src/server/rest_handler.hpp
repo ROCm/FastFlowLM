@@ -106,6 +106,9 @@ public:
                                       std::function<void(const json&)> send_response,
                                       StreamResponseCallback send_streaming_response,
                                       std::shared_ptr<CancellationToken> cancellation_token = nullptr);
+    void handle_openai_responses(const json& request, std::function<void(const json&)> send_response,
+                                StreamResponseCallback send_streaming_response,
+                                std::shared_ptr<CancellationToken> cancellation_token);
     void handle_openai_audio_transcriptions(const json& request,
                                       std::function<void(const json&)> send_response,
                                       StreamResponseCallback send_streaming_response,
