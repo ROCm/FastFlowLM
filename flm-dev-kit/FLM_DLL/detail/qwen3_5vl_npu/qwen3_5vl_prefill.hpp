@@ -363,6 +363,12 @@ struct qwen3_5vl_mlp_prefill_context{
     qwen3_5vl_common_buffers* common_bufs;
 
     int L_old = -1;
+    /// up/gate runs the fused GLU (seq_gen->mm_glu and at least QWEN35_GLU_MIN_ROWS padded rows, default 0); set with the sequences
+    bool glu_now = false;
+    static int glu_min_rows() {
+        static const int v = [] { const char* e = std::getenv("QWEN35_GLU_MIN_ROWS"); return e && *e ? std::max(0, std::atoi(e)) : 0; }();
+        return v;
+    }
 
     npu_app upgate_proj;
     npu_app down_proj;
@@ -384,23 +390,30 @@ struct qwen3_5vl_mlp_prefill_context{
         PREFILL_PROF_INIT();
         int L_padded = (L + 511) / 512 * 512;
         if (L_old != L_padded){
-            seq_gen->gen_dequant_mm_512(this->upgate_proj.seq(), L_padded, desc->D, desc->intermediate_size * 2, desc->get_upgate_offset(), 0, 0);
+            glu_now = seq_gen->mm_glu && L_padded >= glu_min_rows();
+            seq_gen->gen_dequant_mm_512(this->upgate_proj.seq(), L_padded, desc->D, desc->intermediate_size * 2, desc->get_upgate_offset(), 0, glu_now ? 3 : 0);
             seq_gen->gen_dequant_mm_512(this->down_proj.seq(), L_padded, desc->intermediate_size, desc->D, desc->get_down_offset(), 0, 0);
             L_old = L_padded;
-            upgate = this->upgate_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->intermediate_size * 2);
+            if (!glu_now) upgate = this->upgate_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->intermediate_size * 2);
             hid = this->upgate_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->intermediate_size);
             memset(hid.data(), 0, hid.size() * sizeof(bf16));
         }
         PREFILL_PROF_TICK("mlp:seq_gen+alloc");
 
-        this->upgate_proj(upgate, this->common_bufs->x, proj_weights);
-        upgate.sync_from_device();
+        if (glu_now) {
+            // the array leaves silu(gate) * up in hid: no pull, no host GLU, no push
+            this->upgate_proj(hid, this->common_bufs->x, proj_weights);
+        } else {
+            this->upgate_proj(upgate, this->common_bufs->x, proj_weights);
+            upgate.sync_from_device();
 
-        hid.sync_from_device();
+            hid.sync_from_device();
 
-        cpu_func::_exp_glu(hid.data(), upgate.data(), L, desc->intermediate_size, 512);
+            cpu_func::_exp_glu(hid.data(), upgate.data(), L, desc->intermediate_size, 512);
 
-        hid.sync_to_device();
+            hid.sync_to_device();
+        }
+        PREFILL_PROF_TICK("mlp:upgate+glu");
 
         this->down_proj(common_bufs->x, hid, proj_weights);
 
@@ -443,6 +456,9 @@ struct qwen3_5vl_prefill_context{
         const char* no_bfp = std::getenv("QWEN35_NO_BFP_MM");
         const bool use_bfp = std::filesystem::exists(bfp_mm) && !(no_bfp && no_bfp[0] == '1');
         this->gemm_app_manager = npu->register_xclbin(use_bfp ? bfp_mm : utils::path_join(xdir, "mm.xclbin"));
+        // its fused GLU epilogue (rtp_act 3) computes silu(gate) * up in the array; QWEN35_NO_GLU=1 keeps the host GLU
+        const char* no_glu = std::getenv("QWEN35_NO_GLU");
+        seq_gen->mm_glu = use_bfp && desc->intermediate_size % 512 == 0 && !(no_glu && no_glu[0] == '1');
         this->conv1d_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "conv.xclbin"));
         this->gate_delta_net_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "GateDeltaNet_prefill.xclbin"));
         this->mha_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "attn.xclbin"));
