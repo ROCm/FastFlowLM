@@ -15,6 +15,7 @@
 #include "chat_core.hpp"
 #include "chat_logprobs.hpp"
 #include "protocol_openai_chat.hpp"
+#include "protocol_responses.hpp"
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
@@ -1445,6 +1446,18 @@ void RestHandler::handle_openai_chat_completion(const json& request,
                                                std::shared_ptr<CancellationToken> cancellation_token) {
     openai_chat_sink sink(send_response, send_streaming_response, stream_include_usage(request));
     run_chat_turn(request, sink, cancellation_token);
+}
+
+void RestHandler::handle_openai_responses(const json& request,
+                                         std::function<void(const json&)> send_response,
+                                         StreamResponseCallback send_streaming_response,
+                                         std::shared_ptr<CancellationToken> cancellation_token) {
+    flm::responses::sink sink(request, std::move(send_response), std::move(send_streaming_response));
+    try {
+        run_chat_turn(flm::responses::to_chat_request(request), sink, cancellation_token);
+    } catch (const flm::responses::request_error& e) {
+        sink.on_error({400, "invalid_request_error", e.what(), e.param, std::nullopt});
+    }
 }
 
 ///@brief Run one chat turn and report it to a sink

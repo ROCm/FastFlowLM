@@ -59,7 +59,7 @@ void test_engine_routes_take_npu_queue() {
     const std::string src = ss.str();
 
     const std::set<std::string> engine = {"handle_generate", "handle_chat", "handle_embeddings",
-        "handle_openai_chat_completion", "handle_openai_completion", "handle_openai_audio_transcriptions",
+        "handle_openai_chat_completion", "handle_openai_responses", "handle_openai_completion", "handle_openai_audio_transcriptions",
         "handle_systemone"};
     const std::set<std::string> no_engine = {"handle_show", "handle_ps", "handle_models", "handle_models_openai",
         "handle_version", "handle_pull", "handle_systemone_models"};
