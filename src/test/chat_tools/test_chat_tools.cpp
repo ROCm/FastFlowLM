@@ -551,6 +551,51 @@ void test_no_tools_after_tool_turns() {
     CHECK(chat_make_constraint(QWEN_XML, plain_request, vocab, never) == nullptr);
 }
 
+void test_reasoning_effort_levels() {
+    std::printf("reasoning_effort parses the seven OpenAI levels and rejects anything else\n");
+    auto parse = [](const json& request, std::optional<std::string>& out, std::string& error) {
+        error.clear();
+        return chat_reasoning_effort_from_openai(request, out, error);
+    };
+    std::optional<std::string> out;
+    std::string error;
+
+    // absent or null reads as no override
+    CHECK(parse(json::object(), out, error) && !out.has_value());
+    CHECK(parse({{"reasoning_effort", nullptr}}, out, error) && !out.has_value());
+
+    // the seven OpenAI levels map to the four canonical FLM levels
+    const std::vector<std::pair<std::string, std::string>> expected = {
+        {"none", "none"},
+        {"minimal", "low"},
+        {"low", "low"},
+        {"medium", "medium"},
+        {"high", "high"},
+        {"xhigh", "high"},
+        {"max", "high"},
+    };
+    for (const auto& [raw, canonical] : expected) {
+        CHECK(parse({{"reasoning_effort", raw}}, out, error));
+        CHECK(out.has_value() && *out == canonical);
+        // grammar allow_reasoning agrees with the parser
+        chat_constraint_request constraint;
+        std::string constraint_error;
+        const json no_tools = json::array();
+        CHECK(chat_constraint_request_from_openai({{"reasoning_effort", raw}}, no_tools, constraint, constraint_error));
+        CHECK(constraint.allow_reasoning == (canonical != "none"));
+    }
+
+    // undefined strings and wrong JSON types are refused and name the field
+    const std::vector<json> bad_values = {
+        "bogus", "", "HIGH", "no_think", "0.5", 1, 0.5, true, false, json::array(), json::object(),
+    };
+    for (const auto& bad : bad_values) {
+        CHECK(!parse({{"reasoning_effort", bad}}, out, error));
+        CHECK(!out.has_value());
+        CHECK(error.find("reasoning_effort") != std::string::npos);
+    }
+}
+
 void test_thinking_switch_in_chat_template_kwargs() {
     std::printf("chat_template_kwargs.enable_thinking is the Qwen spelling of think\n");
     // returns: 0 no override, 1 override on, 2 override off, -1 rejected (message in error)
@@ -585,11 +630,20 @@ void test_thinking_switch_in_chat_template_kwargs() {
     CHECK(resolve({{"think", false}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
     CHECK(resolve({{"reasoning_effort", "none"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
     CHECK(resolve({{"reasoning_effort", "high"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == 1);
+    CHECK(resolve({{"reasoning_effort", "minimal"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == 1);
+    CHECK(resolve({{"reasoning_effort", "xhigh"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == 1);
+    CHECK(resolve({{"reasoning_effort", "max"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == 1);
     CHECK(resolve({{"think", false}, {"chat_template_kwargs", {{"enable_thinking", true}}}}, &message) == -1);
     CHECK(message.find("think") != std::string::npos);
     CHECK(resolve({{"think", true}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == -1);
     CHECK(resolve({{"reasoning_effort", "none"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == -1);
     CHECK(resolve({{"reasoning_effort", "low"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == -1);
+    CHECK(resolve({{"reasoning_effort", "minimal"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}, &message) == -1);
+    CHECK(message.find("reasoning_effort") != std::string::npos);
+    CHECK(resolve({{"reasoning_effort", "xhigh"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}, &message) == -1);
+    CHECK(message.find("reasoning_effort") != std::string::npos);
+    CHECK(resolve({{"reasoning_effort", "max"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}, &message) == -1);
+    CHECK(message.find("reasoning_effort") != std::string::npos);
     // null native controls count as absent
     CHECK(resolve({{"think", nullptr}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
     // without the nested field the native controls are not examined here
@@ -1145,6 +1199,7 @@ int main() {
     test_streams_extend();
     test_continued_call();
     test_no_tools_after_tool_turns();
+    test_reasoning_effort_levels();
     test_thinking_switch_in_chat_template_kwargs();
     test_gemma4_nullable_types();
     test_gemma4_string_length();

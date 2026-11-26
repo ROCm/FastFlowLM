@@ -100,10 +100,15 @@ bool HyMemory::configure_parameter(std::string parameter_name, const std::any& v
     if (parameter_name == "reasoning_effort") {
         try {
             const std::string effort = std::any_cast<std::string>(value);
-            if (effort != "no_think" && effort != "low" && effort != "high") {
+            if (effort == "none" || effort == "no_think") {
+                this->reasoning_effort = "no_think";
+            } else if (effort == "low") {
+                this->reasoning_effort = "low";
+            } else if (effort == "medium" || effort == "high") {
+                this->reasoning_effort = "high";
+            } else {
                 return false;
             }
-            this->reasoning_effort = effort;
             return true;
         } catch (const std::bad_any_cast&) {
             return false;

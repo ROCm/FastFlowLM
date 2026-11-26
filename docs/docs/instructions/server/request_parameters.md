@@ -244,13 +244,13 @@ Rejected with HTTP 400 (`invalid_request_error`), for streaming requests too:
 | An `options` object (Ollama style) on a `/v1` endpoint | Ignored. Put sampling fields at the top level of the request. |
 | A sampling field outside its range | Ignored with a warning in the server log. The model's default is used ([see above](#️-sampling-fields)). |
 | A sampling field of the wrong JSON type, such as `"temperature": "0.7"` | The request fails with an error. Send numbers as JSON numbers. |
-| A malformed `messages`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`, `top_logprobs`, `seed`, `repeat_last_n` or `continue_final_message` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
+| A malformed `messages`, `reasoning_effort`, `tool_choice`, `parallel_tool_calls`, `response_format`, `logprobs`, `top_logprobs`, `seed`, `repeat_last_n` or `continue_final_message` | Rejected with HTTP 400 and `"type": "invalid_request_error"` before anything is generated, for streaming requests too. |
 
 FLM's own extensions to the OpenAI request, all top-level fields (`extra_body` in the OpenAI SDK):
 
 | Field | See |
 |---|---|
-| `think` | [Turning Thinking On and Off](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off) |
+| `think`, `reasoning_effort` | [Turning Thinking On and Off](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off) |
 | `top_k`, `repetition_penalty` | [Sampling Fields](#️-sampling-fields) |
 | `repeat_last_n` | [The Penalty Window](#-the-penalty-window) |
 | `backend` | [Choose an Execution Backend](https://fastflowlm.com/docs/instructions/cli/#-choose-an-execution-backend) |

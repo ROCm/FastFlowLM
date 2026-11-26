@@ -53,6 +53,17 @@ bool chat_constraint_request_from_openai(const nlohmann::ordered_json& request,
                                          const nlohmann::ordered_json& tools,
                                          chat_constraint_request& out, std::string& error);
 
+/// \brief Parse OpenAI `reasoning_effort` and map the seven levels to the four FLM models read
+/// \param request the chat completion request body
+/// \param canonical_effort set to "none", "low", "medium", or "high", or empty when absent/null
+/// \param error set when the field is not a string or not one of the seven OpenAI levels
+/// \return false when the request must be refused
+/// \note Null reads as absent. Mapping: minimal -> low, xhigh/max -> high; the other four keep
+///       their name.
+bool chat_reasoning_effort_from_openai(const nlohmann::ordered_json& request,
+                                       std::optional<std::string>& canonical_effort,
+                                       std::string& error);
+
 /// \brief The thinking switch in the Qwen spelling, `chat_template_kwargs.enable_thinking`
 /// \param request the chat completion request body
 /// \param override_value set to the nested boolean, empty when the request does not carry one

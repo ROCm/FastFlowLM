@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include "AutoModel/modeling_gpt_oss.hpp"
+#include "AutoModel/modeling_inkling2.hpp"
 #include "AutoModel/modeling_minicpm_v.hpp"
 #include "AutoModel/modeling_qwen3_asr.hpp"
 #include "AutoModel/modeling_qwen3_5vl.hpp"
@@ -900,7 +902,8 @@ void RestHandler::handle_systemone(const std::string& raw_body,
 ///@param options the options JSON object
 ///@param request the request JSON object
 void RestHandler::configure_chat_engine_parameters(const json& options, const json& request,
-                                                   std::optional<bool> nested_think) {
+                                                   std::optional<bool> nested_think,
+                                                   const std::optional<std::string>& reasoning_effort) {
     auto_chat_engine->restore_request_settings();
     if (has_value(request, "temperature")) {
         float temperature = request["temperature"];
@@ -934,9 +937,8 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
         bool enable_thinking = request["think"];
         auto_chat_engine->configure_parameter("enable_think", enable_thinking);
     }
-    if (has_value(request, "reasoning_effort")) {
-        std::string reasoning_effort = request["reasoning_effort"];
-        auto_chat_engine->configure_parameter("reasoning_effort", reasoning_effort);
+    if (reasoning_effort.has_value()) {
+        auto_chat_engine->configure_parameter("reasoning_effort", *reasoning_effort);
     }
     // chat_template_kwargs.enable_thinking, already checked against the two above
     if (nested_think.has_value()) {
@@ -1504,6 +1506,22 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             bad_request(request_error);
             return;
         }
+        std::optional<std::string> canonical_effort;
+        std::optional<std::string> raw_effort;
+        std::string effort_error;
+        if (!chat_reasoning_effort_from_openai(request, canonical_effort, effort_error)) {
+            // Inkling-2 also accepts a numeric effort string in [0, 0.99]; defer that
+            // check until the model is known, and refuse everything else right away.
+            const auto it = request.find("reasoning_effort");
+            if (it != request.end() && it->is_string() && Inkling2::valid_effort(it->get<std::string>())) {
+                raw_effort = it->get<std::string>();
+            } else {
+                bad_request(effort_error, "reasoning_effort");
+                return;
+            }
+        } else if (canonical_effort.has_value()) {
+            raw_effort = request.at("reasoning_effort").get<std::string>();
+        }
 
         if (auto error = generation_model_error(model)) {
             const auto& body = error->at("error");
@@ -1528,6 +1546,23 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             return;
         }
 
+        std::optional<std::string> resolved_effort;
+        if (raw_effort.has_value()) {
+            if (dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr) {
+                // Inkling-2's template distinguishes all seven OpenAI levels and [0, 0.99].
+                resolved_effort = raw_effort;
+            } else if (!canonical_effort.has_value()) {
+                bad_request(effort_error, "reasoning_effort");
+                return;
+            } else if (dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr && *canonical_effort == "none") {
+                bad_request("reasoning_effort \"none\" is not supported by gpt-oss (use \"low\", \"medium\", or \"high\")",
+                            "reasoning_effort");
+                return;
+            } else {
+                resolved_effort = canonical_effort;
+            }
+        }
+
         // The Qwen spelling of think, honored by the Qwen3.5 package only; any other model
         // keeps ignoring it. Refused here, before anything streams.
         std::optional<bool> nested_think;
@@ -1541,7 +1576,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             }
         }
 
-        configure_chat_engine_parameters(options, request, nested_think);
+        configure_chat_engine_parameters(options, request, nested_think, resolved_effort);
         apply_sampling_request(*auto_chat_engine, sampling);
 
         std::vector<size_t> original_indices;

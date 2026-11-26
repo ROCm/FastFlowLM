@@ -173,6 +173,13 @@ public:
     const std::vector<int>& history() const { return token_history; }
     FakeEngine& engine() const { return *engine_; }
 
+    void set_template(const std::string& source) {
+        chat_tmpl = std::make_unique<minja::chat_template>(source, "", "");
+    }
+    std::string render_base_template(nlohmann::ordered_json& messages) {
+        return GPT_OSS::apply_chat_template(messages);
+    }
+
 private:
     FakeEngine* engine_{};
 };
@@ -383,6 +390,32 @@ void ImagesAreRefusedOnOga() {
     RequireImageRefused(cli);
 }
 
+void ReasoningEffortRejectsInvalidLevels() {
+    Harness model;
+    model.set_template("Reasoning: {{ reasoning_effort }}");
+    auto render = [&model]() {
+        nlohmann::ordered_json messages = nlohmann::ordered_json::array();
+        messages.push_back({{"role", "user"}, {"content", "hi"}});
+        return model.render_base_template(messages);
+    };
+    Require(render() == "Reasoning: low", "gpt-oss must default to Reasoning: low");
+    for (const char* valid : {"low", "medium", "high"}) {
+        Require(model.configure_parameter("reasoning_effort", std::string(valid)),
+                std::string("gpt-oss must accept ") + valid);
+        Require(render() == std::string("Reasoning: ") + valid,
+                std::string("gpt-oss must render Reasoning: ") + valid);
+    }
+    for (const char* invalid : {"bogus", "none", "minimal", "xhigh", "max", ""}) {
+        Require(!model.configure_parameter("reasoning_effort", std::string(invalid)),
+                std::string("gpt-oss must refuse ") + invalid);
+        Require(render() == "Reasoning: high",
+                std::string("gpt-oss must not overwrite reasoning_effort with ") + invalid);
+    }
+    Require(model.configure_parameter("reasoning_effort", std::string("low")),
+            "gpt-oss must accept low again after rejected values");
+    Require(render() == "Reasoning: low", "gpt-oss must render Reasoning: low after restore");
+}
+
 }  // namespace
 
 Tokenizer::Tokenizer(const std::string&) { is_doubled_encoded = false; }
@@ -461,6 +494,7 @@ int main() {
     run("an edited reply restores and reports the replay", AnEditedReplyRestoresTheCheckpointAndReportsTheReplay);
     run("an engine that rewinds restores the checkpoint", AnEngineThatRewindsRestoresTheCheckpoint);
     run("images are refused on OGA", ImagesAreRefusedOnOga);
+    run("reasoning_effort rejects levels outside low/medium/high", ReasoningEffortRejectsInvalidLevels);
     if (failures == 0) std::cout << "GPT-OSS frontend regression tests passed\n";
     return failures == 0 ? 0 : 1;
 }

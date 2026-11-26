@@ -87,14 +87,79 @@ def think_off_stream(api: Api) -> None:
         expect(folded.reasoning == "", f"think=false streamed reasoning: {folded.reasoning[:120]!r}")
 
 
+def is_gpt_oss(api: Api) -> bool:
+    family = loaded_family(api)
+    if family is not None:
+        return family == "gpt-oss"
+    return "gpt-oss" in api.model.lower()
+
+
+def effort_body(api: Api, level, *, max_tokens: int = THINK_BUDGET, **fields) -> dict:
+    body = api.body(user(PROMPT), max_tokens=max_tokens, **fields)
+    del body["think"]
+    body["reasoning_effort"] = level
+    return body
+
+
+def expect_effort_400(resp: flm_api.Response, label: str) -> None:
+    expect(resp.status == 400, f"{label}: expected 400, got {resp.status} {resp.error_message()}")
+    err = resp.body.get("error")
+    expect(isinstance(err, dict), f"{label}: expected OpenAI error object, got {resp.body!r}")
+    expect(err.get("param") == "reasoning_effort",
+           f"{label}: expected param='reasoning_effort', got {err!r}")
+
+
 @case
 def reasoning_effort_none(api: Api) -> None:
-    """reasoning_effort "none" turns thinking off like think=false."""
+    """reasoning_effort "none" turns thinking off like think=false (or 400 on gpt-oss)."""
     body = api.body(user(PROMPT), max_tokens=128, reasoning_effort="none")
     del body["think"]
+    if is_gpt_oss(api):
+        expect_effort_400(api.post(body), "gpt-oss reasoning_effort='none'")
+        return
     msg = flm_api.check_message_contract(api.ok(body))
     if not api.always_thinks:
         expect("reasoning_content" not in msg, "reasoning_effort=none still returned reasoning_content")
+
+
+@case
+def reasoning_effort_levels(api: Api) -> None:
+    """Every OpenAI reasoning_effort level above 'none' enables reasoning on a thinking model."""
+    low = flm_api.check_message_contract(api.ok(effort_body(api, "low")))
+    require_reasoning(low)
+    for level in ("minimal", "medium", "high", "xhigh", "max"):
+        msg = flm_api.check_message_contract(api.ok(effort_body(api, level)))
+        expect(bool(msg.get("reasoning_content")),
+               f"reasoning_effort={level!r} returned no reasoning_content (low did)")
+
+
+@case
+def reasoning_effort_invalid_is_400(api: Api) -> None:
+    """An undefined or ill-typed reasoning_effort is 400 naming the field, JSON and stream."""
+    for bad in ("bogus", "", 1, True):
+        expect_effort_400(api.post(effort_body(api, bad, max_tokens=64)),
+                          f"reasoning_effort={bad!r}")
+    s = api.stream(effort_body(api, "bogus", max_tokens=64))
+    expect(s.status == 400, f"stream reasoning_effort='bogus': expected 400, got {s.status}")
+    expect(not s.chunks, f"stream reasoning_effort='bogus' emitted {len(s.chunks)} chunks before 400")
+    expect(isinstance(s.error, dict) and isinstance(s.error.get("error"), dict)
+           and s.error["error"].get("param") == "reasoning_effort",
+           f"stream reasoning_effort='bogus': expected param='reasoning_effort', got {s.error!r}")
+
+
+@case
+def reasoning_effort_error_leaves_no_state(api: Api) -> None:
+    """A refused reasoning_effort changes nothing for the next request."""
+    default = api.body(user(PROMPT), max_tokens=THINK_BUDGET)
+    del default["think"]
+    before = flm_api.check_message_contract(api.ok(default))
+    # Change away from the default on a valid request, then fail, then check default returns.
+    api.ok(effort_body(api, "low"))
+    expect_effort_400(api.post(effort_body(api, "bogus", max_tokens=64)),
+                      "reasoning_effort='bogus' state check")
+    after = flm_api.check_message_contract(api.ok(default))
+    expect(bool(before.get("reasoning_content")) == bool(after.get("reasoning_content")),
+           "a request without reasoning_effort did not get the model's default back after a refused level")
 
 
 @case
@@ -240,6 +305,11 @@ def nested_thinking_wrong_type_is_400(api: Api) -> None:
     conflict["think"] = False
     resp = api.post(conflict)
     expect(resp.status == 400 and "think" in resp.error_message(), f"{resp.status} {resp.error_message()}")
+    for level in ("minimal", "xhigh", "max"):
+        effort_conflict = nested_body(api, False, reasoning_effort=level)
+        resp = api.post(effort_conflict)
+        expect(resp.status == 400 and "reasoning_effort" in resp.error_message(),
+               f"enable_thinking=false + reasoning_effort={level!r}: {resp.status} {resp.error_message()}")
     # the stream is refused before any frame, and the next valid request still works
     s = api.stream(nested_body(api, "yes"))
     expect(s.status == 400, f"stream with a bad switch: expected 400, got {s.status}")

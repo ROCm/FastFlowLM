@@ -238,10 +238,22 @@ client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"thi
 # Turn it back on
 client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"think": True})
 
-# The OpenAI-style knob works too: "none" turns thinking off,
-# "low" / "medium" / "high" turn it on (gpt-oss also uses it as its effort level)
+# The OpenAI-style knob works too: accepts all seven OpenAI levels
 client.chat.completions.create(model="gpt-oss:20b", messages=msgs, reasoning_effort="low")
 ```
+
+On `/v1/chat/completions`, `reasoning_effort` accepts the seven OpenAI levels (`null` or absent leaves the model's default). Any other string or non-string value is rejected with HTTP 400 (`"param": "reasoning_effort"`) before the engine is touched (streaming requests too):
+
+| `reasoning_effort` | On/off thinking models (Qwen3, Qwen3.5, Gemma4, MiniCPM, LFM3, …) | `gpt-oss` | `hy-memory` | `inkling-2` |
+|---|---|---|---|---|
+| `none` | thinking off | **HTTP 400** (cannot turn reasoning off) | `no_think` | `none` |
+| `minimal` | thinking on (`low`) | `low` | `low` | `minimal` |
+| `low` | thinking on (`low`) | `low` | `low` | `low` |
+| `medium` | thinking on (`medium`) | `medium` | `high` | `medium` |
+| `high` | thinking on (`high`) | `high` | `high` | `high` |
+| `xhigh` | thinking on (`high`) | `high` | `high` | `xhigh` |
+| `max` | thinking on (`high`) | `high` | `high` | `max` |
+| anything else | **HTTP 400** | **HTTP 400** | **HTTP 400** | numeric string in `[0, 0.99]`, else **HTTP 400** |
 
 For the Qwen3.5 models, FLM also reads the switch from the shape Qwen's model card uses, so a client written for another Qwen server works unchanged:
 
@@ -414,6 +426,6 @@ Answer **every** call with its own `tool` message before the next request. To ge
 | Tool markup like `<tool_call>` shows up in `content` | The request had no `tools`, or the model's format is `content_only` (check the `Chat format:` log line). |
 | My client creates one tool call per streamed chunk | Merge deltas by `index`, as in [`collect_stream()`](#-accumulating-a-stream-correctly). |
 | `json.loads(arguments)` fails | You parsed while still streaming, or `finish_reason` is `"length"`: raise `max_tokens`. |
-| `reasoning_content` is empty but I asked for thinking | A previous request sent `think: false` and the setting stuck. Send `think: true` explicitly. |
+| `reasoning_content` is empty but I asked for thinking | The model defaults to thinking off (for example Qwen3 / Qwen3.5 on the NPU or Hy-Memory), or the model doesn't reason. Pass `think: true` or a `reasoning_effort` above `"none"` on the request. |
 | Long pause before the first content token | The model is thinking. Stream it and read `reasoning_content`, or turn thinking off. |
 | `usage` is missing in streams | Pass `stream_options={"include_usage": True}`. |
