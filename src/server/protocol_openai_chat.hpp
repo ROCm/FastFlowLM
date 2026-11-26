@@ -16,19 +16,18 @@
 #include <utility>
 #include <nlohmann/json.hpp>
 #include "chat_core.hpp"
+#include "error_model.hpp"
 #include "prefix_cache_usage.hpp"
 
 /// \brief An error as OpenAI's error object; its code is the HTTP status
 inline nlohmann::ordered_json openai_error_json(const chat_error& error) {
-    nlohmann::ordered_json body = {{"message", error.message}, {"type", error.type}};
-    if (!error.param.empty()) {
-        body["param"] = error.param;
-    }
-    body["code"] = error.status;
-    if (error.session_cleared.has_value()) {
-        body["session_cleared"] = *error.session_cleared;
-    }
-    return {{"error", body}};
+    flm::error_model::ErrorValue ev;
+    ev.status = error.status;
+    ev.type = flm::error_model::normalize_type(error.type, error.status);
+    ev.message = error.message;
+    ev.param = error.param;
+    ev.session_cleared = error.session_cleared;
+    return flm::error_model::body_for(flm::error_model::Protocol::OpenAI, ev);
 }
 
 /// \brief finish_reason of a chat completion
@@ -120,7 +119,7 @@ public:
         if (include_usage) {
             response["usage"] = nullptr;
         }
-        send_event("data: " + response.dump() + "\n\n", false);
+        send_event("data: " + flm::error_model::dump_json(response) + "\n\n", false);
     }
 
     void on_end(const chat_turn_end& end) override {
@@ -146,7 +145,7 @@ public:
         // chunk too (cleaning up after a cancelled prompt can fail). Only the
         // first error goes out as an event; a later one is the plain object.
         if (as_event) {
-            send_streaming_response(json("data: " + error_response.dump() + "\n\n"), false);
+            send_streaming_response(json("data: " + flm::error_model::dump_json(error_response) + "\n\n"), false);
             send_streaming_response(json("data: [DONE]\n\n"), true);
         }
         else {
@@ -234,7 +233,7 @@ private:
             // with no choices carries the usage of the whole request
             final_response["usage"] = nullptr;
         }
-        send_event("data: " + final_response.dump() + "\n\n", false);
+        send_event("data: " + flm::error_model::dump_json(final_response) + "\n\n", false);
         if (include_usage) {
             json usage_response = {
                 {"id", stream_id},
@@ -245,11 +244,11 @@ private:
                 {"choices", json::array()},
                 {"usage", usage}
             };
-            send_event("data: " + usage_response.dump() + "\n\n", false);
+            send_event("data: " + flm::error_model::dump_json(usage_response) + "\n\n", false);
         }
         // the server log shows the usage whether or not the client asked for it
-        std::cout << "ChatCompletionChunk: " << final_response << std::endl;
-        std::cout << "Usage: " << usage << std::endl;
+        std::cout << "ChatCompletionChunk: " << flm::error_model::dump_json(final_response) << std::endl;
+        std::cout << "Usage: " << flm::error_model::dump_json(usage) << std::endl;
         // Send the [DONE] message
         send_event("data: [DONE]\n\n", true);
     }
