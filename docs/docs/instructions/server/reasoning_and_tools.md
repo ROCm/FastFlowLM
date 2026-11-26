@@ -242,7 +242,7 @@ client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"thi
 client.chat.completions.create(model="gpt-oss:20b", messages=msgs, reasoning_effort="low")
 ```
 
-On `/v1/chat/completions`, `reasoning_effort` accepts the seven OpenAI levels (`null` or absent leaves the model's default). Any other string or non-string value is rejected with HTTP 400 (`"param": "reasoning_effort"`) before the engine is touched (streaming requests too):
+On `/v1/chat/completions`, `reasoning_effort` accepts the seven OpenAI levels (`null` or absent leaves the model's default); Hy-Memory also takes its own `no_think` and Inkling-2 a numeric level. Any other string or non-string value is rejected with HTTP 400 (`"param": "reasoning_effort"`) before the engine is touched (streaming requests too):
 
 | `reasoning_effort` | On/off thinking models (Qwen3, Qwen3.5, Gemma4, MiniCPM, LFM3, …) | `gpt-oss` | `hy-memory` | `inkling-2` |
 |---|---|---|---|---|
@@ -253,6 +253,7 @@ On `/v1/chat/completions`, `reasoning_effort` accepts the seven OpenAI levels (`
 | `high` | thinking on (`high`) | `high` | `high` | `high` |
 | `xhigh` | thinking on (`high`) | `high` | `high` | `xhigh` |
 | `max` | thinking on (`high`) | `high` | `high` | `max` |
+| `no_think` | **HTTP 400** | **HTTP 400** | `no_think` | **HTTP 400** |
 | anything else | **HTTP 400** | **HTTP 400** | **HTTP 400** | numeric string in `[0, 0.99]`, else **HTTP 400** |
 
 For the Qwen3.5 models, FLM also reads the switch from the shape Qwen's model card uses, so a client written for another Qwen server works unchanged:

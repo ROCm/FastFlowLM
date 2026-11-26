@@ -5,6 +5,7 @@
 /// \note AutoModel wrapper for the Hy-Memory-30B-A3B engine (hy_mem_npu).
 
 #include "AutoModel/modeling_hy_memory.hpp"
+#include "AutoModel/reasoning_effort_levels.hpp"
 #include "models/hy_mem/flm/aie2p/hy_mem_npu.hpp"
 
 #include <chrono>
@@ -99,16 +100,11 @@ std::string HyMemory::apply_chat_template(nlohmann::ordered_json& messages, nloh
 bool HyMemory::configure_parameter(std::string parameter_name, const std::any& value) {
     if (parameter_name == "reasoning_effort") {
         try {
-            const std::string effort = std::any_cast<std::string>(value);
-            if (effort == "none" || effort == "no_think") {
-                this->reasoning_effort = "no_think";
-            } else if (effort == "low") {
-                this->reasoning_effort = "low";
-            } else if (effort == "medium" || effort == "high") {
-                this->reasoning_effort = "high";
-            } else {
+            const auto level = flm::hy_memory_reasoning_effort(std::any_cast<std::string>(value));
+            if (!level.has_value()) {
                 return false;
             }
+            this->reasoning_effort = *level;
             return true;
         } catch (const std::bad_any_cast&) {
             return false;

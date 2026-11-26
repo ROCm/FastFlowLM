@@ -25,6 +25,7 @@
 #include <cctype>
 #include <cstring>
 #include "AutoModel/modeling_gpt_oss.hpp"
+#include "AutoModel/modeling_hy_memory.hpp"
 #include "AutoModel/modeling_inkling2.hpp"
 #include "AutoModel/modeling_minicpm_v.hpp"
 #include "AutoModel/modeling_qwen3_asr.hpp"
@@ -1450,13 +1451,14 @@ void RestHandler::handle_openai_chat_completion(const json& request,
 
 /// \brief Validate and resolve `reasoning_effort` for a Chat Completions request.
 /// \note Inkling-2 accepts all seven OpenAI levels verbatim plus numeric strings in [0, 0.99];
-///       gpt-oss rejects "none"; every other model receives the four canonical FLM levels.
+///       gpt-oss rejects "none"; Hy-Memory also takes its own "no_think"; every other model
+///       receives the four canonical FLM levels.
 static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, bool is_gpt_oss,
-                                          std::optional<std::string>& resolved_effort,
+                                          bool is_hy_memory, std::optional<std::string>& resolved_effort,
                                           std::string& error) {
     resolved_effort.reset();
     std::optional<std::string> canonical;
-    if (!chat_reasoning_effort_from_openai(request, canonical, error)) {
+    if (!chat_reasoning_effort_from_openai(request, canonical, error, is_hy_memory)) {
         const auto it = request.find("reasoning_effort");
         if (is_inkling && it != request.end() && it->is_string() && Inkling2::valid_effort(it->get<std::string>())) {
             resolved_effort = it->get<std::string>();
@@ -1543,19 +1545,23 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         // download a model or unload the currently loaded engine.
         bool pre_is_inkling = false;
         bool pre_is_gpt_oss = false;
+        bool pre_is_hy_memory = false;
         if (model == "model-faker") {
             pre_is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
             pre_is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
+            pre_is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
         } else {
             const auto info = supported_models.get_model_info(supported_models.rectify_model_tag(model)).second;
             const std::string family = info.contains("details") && info["details"].is_object()
                 ? info["details"].value("family", std::string()) : std::string();
             pre_is_inkling = (family == "inkling-2");
             pre_is_gpt_oss = (family == "gpt-oss");
+            pre_is_hy_memory = (family == "hy-memory");
         }
         std::optional<std::string> resolved_effort;
         std::string effort_error;
-        if (!resolve_chat_reasoning_effort(request, pre_is_inkling, pre_is_gpt_oss, resolved_effort, effort_error)) {
+        if (!resolve_chat_reasoning_effort(request, pre_is_inkling, pre_is_gpt_oss, pre_is_hy_memory, resolved_effort,
+                                           effort_error)) {
             bad_request(effort_error, "reasoning_effort");
             return;
         }
@@ -1579,7 +1585,9 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         // Recheck against the loaded frontend in case a pull changed the selected catalog entry.
         const bool is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
         const bool is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
-        if (!resolve_chat_reasoning_effort(request, is_inkling, is_gpt_oss, resolved_effort, effort_error)) {
+        const bool is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
+        if (!resolve_chat_reasoning_effort(request, is_inkling, is_gpt_oss, is_hy_memory, resolved_effort,
+                                           effort_error)) {
             bad_request(effort_error, "reasoning_effort");
             return;
         }

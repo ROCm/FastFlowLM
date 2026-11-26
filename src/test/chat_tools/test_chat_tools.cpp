@@ -1,6 +1,7 @@
 /// \file test_chat_tools.cpp
 /// \brief Tool calling without a model: the output parser on what models write, the decoding grammar
 ///        against the calls the chat templates render, and the constraint a request gets. No NPU needed.
+#include "AutoModel/reasoning_effort_levels.hpp"
 #include "chat/chat_constraint.hpp"
 #include "chat/chat_format.hpp"
 #include "chat/chat_gemma4_tools.hpp"
@@ -609,6 +610,67 @@ void test_reasoning_effort_levels() {
         CHECK(!out.has_value());
         CHECK(error.find("reasoning_effort") != std::string::npos);
     }
+
+    // Hy-Memory also takes its own no_think, passed on as is; every other model refuses it (above)
+    auto parse_hy_memory = [](const json& request, std::optional<std::string>& out, std::string& error) {
+        error.clear();
+        return chat_reasoning_effort_from_openai(request, out, error, true);
+    };
+    CHECK(parse_hy_memory({{"reasoning_effort", "no_think"}}, out, error));
+    CHECK(out.has_value() && *out == "no_think");
+    for (const auto& [raw, canonical] : expected) {
+        CHECK(parse_hy_memory({{"reasoning_effort", raw}}, out, error));
+        CHECK(out.has_value() && *out == canonical);
+    }
+    for (const auto& bad : bad_values) {
+        if (bad == "no_think") continue;
+        CHECK(!parse_hy_memory({{"reasoning_effort", bad}}, out, error));
+        CHECK(!out.has_value());
+        CHECK(error.find("no_think") != std::string::npos || !bad.is_string());
+    }
+    {
+        chat_constraint_request constraint;
+        std::string constraint_error;
+        const json no_tools = json::array();
+        CHECK(chat_constraint_request_from_openai({{"think", true}, {"reasoning_effort", "no_think"}}, no_tools, constraint, constraint_error));
+        CHECK(!constraint.allow_reasoning);
+    }
+}
+
+void test_model_reasoning_effort_levels() {
+    std::printf("Hy-Memory and Inkling-2 read reasoning_effort into their template levels\n");
+    // Hy-Memory's template knows no_think, low and high
+    const std::vector<std::pair<std::string, std::string>> hy_memory = {
+        {"none", "no_think"}, {"no_think", "no_think"}, {"low", "low"}, {"medium", "high"}, {"high", "high"},
+    };
+    for (const auto& [effort, level] : hy_memory) {
+        const auto got = flm::hy_memory_reasoning_effort(effort);
+        CHECK(got.has_value() && *got == level);
+    }
+    // the server maps minimal/xhigh/max before the model sees them; anything else is refused
+    for (const char* effort : {"minimal", "xhigh", "max", "", "HIGH", "think", "0.5"}) {
+        CHECK(!flm::hy_memory_reasoning_effort(effort).has_value());
+    }
+
+    // Inkling-2: the seven OpenAI names verbatim, or a plain decimal in [0, 0.99]
+    for (const char* effort : {"none", "minimal", "low", "medium", "high", "xhigh", "max",
+                               "0", "0.0", "0.5", ".5", "0.99", "00.25"}) {
+        CHECK(flm::inkling_valid_effort(effort));
+    }
+    for (const char* effort : {"", "HIGH", "no_think", "1", "1.0", "0.991", "-0", "-0.5", "+0.5", " 0.5", "0.5 ",
+                               "0x0.8", "0x1p-1", "inf", "nan", "NaN", "0.5x", "e", ".", "1e-400x"}) {
+        CHECK(!flm::inkling_valid_effort(effort));
+    }
+    double level = -1.0;
+    CHECK(flm::parse_inkling_numeric_effort("0.5", level) && level == 0.5);
+    CHECK(flm::parse_inkling_numeric_effort(".25", level) && level == 0.25);
+    CHECK(flm::parse_inkling_numeric_effort("0", level) && level == 0.0);
+    CHECK(flm::parse_inkling_numeric_effort("0.99", level) && level == 0.99);
+    // names are not numbers: the template gets them as strings
+    level = -1.0;
+    CHECK(!flm::parse_inkling_numeric_effort("high", level) && level == -1.0);
+    CHECK(!flm::parse_inkling_numeric_effort("1", level) && level == -1.0);
+    CHECK(!flm::parse_inkling_numeric_effort("0x0.8", level) && level == -1.0);
 }
 
 void test_thinking_switch_in_chat_template_kwargs() {
@@ -659,6 +721,9 @@ void test_thinking_switch_in_chat_template_kwargs() {
     CHECK(message.find("reasoning_effort") != std::string::npos);
     CHECK(resolve({{"reasoning_effort", "max"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}, &message) == -1);
     CHECK(message.find("reasoning_effort") != std::string::npos);
+    // Hy-Memory's no_think is off
+    CHECK(resolve({{"reasoning_effort", "no_think"}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
+    CHECK(resolve({{"reasoning_effort", "no_think"}, {"chat_template_kwargs", {{"enable_thinking", true}}}}) == -1);
     // null native controls count as absent
     CHECK(resolve({{"think", nullptr}, {"chat_template_kwargs", {{"enable_thinking", false}}}}) == 2);
     // without the nested field the native controls are not examined here
@@ -1255,6 +1320,7 @@ int main() {
     test_continued_call();
     test_no_tools_after_tool_turns();
     test_reasoning_effort_levels();
+    test_model_reasoning_effort_levels();
     test_thinking_switch_in_chat_template_kwargs();
     test_gemma4_nullable_types();
     test_gemma4_string_length();

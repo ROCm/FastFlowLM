@@ -57,12 +57,14 @@ bool chat_constraint_request_from_openai(const nlohmann::ordered_json& request,
 /// \param request the chat completion request body
 /// \param canonical_effort set to "none", "low", "medium", or "high", or empty when absent/null
 /// \param error set when the field is not a string or not one of the seven OpenAI levels
+/// \param allow_no_think also take "no_think", Hy-Memory's own spelling of "none"; it is passed
+///        on as is (canonical_effort "no_think")
 /// \return false when the request must be refused
 /// \note Null reads as absent. Mapping: minimal -> low, xhigh/max -> high; the other four keep
 ///       their name.
 bool chat_reasoning_effort_from_openai(const nlohmann::ordered_json& request,
                                        std::optional<std::string>& canonical_effort,
-                                       std::string& error);
+                                       std::string& error, bool allow_no_think = false);
 
 /// \brief The thinking switch in the Qwen spelling, `chat_template_kwargs.enable_thinking`
 /// \param request the chat completion request body

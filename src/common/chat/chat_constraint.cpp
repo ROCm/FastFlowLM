@@ -47,7 +47,7 @@ std::optional<std::string> canonical_reasoning_effort(const std::string& level) 
 } // namespace
 
 bool chat_reasoning_effort_from_openai(const json& request, std::optional<std::string>& canonical_effort,
-                                       std::string& error) {
+                                       std::string& error, bool allow_no_think) {
     canonical_effort.reset();
     const json& effort = field(request, "reasoning_effort");
     if (effort.is_null()) {
@@ -58,9 +58,14 @@ bool chat_reasoning_effort_from_openai(const json& request, std::optional<std::s
         return false;
     }
     const std::string raw = effort.get<std::string>();
+    if (allow_no_think && raw == "no_think") {
+        canonical_effort = raw;
+        return true;
+    }
     auto mapped = canonical_reasoning_effort(raw);
     if (!mapped.has_value()) {
-        error = "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max; got \"" + raw + "\"";
+        error = std::string("reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max") +
+                (allow_no_think ? ", no_think" : "") + "; got \"" + raw + "\"";
         return false;
     }
     canonical_effort = std::move(*mapped);
@@ -96,7 +101,9 @@ bool chat_thinking_override_from_openai(const json& request, std::optional<bool>
     const json& effort = field(request, "reasoning_effort");
     if (effort.is_string()) {
         const std::string level = effort.get<std::string>();
-        if (const auto canonical = canonical_reasoning_effort(level)) {
+        // no_think is Hy-Memory's "none"; other models refuse it in chat_reasoning_effort_from_openai
+        const auto canonical = level == "no_think" ? std::optional<std::string>("none") : canonical_reasoning_effort(level);
+        if (canonical) {
             const bool effort_on = *canonical != "none";
             if ((!effort_on && nested) || (effort_on && !nested)) {
                 error = "chat_template_kwargs.enable_thinking contradicts reasoning_effort \"" + level + "\"";
@@ -126,6 +133,9 @@ bool chat_constraint_request_from_openai(const json& request, const json& tools,
     const auto canonical = effort.is_string() ? canonical_reasoning_effort(effort.get<std::string>()) : std::nullopt;
     if (canonical.has_value()) {
         out.allow_reasoning = (*canonical != "none");
+    } else if (effort == "no_think") {
+        // Hy-Memory's "none"; any other model refuses the request
+        out.allow_reasoning = false;
     } else if (think.is_boolean() && !think.get<bool>()) {
         out.allow_reasoning = false;
     }
