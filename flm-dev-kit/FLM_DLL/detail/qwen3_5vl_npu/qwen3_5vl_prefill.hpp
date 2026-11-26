@@ -9,6 +9,7 @@
 #include "qwen3_5vl_model_def.hpp"
 #include "utils/avx512_util.hpp"
 #include "cpu_functions.hpp"
+#include "qwen3_5vl_launch.hpp"
 
 // ---------------------------------------------------------------------------
 // Prefill profiling.
@@ -93,14 +94,20 @@ struct qwen3_5vl_linear_block_prefill_context{
     buffer<bf16> gate;
     buffer<float> alpha_beta;
 
+    // control-packet switches (qwen3_5vl_launch.hpp): conv1d and the delta net run as guests in the mm context,
+    // one window per layer; null without them
+    qwen3_5vl_launch* ll;
+    npu_app_manager* gemm_mgr;
+
     qwen3_5vl_linear_block_prefill_context(
         qwen3_5vl_desc* desc,
         qwen3_5vl_npu_sequence* seq_gen,
         qwen3_5vl_common_buffers* common_bufs,
         npu_app_manager* gemm_app_manager,
         npu_app_manager* conv1d_app_manager,
-        npu_app_manager* gate_delta_net_manager
-    ) : desc(desc), seq_gen(seq_gen), common_bufs(common_bufs)
+        npu_app_manager* gate_delta_net_manager,
+        qwen3_5vl_launch* ll = nullptr
+    ) : desc(desc), seq_gen(seq_gen), common_bufs(common_bufs), ll(ll), gemm_mgr(gemm_app_manager)
     {
         this->linear_qkv_proj = gemm_app_manager->create_app();
         this->linear_g_proj = gemm_app_manager->create_app();
@@ -159,12 +166,9 @@ struct qwen3_5vl_linear_block_prefill_context{
         memcpy(cache.data(), qkv.data() + L * desc->Linear_DQKV, (size_t)(desc->conv_kernel_size - 1) * desc->Linear_DQKV * sizeof(bf16));
         cache.sync_to_device();
         qkv.sync_to_device();
+        PREFILL_PROF_TICK("linear:conv_cache");
 
-        conv1d(conv_qkv, qkv, ssm_weights);
-
-        conv_qkv.sync_from_device();
-        PREFILL_PROF_TICK("linear:conv1d");
-
+        // alpha / beta depend on x only: done before conv1d, so conv1d and the delta net can run back to back
         float* alpha_ptr = alpha_beta.data();
         float* beta_ptr  = alpha_ptr + alpha_beta.size() / 2;
         cpu_func::_cpu_mm<bf16>(alpha_ptr, alpha_proj_cpu.data(), common_bufs->x.data(), L, desc->D, desc->linear_num_v_heads);
@@ -187,15 +191,34 @@ struct qwen3_5vl_linear_block_prefill_context{
         alpha_beta.sync_to_device();
         PREFILL_PROF_TICK("linear:alpha_beta");
 
-        deltanet(
-            cache,
-            conv_qkv,
-            alpha_beta,
-            common_bufs->after_mix
-        );
+#if !defined(FLM_USE_HRX)
+        if (ll) {
+            // one submission: mm -> conv1d -> delta net -> mm
+            std::vector<qwen3_5vl_launch::hop> hops(2);
+            hops[0].to = "mm_then_conv";
+            hops[0].runs.push_back(conv1d.create_run(conv_qkv, qkv, ssm_weights));
+            hops[1].to = "conv_then_gdn";
+            hops[1].runs.push_back(deltanet.create_run(cache, conv_qkv, alpha_beta, common_bufs->after_mix));
+            ll->window(gemm_mgr, hops, "gdn_then_mm");
+            common_bufs->after_mix.sync_from_device();
+            PREFILL_PROF_TICK("linear:conv1d+deltanet");
+        } else
+#endif
+        {
+            conv1d(conv_qkv, qkv, ssm_weights);
+            conv_qkv.sync_from_device();
+            PREFILL_PROF_TICK("linear:conv1d");
 
-        common_bufs->after_mix.sync_from_device();
-        PREFILL_PROF_TICK("linear:deltanet");
+            deltanet(
+                cache,
+                conv_qkv,
+                alpha_beta,
+                common_bufs->after_mix
+            );
+
+            common_bufs->after_mix.sync_from_device();
+            PREFILL_PROF_TICK("linear:deltanet");
+        }
 
         bf16* gate_rms_norm_weight_ptr = ssm_weights.data() + desc->get_linear_ssm_norm_offset() / sizeof(bf16);
 
@@ -251,13 +274,18 @@ struct qwen3_5vl_attn_block_prefill_context{
     buffer<bf16> g;
     buffer<bf16> g_sigmoid;
 
+    // control-packet switches (qwen3_5vl_launch.hpp): attention runs as a guest in the mm context; null without them
+    qwen3_5vl_launch* ll;
+    npu_app_manager* gemm_mgr;
+
     qwen3_5vl_attn_block_prefill_context(
         qwen3_5vl_desc* desc,
         qwen3_5vl_npu_sequence* seq_gen,
         qwen3_5vl_common_buffers* common_bufs,
         npu_app_manager* gemm_app_manager,
-        npu_app_manager* mha_app_manager
-    ) : desc(desc), seq_gen(seq_gen), common_bufs(common_bufs){
+        npu_app_manager* mha_app_manager,
+        qwen3_5vl_launch* ll = nullptr
+    ) : desc(desc), seq_gen(seq_gen), common_bufs(common_bufs), ll(ll), gemm_mgr(gemm_app_manager){
         this->q_proj = gemm_app_manager->create_app();
         this->k_proj = gemm_app_manager->create_app();
         this->v_proj = gemm_app_manager->create_app();
@@ -320,6 +348,15 @@ struct qwen3_5vl_attn_block_prefill_context{
         fill_kv_cache(k, v, cache, L_begin, L);
         PREFILL_PROF_TICK("attn:fill_kv_cache");
 
+#if !defined(FLM_USE_HRX)
+        if (ll) {
+            // one submission: mm -> attention -> mm
+            std::vector<qwen3_5vl_launch::hop> hops(1);
+            hops[0].to = "mm_then_attn";
+            hops[0].runs.push_back(mha.create_run(common_bufs->after_mix, q, cache));
+            ll->window(gemm_mgr, hops, "attn_then_mm");
+        } else
+#endif
         mha(common_bufs->after_mix, q, cache);
 
         common_bufs->after_mix.sync_from_device();
@@ -440,6 +477,8 @@ struct qwen3_5vl_prefill_context{
     npu_app_manager* mha_app_manager;
     npu_app_manager * conv1d_app_manager;
     npu_app_manager * gate_delta_net_manager;
+    // conv1d / delta net / attention as guests in the mm context (qwen3_5vl_launch.hpp); ll.ready says so
+    qwen3_5vl_launch ll;
 
     qwen3_5vl_prefill_context(){}
     qwen3_5vl_prefill_context(
@@ -459,9 +498,17 @@ struct qwen3_5vl_prefill_context{
         // its fused GLU epilogue (rtp_act 3) computes silu(gate) * up in the array; QWEN35_NO_GLU=1 keeps the host GLU
         const char* no_glu = std::getenv("QWEN35_NO_GLU");
         seq_gen->mm_glu = use_bfp && desc->intermediate_size % 512 == 0 && !(no_glu && no_glu[0] == '1');
-        this->conv1d_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "conv.xclbin"));
-        this->gate_delta_net_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "GateDeltaNet_prefill.xclbin"));
-        this->mha_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "attn.xclbin"));
+        // conv1d, the delta net and attention in mm_rtm2_glu's context when the folder has qwen3_5.switches (built
+        // against it, see qwen3_5vl_launch.hpp); runlists need preemption off
+        if (use_bfp && !npu->is_preemption_enabled() && ll.ensure(gemm_app_manager, utils::path_join(xdir, "qwen3_5.switches"))) {
+            header_print("qwen3.5", "prefill conv1d, delta net and attention share the mm hardware context (control-packet switches)");
+            this->conv1d_app_manager = this->gate_delta_net_manager = this->mha_app_manager = gemm_app_manager;
+        } else {
+            this->conv1d_app_manager = npu->register_xclbin(utils::path_join(xdir, "conv.xclbin"));
+            this->gate_delta_net_manager = npu->register_xclbin(utils::path_join(xdir, "GateDeltaNet_prefill.xclbin"));
+            this->mha_app_manager = npu->register_xclbin(utils::path_join(xdir, "attn.xclbin"));
+        }
+        qwen3_5vl_launch* sw = ll.ready ? &ll : nullptr;
 
         // create buffers for storing dequantized weights
         // this is to ensure linear_qkv buffer has same size with attn qkvg
@@ -475,7 +522,8 @@ struct qwen3_5vl_prefill_context{
             &common_bufs,
             gemm_app_manager,
             conv1d_app_manager,
-            gate_delta_net_manager
+            gate_delta_net_manager,
+            sw
         );
 
         this->attn_block = std::make_unique<qwen3_5vl_attn_block_prefill_context>(
@@ -483,7 +531,8 @@ struct qwen3_5vl_prefill_context{
             seq_gen,
             &common_bufs,
             gemm_app_manager,
-            mha_app_manager
+            mha_app_manager,
+            sw
         );
 
         this->mlp = std::make_unique<qwen3_5vl_mlp_prefill_context>(
