@@ -75,8 +75,16 @@ Qwen3_5VLImageEncoder::Qwen3_5VLImageEncoder(LM_Config config, npu_xclbin_manage
 
     #endif
 
-    this->fla = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "vision_attn.xclbin"));
     this->proj = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "vision_mm.xclbin"));
+    // the attention runs in vision_mm's context when the model's xclbin folder has qwen3_5_vision.switches (built
+    // against it, see qwen3_5vl_launch.hpp); runlists need preemption off
+    if (!npu->is_preemption_enabled() &&
+        vll.ensure(this->proj, utils::path_join(config.exec_path, "xclbins", config.model_name, "qwen3_5_vision.switches"))) {
+        header_print("qwen3.5", "vision attention shares the vision mm hardware context (control-packet switches)");
+        this->fla = this->proj;
+    } else {
+        this->fla = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "vision_attn.xclbin"));
+    }
 
     this->flash_attention_app = this->fla->create_app();
     this->qkv_projection_app = this->proj->create_app();
@@ -710,7 +718,18 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         auto time_start_mha = std::chrono::high_resolution_clock::now();
         mm_qkv_output_mha_input.sync_to_device();
         mha_qkv_output_mm_o_input.sync_to_device();
-        flash_attention_app(mha_qkv_output_mm_o_input, mm_qkv_output_mha_input);
+#if !defined(FLM_USE_HRX)
+        if (vll.ready) {
+            // one submission: mm -> attention -> mm
+            std::vector<qwen3_5vl_launch::hop> hops(1);
+            hops[0].to = "mm_then_attn";
+            hops[0].runs.push_back(flash_attention_app.create_run(mha_qkv_output_mm_o_input, mm_qkv_output_mha_input));
+            vll.window(this->proj, hops, "attn_then_mm");
+        } else
+#endif
+        {
+            flash_attention_app(mha_qkv_output_mm_o_input, mm_qkv_output_mha_input);
+        }
         mha_qkv_output_mm_o_input.sync_from_device();
 
         DEBUG_BLOCK(1,

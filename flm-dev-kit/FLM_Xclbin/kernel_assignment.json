@@ -182,6 +182,7 @@
         "mm.xclbin": "xclbins-dequant_mm_512x512x512",
         "mm_rtm2_glu.xclbin": "xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512",
         "qwen3_5.switches": "xclbins-Qwen3_5_prefill_switches",
+        "qwen3_5_vision.switches": "xclbins-Qwen3_5_vision_switches",
         "vision_mm.xclbin" : "xclbins-MM_host7_mt_variant_bias_QWEN3_5_4B-VISION-MM",
         "vision_attn.xclbin": "xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_4B-VISION-ATTENTION"
       },

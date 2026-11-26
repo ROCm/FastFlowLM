@@ -561,6 +561,12 @@
         "xclbins-Qwen3_5_prefill_switches"
       ]
     },
+    "Qwen3_5/vision_switches": {
+      "model_types": [],
+      "artifacts": [
+        "xclbins-Qwen3_5_vision_switches"
+      ]
+    },
     "Qwen3_5/qwen3_5_decoding": {
       "model_types": [
         "QWEN3_5_4B",

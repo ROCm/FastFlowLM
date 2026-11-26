@@ -652,7 +652,8 @@ buffer<bf16> qwen3_5vl_npu::forward(int ids){
 
 buffer<bf16> qwen3_5vl_npu::prefill(std::vector<int>& ids, void* payload){
     // warm switches need the array to themselves from the first layer to the last (qwen3_5vl_launch.hpp)
-    qwen3_5vl_array_lock array(this->_impl->pctx && this->_impl->pctx->ll.ready);
+    qwen3_5vl_array_lock array((this->_impl->pctx && this->_impl->pctx->ll.ready) ||
+                               (this->_impl->qwen3_5vl_image_encoder && this->_impl->qwen3_5vl_image_encoder->vll.ready));
     try {
         buffer<bf16> result = this->_impl->prefill(ids, payload);
         return result;

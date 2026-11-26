@@ -21,6 +21,10 @@
 ///        On by default when the model's xclbin folder has qwen3_5.switches and the prefill matmul is
 ///        mm_rtm2_glu; QWEN35_NO_SWITCH=1 turns it off, QWEN35_SWITCH_DIR=<dir> loads a directory instead.
 ///        Without it conv.xclbin, GateDeltaNet_prefill.xclbin and attn.xclbin keep their own contexts.
+///
+///        The vision encoder (qwen3_5vl_image.cpp) has a second instance, switches cold_mm, mm_then_attn and
+///        attn_then_mm for vision_mm.xclbin and vision_attn.xclbin (FLM_Xclbin/Qwen3_5/vision_switches), file
+///        qwen3_5_vision.switches, environment QWEN35_VISION_NO_SWITCH / QWEN35_VISION_SWITCH_DIR.
 
 #include <algorithm>
 #include <cstdint>
@@ -101,6 +105,11 @@ struct qwen3_5vl_launch {
     /// @brief the switches to load: the cold one (mm's own state), and to and from each guest
     std::vector<std::string> names = {"cold_mm", "mm_then_conv", "conv_then_gdn", "gdn_then_mm",
                                       "mm_then_attn", "attn_then_mm"};
+    /// @brief prefix of the instance's environment switches: <env>_NO_SWITCH, <env>_SWITCH_DIR
+    std::string env = "QWEN35";
+
+    qwen3_5vl_launch() = default;
+    qwen3_5vl_launch(std::vector<std::string> n, std::string e) : names(std::move(n)), env(std::move(e)) {}
 
 #if !defined(FLM_USE_HRX)
     struct Sw {
@@ -229,14 +238,14 @@ struct qwen3_5vl_launch {
     }
 #endif
 
-    /// @brief load the switches for the mm app manager's context: QWEN35_SWITCH_DIR (a directory, rig), else
-    ///        `file`, unless QWEN35_NO_SWITCH=1. A failure is logged and leaves every kernel in its own context.
+    /// @brief load the switches for the mm app manager's context: <env>_SWITCH_DIR (a directory, rig), else
+    ///        `file`, unless <env>_NO_SWITCH=1. A failure is logged and leaves every kernel in its own context.
     template <class Mgr>
     bool ensure(Mgr* gemm, const std::string& file) {
 #if !defined(FLM_USE_HRX)
-        const char* off = std::getenv("QWEN35_NO_SWITCH");
+        const char* off = std::getenv((env + "_NO_SWITCH").c_str());
         if (!gemm || (off && off[0] == '1')) return false;
-        const char* sw_dir = std::getenv("QWEN35_SWITCH_DIR");
+        const char* sw_dir = std::getenv((env + "_SWITCH_DIR").c_str());
         const bool dir = sw_dir && sw_dir[0];
         if (!dir && (file.empty() || !std::ifstream(file).good())) return false;
         try {
@@ -245,7 +254,7 @@ struct qwen3_5vl_launch {
         } catch (const std::exception& e) {
             sw.clear();
             ready = false;
-            header_print("qwen3.5", "control-packet switches off: " << e.what());
+            header_print("qwen3.5", env << " control-packet switches off: " << e.what());
         }
         return ready;
 #else

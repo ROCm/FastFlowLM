@@ -9,6 +9,7 @@
 #include "vision/conv3dPatchEmbedding.hpp"
 #include "vision/rot_pos_emb.hpp"
 #include "vision/norm.hpp"
+#include "qwen3_5vl_launch.hpp"
 
 class Qwen3_5VLImageEncoder{
 
@@ -74,6 +75,8 @@ class Qwen3_5VLImageEncoder{
 
         npu_app_manager* fla;
         npu_app_manager* proj;
+        // the attention as a guest in proj's context (qwen3_5vl_launch.hpp); vll.ready says so, fla is then proj
+        qwen3_5vl_launch vll{{"cold_mm", "mm_then_attn", "attn_then_mm"}, "QWEN35_VISION"};
 
         // define the necessary bitstream no
         npu_app flash_attention_app;
