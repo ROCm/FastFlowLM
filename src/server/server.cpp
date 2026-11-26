@@ -7,6 +7,7 @@
  *  \version 0.9.24
  */
 #include "server.hpp"
+#include "device_load.hpp"
 #include "rest_handler.hpp"
 #include "utils/json_log.hpp"
 #include "utils/log_privacy.hpp"
@@ -1147,6 +1148,20 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             rest_handler->handle_pull(request_json, send_response, send_streaming_response);
         });
     
+    server->register_handler("GET", "/v1/flm/devices",
+        [read = device_load::make_reader(), host = server.get()](const auto&, auto send, auto, auto, auto) {
+            const auto sample = read();
+            const auto row = [](const char* kind, const device_load::Device& d) -> json {
+                return {{"device", kind}, {"name", d.name}, {"utilization_percent", d.usage.total},
+                        {"own_utilization_percent", d.usage.own}, {"memory_shared_bytes", d.shared},
+                        {"memory_dedicated_bytes", d.dedicated}};
+            };
+            const auto [busy, queued] = host->accelerator_status();
+            send(json{{"devices", {row("npu", sample.npu), row("gpu", sample.gpu)}},
+                      {"system_memory_available_bytes", sample.available}, {"sampled_at", sample.sampled_at},
+                      {"server", {{"accelerator_busy", busy}, {"queued_requests", queued}}}});
+        });
+
     // Add OpenAI endpoints
     server->register_handler("GET", "/v1/version",
         [rest_handler](const http::request<http::string_body>& req,

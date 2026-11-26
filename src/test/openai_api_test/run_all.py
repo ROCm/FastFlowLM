@@ -15,6 +15,7 @@ import sys
 import flm_api
 import test_connections
 import test_continue_final_message
+import test_device_load
 import test_errors
 import test_http_safety
 import test_log_privacy
@@ -30,7 +31,7 @@ import test_tool_calls
 
 MODULES = [test_response_shape, test_reasoning, test_tool_calls, test_response_format, test_logprobs, test_sampling,
            test_continue_final_message, test_errors, test_images, test_connections, test_http_safety,
-           test_log_privacy, test_models, test_message_roles]
+            test_log_privacy, test_models, test_message_roles, test_device_load]
 
 
 def main() -> None:
