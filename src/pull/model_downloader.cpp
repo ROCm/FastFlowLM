@@ -11,6 +11,8 @@
 #include <iomanip>
 #include <fstream>
 #include <cctype>
+#include <limits>
+#include <map>
 #include <unordered_set>
 
 namespace {
@@ -77,6 +79,19 @@ struct ResolvedModelFile {
     download_utils::HashAlgorithm hash_algorithm;
     std::string hash;
 };
+
+struct SourceChoiceReset {
+    model_list& models;
+    const std::string& tag;
+    ~SourceChoiceReset() { models.choose_source(tag, std::nullopt); }
+};
+
+bool matches_record(const std::string& path, const ResolvedModelFile& file) {
+    std::error_code error;
+    if (std::filesystem::file_size(path, error) != file.size || error) return false;
+    return file.hash == (file.hash_algorithm == download_utils::HashAlgorithm::Sha256
+        ? download_utils::calculate_file_sha256(path) : download_utils::calculate_git_blob_oid(path));
+}
 
 /// \brief whether an entry's files come from pinned upstream revisions
 /// \param model_info the resolved model_list.json entry
@@ -156,10 +171,9 @@ std::optional<std::string> model_file_folder(std::string_view file) {
 namespace {
 
 ResolvedModelFile resolve_model_file(const nlohmann::json& model_info,
-                                     const nlohmann::json& records,
+                                     const nlohmann::json& record,
                                      const std::string& filename,
                                      bool use_modelscope) {
-    const auto& record = find_file_record(records, filename);
     const bool is_lfs = record.contains("lfs");
     const bool has_explicit_sha256 = record.contains("sha256");
     return {
@@ -310,14 +324,62 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
     return pull_own_model(model_tag, use_modelscope, force_redownload);
 }
 
+std::string ModelDownloader::preview_pull(const std::string& model_tag, bool use_modelscope, bool force_redownload) {
+    std::ostringstream plan;
+    std::uint64_t total = 0;
+    const auto preview_package = [&](const std::string& tag, bool force) {
+        SourceChoiceReset reset{supported_models, tag};
+        choose_pull_source(tag, use_modelscope, force, /*offline=*/true);
+        const auto [resolved, info] = supported_models.get_model_info(tag);
+        const auto path = supported_models.get_model_path(resolved);
+        const auto records = load_model_file_records(info, resolved);
+        const std::vector<std::string> files = info.at("files");
+        if (files.empty()) throw std::runtime_error("No required files listed for " + resolved);
+        std::map<std::string, const nlohmann::json*> pending;
+        for (const auto& record : records) {
+            const auto name = record.at("path").get<std::string>();
+            if (!pending.emplace(name, &record).second) throw std::runtime_error("Duplicate file record for " + name);
+        }
+
+        const auto status = own_model_status(resolved, /*sub_process_mode=*/true, /*fast_check=*/true);
+        if (status == ModelStatus::Incompatible)
+            throw std::runtime_error("Model is incompatible with this version of FastFlowLM: " + resolved);
+        const bool verify = uses_pinned_upstream_integrity(info) || status == ModelStatus::Outdated;
+        plan << resolved << ":\n";
+        for (const auto& name : files) {
+            const auto entry = pending.extract(name);
+            if (!entry) throw std::runtime_error("Missing file record or duplicate required file: " + name);
+            const auto& record = *entry.mapped();
+            const auto& size = record.at("size");
+            if (!size.is_number_integer() || (!size.is_number_unsigned() && size.get<std::int64_t>() < 0))
+                throw std::runtime_error("invalid download size for " + name);
+            const auto file = resolve_model_file(info, record, name, use_modelscope);
+            if (file.hash.size() != (file.hash_algorithm == download_utils::HashAlgorithm::Sha256 ? 64u : 40u)
+                || !std::all_of(file.hash.begin(), file.hash.end(), [](unsigned char c) { return std::isxdigit(c); }))
+                throw std::runtime_error("invalid download hash for " + name);
+            const auto local = get_model_file_path(path, name);
+            const bool reuse = !force && file_exists(local) && (!verify || matches_record(local, file));
+            plan << (reuse ? "  reuse " : "  download ") << name << " (" << file.size << " B)";
+            if (!reuse) {
+                if (file.size > std::numeric_limits<std::uint64_t>::max() - total)
+                    throw std::overflow_error("Download size exceeds 64 bits");
+                total += file.size;
+                if (file_exists(local + ".part")) plan << " [.part: may resume; full size counted]";
+            }
+            plan << '\n';
+        }
+    };
+    if (const auto base = supported_models.get_base_model(model_tag)) preview_package(*base, false);
+    preview_package(model_tag, force_redownload);
+    plan << "Total download: " << total << " B (" << std::fixed << std::setprecision(2)
+         << static_cast<double>(total) / (1024 * 1024 * 1024) << " GiB)\n";
+    return plan.str();
+}
+
 bool ModelDownloader::pull_own_model(const std::string& model_tag, bool use_modelscope, bool force_redownload) {
     try {
         // Once the pull is over, the files on disk say again which source it got.
-        struct SourceChoiceReset {
-            model_list& models;
-            const std::string& tag;
-            ~SourceChoiceReset() { models.choose_source(tag, std::nullopt); }
-        } reset_source_choice{supported_models, model_tag};
+        SourceChoiceReset reset_source_choice{supported_models, model_tag};
         choose_pull_source(model_tag, use_modelscope, force_redownload);
 
         // Get model info
@@ -436,7 +498,7 @@ bool ModelDownloader::pull_own_model(const std::string& model_tag, bool use_mode
 /// \note The preferred source is used when it already supplied the files on
 ///       disk or answers now; otherwise the entry's own source is.
 void ModelDownloader::choose_pull_source(const std::string& model_tag, bool use_modelscope,
-                                         bool force_redownload) {
+                                         bool force_redownload, bool offline) {
     const auto own_files = supported_models.preferred_source_files(model_tag);
     if (own_files.empty()) return;
 
@@ -450,6 +512,8 @@ void ModelDownloader::choose_pull_source(const std::string& model_tag, bool use_
     if (pulled && !force_redownload) return;
 
     if (!use_modelscope) {
+        if (offline)
+            throw std::runtime_error("Cannot choose the preferred source for " + model_tag + " offline");
         const auto probe = resolve_file_source(preferred, own_files.front(), false);
         if (download_utils::url_accessible(probe.url, probe.use_hf_token)) {
             header_print("FLM", "Using preferred source: " + preferred_url);
@@ -458,8 +522,10 @@ void ModelDownloader::choose_pull_source(const std::string& model_tag, bool use_
         header_print("FLM", "Preferred source is not accessible: " + preferred_url);
     }
     supported_models.choose_source(model_tag, false);
-    const std::string fallback_url = supported_models.get_model_info(model_tag).second.at("url");
-    header_print("FLM", "Falling back to: " + fallback_url);
+    if (!offline) {
+        const std::string fallback_url = supported_models.get_model_info(model_tag).second.at("url");
+        header_print("FLM", "Falling back to: " + fallback_url);
+    }
 }
 
 /// \brief Model not found
@@ -580,7 +646,7 @@ std::pair<nlohmann::json, float> ModelDownloader::build_download_list(
             continue;
         }
 
-        const auto file = resolve_model_file(model_info, records, filename, modelscope);
+        const auto file = resolve_model_file(model_info, find_file_record(records, filename), filename, modelscope);
         const float file_size = static_cast<float>(file.size) / 1024 / 1024;
         sum_file_size += file_size;
         downloads.push_back({
@@ -760,7 +826,7 @@ bool ModelDownloader::verify_and_clean_files(const std::string& model_tag, bool 
             }
 
             const auto file = resolve_model_file(
-                model_info, records, filename, use_modelscope);
+                model_info, find_file_record(records, filename), filename, use_modelscope);
             std::string local_path = get_model_file_path(model_path, filename);
 
             // If the file isn't present locally, there's nothing to verify or
@@ -771,15 +837,7 @@ bool ModelDownloader::verify_and_clean_files(const std::string& model_tag, bool 
                 continue;
             }
 
-            const std::string local_oid =
-                file.hash_algorithm == download_utils::HashAlgorithm::Sha256
-                    ? download_utils::calculate_file_sha256(local_path)
-                    : download_utils::calculate_git_blob_oid(local_path);
-            std::error_code size_error;
-            const auto local_size = std::filesystem::file_size(local_path, size_error);
-            const bool size_matches = !size_error && local_size == file.size;
-
-            if (size_matches && local_oid == file.hash) {
+            if (matches_record(local_path, file)) {
                 if (!sub_process_mode) {
                     header_print("FLM", "Success!");
                 }

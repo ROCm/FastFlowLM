@@ -45,6 +45,7 @@ struct program_args_t {
 
     // for pull command
     bool force_redownload = false;
+    bool dry_run = false;
     
     // for download related command
     bool modelscope = false;

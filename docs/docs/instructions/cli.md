@@ -67,6 +67,14 @@ Download a model from HuggingFace without launching it:
 flm pull llama3.2:3b
 ```
 
+To see what a pull would fetch without changing the model store or contacting a server:
+
+```bash
+flm pull qwen3.8-dflash2:27b --dry-run
+```
+
+The preview lists files to download or reuse under each tag, starting with the required base model. The total is the full manifest size of files to download, in bytes and GiB. A `.part` file may let a real pull resume and transfer less. The estimate excludes retries, protocol overhead, and peak disk usage. If local metadata is missing or the source can only be chosen online, the command exits with an error instead of guessing. Add `--force` to count the requested tag again without forcing its base.
+
 This code forces a re-download of the model, overwriting the current version.
 
 ```shell

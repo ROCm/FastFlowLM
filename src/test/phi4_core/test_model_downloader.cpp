@@ -670,6 +670,61 @@ std::string Captured(F&& f) {
     return output.str();
 }
 
+void TestPullPreviewCountsEachPackageWithoutWriting() {
+    BaseModelFixture fixture("dry-run");
+    ModelDownloader downloader(fixture.models);
+    const auto preview = [&](bool force = false) {
+        return downloader.preview_pull(kDependantTag, false, force);
+    };
+    const auto base_bytes = fs::file_size(fixture.root / "hf/base/resolve/config.json") + 12;
+    const auto own_bytes = fs::file_size(fixture.root / "hf/dep/resolve/config.json") + 13;
+    const auto empty = preview();
+    RequireContains(empty, "Total download: " + std::to_string(base_bytes + own_bytes) + " B");
+    TEST_REQUIRE(CountOccurrences(empty, "download config.json") == 2);
+    TEST_REQUIRE(empty.find(kBaseTag) < empty.find(kDependantTag));
+    TEST_REQUIRE(!fs::exists(fixture.root / "models"));
+    fixture.InstallBase();
+    Write(fixture.dep_path() / "draft.bin.part", "draft");
+    RequireContains(preview(), "Total download: " + std::to_string(own_bytes) + " B");
+    RequireContains(preview(), ".part");
+    TEST_REQUIRE(Read(fixture.dep_path() / "draft.bin.part") == "draft");
+    fixture.InstallDependant();
+    RequireContains(preview(), "Total download: 0 B");
+    RequireContains(preview(true), "Total download: " + std::to_string(own_bytes) + " B");
+    fs::remove(fixture.dep_path() / "draft.bin");
+    auto info = ReadJson(fixture.root / "model_info.json");
+    info[kDependantTag][1]["size"] = 4294967297ULL;
+    Write(fixture.root / "model_info.json", info.dump());
+    RequireContains(preview(), "Total download: 4294967297 B");
+    info[kDependantTag][1]["size"] = -1;
+    Write(fixture.root / "model_info.json", info.dump());
+    RequireContains(RequireThrows(preview), "invalid download size for draft.bin");
+}
+
+void TestPreviewInspectsPinnedFinalsWithoutRepair() {
+    DownloaderFixture fixture;
+    fixture.WriteValidFiles();
+    ModelDownloader downloader(fixture.models);
+    Write(fixture.model_path() / "a.bin", "wrong");  // same size as the valid file
+    const auto plan = downloader.preview_pull("test-model:1b");
+    RequireContains(plan, "download a.bin (5 B)");
+    RequireContains(plan, "Total download: 5 B");
+    TEST_REQUIRE(Read(fixture.model_path() / "a.bin") == "wrong");
+}
+
+void TestPreviewOnlyUsesLocallyDeterminedPreferredSource() {
+    PreferredSourceFixture fixture("preferred-preview");
+    ModelDownloader downloader(fixture.models);
+    const auto preview = [&](bool force = false) {
+        return downloader.preview_pull(kPreferredTag, false, force);
+    };
+    RequireContains(RequireThrows(preview), "offline");
+    TEST_REQUIRE(fixture.resolved_files() == kBaseFiles);
+    Write(fixture.model_path() / "amd.gguf", "q4");
+    RequireContains(preview(), "reuse amd.gguf");
+    RequireContains(RequireThrows([&] { preview(true); }), "offline");
+}
+
 void TestBaseModelCatalogRelations() {
     BaseModelFixture fixture("base-catalog");
     TEST_REQUIRE(fixture.models.get_base_model(kDependantTag) == std::string(kBaseTag));
@@ -970,6 +1025,9 @@ void TestSuccessfulForceDownloadAtomicallyReplacesFinalFile() {
 }  // namespace
 
 int main() {
+    RunTest(TestPullPreviewCountsEachPackageWithoutWriting, "read-only pull preview");
+    RunTest(TestPreviewInspectsPinnedFinalsWithoutRepair, "preview pinned integrity");
+    RunTest(TestPreviewOnlyUsesLocallyDeterminedPreferredSource, "preview offline source selection");
     RunTest(TestCatalogFileRecordsDoNotNeedGlobalMetadata, "extension file records");
     RunTest(TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName, "core catalog");
     RunTest(TestGgufUrlContainsAmdRevisionAndFilename, "GGUF URL");
