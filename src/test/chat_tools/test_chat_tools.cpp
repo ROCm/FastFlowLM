@@ -1254,6 +1254,19 @@ void test_penalty_free_spans() {
         grammar_fixture lfm2(chat_format_make(chat_format_kind::LFM2_PYTHONIC, true));
         const std::string l = prose + "<|tool_call_start|>[save_note(text=\"ab ab\")]<|tool_call_end|>";
         check_marks(lfm2, auto_note, "", l, {{after(l, "<|tool_call_start|>"), l.size()}}, "lfm2 auto");
+
+        grammar_fixture glm(GLM_XML);
+        const std::string glm_call = render_glm_calls(json::array({call("get_weather", {{"city", "Paris"}})}));
+        const std::string t = prose + glm_call;
+        check_marks(glm, tools_request(), "", t, {{after(t, "<tool_call>"), t.size()}}, "glm_xml auto");
+        check_marks(glm, tools_request(chat_tool_choice::FUNCTION, "get_weather"), "", glm_call,
+                    {{0, glm_call.size() + 1}}, "glm_xml forced call");
+        chat_constraint_request thinking = tools_request();
+        thinking.allow_reasoning = true;
+        const std::string quoted = "I could write <tool_call>ping here.</think>" + glm_call;
+        const size_t thought = after(quoted, "</think>");
+        check_marks(glm, thinking, "<think>", quoted, {{after(quoted, "<tool_call>", thought), quoted.size()}},
+                    "glm_xml call quoted in reasoning");
     }
     // inkling: the call and schema messages, not the thinking ones
     {
