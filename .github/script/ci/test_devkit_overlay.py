@@ -72,16 +72,23 @@ def make_pe(exports: list[str] = (), imports: dict[str, list[str]] | None = None
 class LibraryNames(unittest.TestCase):
     def test_every_unit_names_a_prebuilt_library(self):
         # The overlay replaces the package's file of the same name, so every
-        # engine and shared unit must map to one the product ships.
+        # engine and shared unit must map to one the product ships. A new
+        # engine's libraries arrive with its swap commit (devkit_check calls
+        # them pending): a unit shipped on no runtime yet is not checked.
         self.assertIsNotNone(ENGINES)
         units = (set(ENGINES.engines) | set(ENGINES.shared)) - do.NO_LIBRARY
-        for runtime, os_name in (("xrt", "linux"), ("hrx", "linux"), ("xrt", "windows")):
-            shipped = {p.name for p in (PREBUILT / runtime).glob("*")}
-            if not shipped:
+        combos = (("xrt", "linux"), ("hrx", "linux"), ("xrt", "windows"))
+        shipped = {rt: {p.name for p in (PREBUILT / rt).glob("*")} for rt, _ in combos}
+        for runtime, os_name in combos:
+            if not shipped[runtime]:
                 self.skipTest(f"src/lib/{runtime} is not in the checkout")
-            for unit in sorted(units):
-                with self.subTest(runtime=runtime, unit=unit):
-                    self.assertIn(do.lib_name(unit, os_name), shipped)
+        for unit in sorted(units):
+            names = [(rt, do.lib_name(unit, os_name)) for rt, os_name in combos]
+            if not any(n in shipped[rt] for rt, n in names):
+                continue
+            for rt, name in names:
+                with self.subTest(runtime=rt, unit=unit):
+                    self.assertIn(name, shipped[rt])
 
     def test_names(self):
         self.assertEqual(do.lib_name("q4nx", "linux"), "libq4_npu_eXpress.so")

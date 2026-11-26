@@ -634,6 +634,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
     nanbeige_npu
     hunyuan_npu
     hy_mem_npu
+    inkling2_npu
 )
 
 # The d3 decision engine (--decision d3:lite). Linked where its library is vendored; elsewhere

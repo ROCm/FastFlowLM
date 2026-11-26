@@ -826,6 +826,7 @@ tool_syntax tool_tags(const chat_format_spec& spec, const std::vector<tool_def>&
             case chat_format_kind::LFM2_PYTHONIC:
             case chat_format_kind::CONTENT_ONLY:
             case chat_format_kind::HARMONY:
+            case chat_format_kind::INKLING:
                 break;
         }
     }
@@ -906,6 +907,59 @@ json harmony_format(const chat_constraint_request& request, const std::vector<to
         options.insert(options.begin(), messages);
     }
     return {{"type", "or"}, {"elements", options}};
+}
+
+json inkling_format(const chat_constraint_request& request, const std::vector<tool_def>& tools) {
+    // typed messages, each opened by <|message_model|>: the model opens the first one
+    // itself, the prompt ends with the user's <|end_message|>
+    const std::string MESSAGE = "<|message_model|>";
+    const std::string END = "<|end_message|>";
+
+    std::vector<json> call_tags;
+    const bool want_tools = request.tool_choice == chat_tool_choice::REQUIRED ||
+                            request.tool_choice == chat_tool_choice::FUNCTION ||
+                            (request.tool_choice == chat_tool_choice::AUTO && !has_response_format(request));
+    if (want_tools) {
+        for (const auto& tool : tools) {
+            // as the template writes a call: the header names it, the JSON again
+            call_tags.push_back(tag(tool.name + "<|content_invoke_tool_json|>{\"name\":" + json(tool.name).dump() + ",\"args\":",
+                                    schema_content(tool.parameters), "}" + END));
+        }
+    }
+    // every turn opens with reasoning, at any effort
+    std::vector<json> message_tags;
+    message_tags.push_back(tag("<|content_thinking|>", any_text(), END));
+    if (request.tool_choice == chat_tool_choice::AUTO || request.tool_choice == chat_tool_choice::NONE) {
+        json text = has_response_format(request) ? schema_content(response_schema(request)) : any_text();
+        message_tags.push_back(tag("<|content_text|>", text, END));
+    }
+
+    json format;
+    if (call_tags.empty()) {
+        format = {{"type", "tags_with_separator"}, {"tags", message_tags}, {"separator", MESSAGE}, {"at_least_one", true}};
+        return sequence({const_string(MESSAGE), format});
+    }
+    const bool must_call = request.tool_choice != chat_tool_choice::AUTO;
+    if (request.parallel_tool_calls && !must_call) {
+        std::vector<json> all = call_tags;
+        all.insert(all.end(), message_tags.begin(), message_tags.end());
+        format = {{"type", "tags_with_separator"}, {"tags", all}, {"separator", MESSAGE}, {"at_least_one", true}};
+        return sequence({const_string(MESSAGE), format});
+    }
+    // reasoning/answer messages, then the call(s), which end the turn. A forced call
+    // gets one thinking message: the model, kept from answering in text, would
+    // otherwise open thinking message after thinking message until the length limit
+    const bool one_call = !request.parallel_tool_calls || request.tool_choice == chat_tool_choice::FUNCTION;
+    json calls = {{"type", "tags_with_separator"}, {"tags", call_tags}, {"separator", MESSAGE},
+                  {"at_least_one", true}, {"stop_after_first", one_call}};
+    json messages = {{"type", "tags_with_separator"}, {"tags", message_tags}, {"separator", MESSAGE},
+                     {"at_least_one", true}, {"stop_after_first", must_call}};
+    json messages_then_calls = sequence({messages, const_string(MESSAGE), calls});
+    std::vector<json> options = {calls, messages_then_calls};
+    if (!must_call) {
+        options.insert(options.begin(), messages);
+    }
+    return sequence({const_string(MESSAGE), json{{"type", "or"}, {"elements", options}}});
 }
 
 /// \brief Stop tokens the grammar matches as text
@@ -1102,6 +1156,8 @@ json chat_structural_tag(const chat_format_spec& spec, const chat_constraint_req
     json format;
     if (spec.kind == chat_format_kind::HARMONY) {
         format = harmony_format(request, tools);
+    } else if (spec.kind == chat_format_kind::INKLING) {
+        format = inkling_format(request, tools);
     } else if (tool_grammar) {
         if (!spec.has_tools()) {
             throw std::invalid_argument(std::string("this model's chat format (") + chat_format_name(spec.kind) +

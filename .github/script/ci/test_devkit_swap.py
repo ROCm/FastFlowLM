@@ -883,6 +883,11 @@ class Manifests(unittest.TestCase):
                 entry["repo_path"], entry["artifact_path"] = path, path[len("src/xclbins/"):]
                 with self.assertRaisesRegex(ds.ManifestError, "src/xclbins/<folder>/<slot>.xclbin"):
                     self.parse(bad_kernel)
+        # A control-packet switch file is a kernel slot too.
+        sw = self.good()
+        entry = next(e for e in sw["files"] if e["repo_path"] == KERNEL)
+        entry["repo_path"], entry["artifact_path"] = "src/xclbins/M-NPU2/m.switches", "M-NPU2/m.switches"
+        self.parse(sw)
         # A third-party file is no dev-kit build, whatever its name.
         third = manifest("windows", "xrt", {"src/lib/xrt/aiebu_static.lib": b"a"}, head=self.HEAD, base=self.BASE)
         with self.assertRaisesRegex(ds.ManifestError, "third-party"):
