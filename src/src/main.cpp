@@ -802,6 +802,10 @@ static int run_flm(int argc, char* argv[]) {
 
         // Load the model list with the models directory as the base
         ModelDownloader downloader(availble_models);
+        if (parsed_args.dry_run) {
+            std::cout << downloader.preview_pull(parsed_args.model_tag, parsed_args.modelscope, parsed_args.force_redownload);
+            return 0;
+        }
 
         // Ensure models directory exists
         if (!std::filesystem::exists(models_dir)) {

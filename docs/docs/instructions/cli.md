@@ -67,6 +67,18 @@ Download a model from HuggingFace without launching it:
 flm pull llama3.2:3b
 ```
 
+To see what a pull would fetch without downloading anything or changing the model store:
+
+```bash
+flm pull qwen3.8-dflash2:27b --dry-run
+```
+
+The preview makes no network requests: it reads the model catalog and the local model store. A build with the ryzenai-corelib backend still asks the NPU driver which NPU generation this machine has, because that decides which catalog entries apply, as for a real pull; without an NPU it previews the AIE2P entries.
+
+The preview lists files to download or reuse under each tag, starting with the required base model. The total is the full manifest size of files to download, in bytes and GiB. A `.part` file may let a real pull resume and transfer less. The estimate excludes retries, protocol overhead, and peak disk usage.
+
+Add `--force` to count the requested tag again without forcing its base. The preview checks pinned or outdated files locally, which can take time for large weights. A package installed for a newer FastFlowLM is listed as kept, since a pull leaves it unchanged. The preview exits without a total if records are missing or source selection requires an online check (including a forced pull that must reselect its preferred source).
+
 This code forces a re-download of the model, overwriting the current version.
 
 ```shell

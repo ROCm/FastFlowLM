@@ -223,4 +223,13 @@ add_test(NAME test_real_corelib COMMAND test_real_corelib)
 add_test(NAME test_phi4_frontend COMMAND test_phi4_frontend)
 add_test(NAME test_phi4_frontend_off COMMAND test_phi4_frontend_off)
 add_test(NAME test_model_downloader COMMAND test_model_downloader)
+# `flm pull --dry-run` end to end needs a built flm, which this project does not
+# build: pass -DFLM_EXECUTABLE=<path to flm> to run it.
+set(FLM_EXECUTABLE "" CACHE FILEPATH "Built flm for test_pull_dry_run_cli")
+if(FLM_EXECUTABLE)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME test_pull_dry_run_cli
+      COMMAND Python3::Interpreter
+          "${CMAKE_CURRENT_LIST_DIR}/test_pull_dry_run_cli.py" "${FLM_EXECUTABLE}")
+endif()
 set_tests_properties(test_real_corelib PROPERTIES SKIP_RETURN_CODE 77)

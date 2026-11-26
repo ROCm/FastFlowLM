@@ -94,6 +94,8 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Set the server address (for serve command)")
             ("port,p", po::value<int>(&parsed_args.port)->default_value(-1), 
              "Set the server port number (for serve command)")
+            ("dry-run", po::bool_switch(&parsed_args.dry_run),
+             "Preview pull offline; bytes exclude retries, protocol overhead and peak disk usage")
             ("force", po::bool_switch(&parsed_args.force_redownload),
              "Force re-download even if model exists (for pull command)")
             ("modelscope", po::value<bool>(&parsed_args.modelscope)->default_value(false)->implicit_value(true),
@@ -204,6 +206,11 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             return true;
         }
 
+        if (parsed_args.dry_run && (parsed_args.command != "pull" || vm.count("version"))) {
+            std::cerr << "Error: --dry-run is only supported with pull" << std::endl;
+            return false;
+        }
+
         if (vm.count("version")) {
             parsed_args.command = "version";
             return true;
@@ -294,7 +301,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
 
         // Validate command-specific requirements
         if (parsed_args.command == "run" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check") {
-            if (parsed_args.model_tag.empty()) {
+            if (parsed_args.model_tag.empty() || (parsed_args.dry_run && !vm.count("model_tag"))) {
                 std::cerr << "Error: Model tag is required for command '" << parsed_args.command << "'" << std::endl;
                 return false;
             }
