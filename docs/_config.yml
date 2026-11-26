@@ -85,6 +85,8 @@ docs_nav:
         url: "/docs/instructions/server/basics/"
       - label: API / Client Usage
         url: "/docs/instructions/server/openapi/"
+      - label: Stateless Responses
+        url: "/docs/instructions/server/responses/"
       - label: Open WebUI
         url: "/docs/instructions/server/webui/"
       - label: Tool Calling

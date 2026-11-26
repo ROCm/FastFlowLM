@@ -1237,6 +1237,13 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             rest_handler->handle_openai_chat_completion(request_json, send_response, send_streaming_response, cancellation_token);
         });
     
+    server->register_handler("POST", "/v1/responses",
+        [rest_handler](const http::request<http::string_body>& req, auto send_response,
+                       auto send_streaming_response, std::shared_ptr<HttpSession>, auto cancellation_token) {
+            rest_handler->handle_openai_responses(json::parse(req.body()), std::move(send_response),
+                                                 std::move(send_streaming_response), std::move(cancellation_token));
+        });
+
     server->register_handler("POST", "/v1/audio/transcriptions",
         [rest_handler](const http::request<http::string_body>& req,
             std::function<void(const json&)> send_response,
