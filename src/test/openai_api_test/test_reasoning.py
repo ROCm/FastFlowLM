@@ -298,6 +298,36 @@ def nested_thinking_ignored_elsewhere(api: Api) -> None:
 
 
 @case
+def active_tool_reasoning(api: Api) -> None:
+    """The pinned GPU template takes a supplied note only while answering the same question."""
+    if api.model not in ("qwen3.5-oga-hipep:9b", "qwen3.5:4b"):
+        raise Skip("requires the verified Qwen3.5 GPU package or its NPU negative control")
+    call = {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function",
+            "function": {"name": "read_shelf", "arguments": "{}"}}]}
+    history = [*user("Check the shelf."), call, {"role": "tool", "tool_call_id": "a", "content": "42"}]
+
+    def prompt(**fields):
+        response = api.post(api.body(history, max_tokens=4, **fields))
+        expect(response.status == 200 and "usage" in response.body, f"expected usage: HTTP {response.status}")
+        return response.body["usage"]["prompt_tokens"]
+
+    note = "Synthetic inventory note. " * 20
+    count = prompt()
+    call["reasoning_content"] = note
+    marked = prompt()
+    expect(marked > count if api.model == "qwen3.5-oga-hipep:9b" else marked == count,
+           f"active tool call: {count} without reasoning, {marked} with reasoning")
+    stream = api.ok_stream(api.body(history, think=True, max_tokens=4, stream_options={"include_usage": True}))
+    expect(stream.chunks[-1]["usage"]["prompt_tokens"] == marked, "SSE/think changed history rendering")
+    del call["reasoning_content"]
+    expect(prompt() == count, "omitting the note did not restore the original prompt")
+    history.extend([{"role": "assistant", "content": "42"}, *user("New question.")])
+    past = prompt()
+    call["reasoning_content"] = note
+    expect(prompt() == past, "previous user turn still includes the note")
+
+
+@case
 def history_with_reasoning(api: Api) -> None:
     """A previous turn's reasoning_content sent back in history is accepted (and dropped)."""
     first = api.ok(api.body(user("Pick a random fruit. One word."), think=True, max_tokens=THINK_BUDGET))["message"]

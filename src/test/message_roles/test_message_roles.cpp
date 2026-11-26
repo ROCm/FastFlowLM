@@ -262,6 +262,40 @@ void test_normalize() {
     CHECK(!out[1].contains("reasoning_content"));
 }
 
+void test_active_tool_reasoning() {
+    // AMD Qwen3.5-9B_gpuep_1.0_gpu_128 @ f3a9b4aeb60a42542cc4fec561e1f1095e427483.
+    const model_template gpu(read_template("qwen3_5_9b_oga.jinja"));
+    const auto roles = gpu.probe();
+    const auto prepare = [&](const json& history) {
+        std::vector<std::size_t> indices;
+        auto messages = flatten(flm::chat::normalize_messages(history, roles, &indices));
+        return messages;
+    };
+    auto call = msg("assistant", "");
+    call["tool_calls"] = json::array({{{"type", "function"}, {"id", "a"},
+        {"function", {{"name", "read"}, {"arguments", json::object()}}}}});
+    call["reasoning_content"] = "synthetic note";
+    auto history = json::array({msg("user", "Q"), call, msg("tool", "42")});
+    CHECK_EQ(gpu.render(prepare(history)), gpu.render(history));
+    // An entire wrapped tool result is a continuation, including when sent as text parts.
+    history[2] = msg("user", json::array({{{"type", "text"}, {"text", " <tool_response>"}},
+                                          {{"type", "text"}, {"text", "42</tool_response>\n"}}}));
+    history.push_back(call);
+    history.push_back(msg("tool", "43"));
+    CHECK(prepare(history)[1].contains("reasoning_content") && prepare(history)[3].contains("reasoning_content"));
+    history.push_back(msg("user", "New question"));
+    CHECK(!prepare(history)[1].contains("reasoning_content") && !prepare(history)[3].contains("reasoning_content"));
+    history.push_back(call);
+    history.back().erase("tool_calls");
+    CHECK(!prepare(history).back().contains("reasoning_content"));
+    history.back() = call;
+    history.back()["reasoning_content"] = 17;
+    history.back()["thinking"] = "alias";
+    history.back()["reasoning"] = "alias";
+    const auto invalid = prepare(history).back();
+    CHECK(!invalid.contains("reasoning_content") && !invalid.contains("thinking") && !invalid.contains("reasoning"));
+}
+
 void test_models() {
     std::printf("models\n");
     const model_template qwen3(read_template("qwen3.jinja"));
@@ -328,6 +362,7 @@ int main() {
     try {
         test_probe();
         test_normalize();
+        test_active_tool_reasoning();
         test_models();
     } catch (const std::exception& e) {
         std::printf("  FAIL: exception %s\n", e.what());
