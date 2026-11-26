@@ -177,6 +177,8 @@ struct TypedFake<Tag, Result (*)(Args...)> {
         } else if constexpr (std::is_same_v<Tag, has_feature_tag>) {
             const auto feature = std::get<0>(arguments);
             if (feature == ryzenai_corelib_feature_npu) return state.npu != fake_corelib::kNoNpu;
+            if (feature == ryzenai_corelib_feature_npu_direct)
+                return state.npu_direct && state.npu != fake_corelib::kNoNpu;
             return (feature == ryzenai_corelib_feature_npu_aiem ||
                     feature == ryzenai_corelib_feature_npu_aie2p) &&
                    feature == state.npu;
@@ -226,6 +228,7 @@ struct TypedFake<Tag, Result (*)(Args...)> {
             const auto* options = std::get<1>(arguments);
             auto* out = std::get<2>(arguments);
             state.model_max_sequence_length = options ? options->max_sequence_length : 0;
+            state.session_kv_cache_bits.push_back(options ? options->kv_cache_bits : 0);
             ++state.session_creates;
             if (out) *out = status == ryzenai_corelib_status_success ? NewObject("session") : nullptr;
             return status;
@@ -680,6 +683,7 @@ void Reset() {
     state.selftest_status = ryzenai_corelib_status_success;
     state.default_status = ryzenai_corelib_status_success;
     state.npu = ryzenai_corelib_feature_npu_aiem;
+    state.npu_direct = true;
     state.detail.clear();
     state.status_text = "success";
     state.missing_symbol.clear();
@@ -716,6 +720,7 @@ void Reset() {
     state.model_max_sequence_length = -1;
     state.model_vocab = 8;
     state.session_creates = 0;
+    state.session_kv_cache_bits.clear();
     state.state_saves = 0;
     state.state_restores = 0;
     state.model_forwards.clear();

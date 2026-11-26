@@ -43,6 +43,7 @@
 #if defined(FLM_USE_HRX)
 #error "FLM_ENABLE_CORE requires the XRT backend (FLM_USE_HRX=OFF): corelib opens the NPU through XRT"
 #endif
+#include "core/corelib_model_backend.hpp"
 #include "core/corelib_runtime.hpp"
 #endif
 #if defined(FLM_ENABLE_OGA_HIPEP)
@@ -631,6 +632,10 @@ static int run_flm(int argc, char* argv[]) {
     // Declared before the extension guard so extension objects are destroyed
     // before their underlying runtime is shut down.
     CoreProcessGuard core_guard;
+    flm::core::SetRequestedKvCacheBits(parsed_args.kv_cache_bits);
+#else
+    if (parsed_args.kv_cache_bits != 0)
+        header_print("WARNING", "--kv-cache-bits is ignored: this flm build has no core backend");
 #endif
     auto& frontend_registry = flm::frontend::FrontendRegistry::instance();
     struct ExtensionUnloadGuard {

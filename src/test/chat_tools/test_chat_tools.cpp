@@ -1133,6 +1133,46 @@ void test_glm_template_capabilities() {
     CHECK(prompt.find("\"tool_calls\"") == std::string::npos);
 }
 
+void test_minja_template_exception() {
+    std::printf("minja raise_exception throws TemplateException while other errors stay runtime_error\n");
+    // Template calling raise_exception inside nested control flow must surface minja::TemplateException
+    // with the clean message (so AutoModel::_render_chat_template can turn it into HTTP 400).
+    minja::chat_template strict(
+        "{%- for m in messages -%}"
+        "{%- if m.role == 'bad' -%}{{ raise_exception('roles must alternate') }}{%- endif -%}"
+        "{{- m.content -}}"
+        "{%- endfor -%}",
+        "", "");
+    minja::chat_template_inputs inputs;
+    inputs.messages = json::array({{{"role", "bad"}, {"content", "hi"}}});
+    bool caught_template = false;
+    std::string caught_msg;
+    try {
+        (void)strict.apply(inputs);
+    } catch (const minja::TemplateException& e) {
+        caught_template = true;
+        caught_msg = e.what();
+    } catch (const std::exception&) {
+        caught_template = false;
+    }
+    CHECK(caught_template);
+    CHECK_EQ(caught_msg, "roles must alternate");
+
+    // Ordinary render errors (e.g. calling an unsupported method) must remain std::runtime_error,
+    // NOT minja::TemplateException (so they stay HTTP 500).
+    minja::chat_template broken("{{- messages.no_such_method() -}}", "", "");
+    inputs.messages = json::array({{{"role", "user"}, {"content", "hi"}}});
+    bool caught_runtime_only = false;
+    try {
+        (void)broken.apply(inputs);
+    } catch (const minja::TemplateException&) {
+        caught_runtime_only = false;
+    } catch (const std::runtime_error&) {
+        caught_runtime_only = true;
+    }
+    CHECK(caught_runtime_only);
+}
+
 void test_inkling() {
     std::printf("inkling: typed messages, reasoning, answers and calls\n");
     const chat_format_spec spec = chat_format_make(chat_format_kind::INKLING, false);
@@ -1228,6 +1268,7 @@ int main() {
     test_glm_string_length();
     test_minja_tojson_ensure_ascii();
     test_glm_template_capabilities();
+    test_minja_template_exception();
     test_inkling();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);

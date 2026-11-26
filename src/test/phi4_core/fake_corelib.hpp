@@ -107,6 +107,8 @@ struct State {
     /// \brief the NPU has_feature() reports, npu_aiem, npu_aie2p or kNoNpu;
     ///        feature_name() names features as corelib does
     ryzenai_corelib_feature npu{ryzenai_corelib_feature_npu_aiem};
+    /// \brief whether has_feature() reports npu_direct, given an NPU
+    bool npu_direct{true};
     std::string detail;
     std::string status_text{"success"};
     std::string missing_symbol;
@@ -146,6 +148,8 @@ struct State {
     std::int64_t model_max_sequence_length{-1};
     std::int64_t model_vocab{8};
     std::size_t session_creates{};
+    /// \brief the kv_cache_bits each model_create_session was handed
+    std::vector<std::int32_t> session_kv_cache_bits;
     std::size_t state_saves{};
     std::size_t state_restores{};
     std::vector<ModelForwardRecord> model_forwards;

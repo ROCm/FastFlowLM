@@ -165,6 +165,7 @@ bool Qwen2VL::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
     } catch (const std::exception& e) {
         header_print_r("ERROR", std::string("Exception during chat template application: ") + e.what());
         meta_info.error_message = std::string("Applying the chat template failed: ") + e.what();
+        meta_info.error_code = 500;
         return false;
     }
     std::vector<int> tokens_init = this->tokenizer->encode(templated_text);
