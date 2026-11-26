@@ -99,6 +99,9 @@ struct qwen3_5vl_linear_block_prefill_context{
     qwen3_5vl_launch* ll;
     npu_app_manager* gemm_mgr;
 
+    // host stages overlapped with the projections, ranged qkv syncs; QWEN35_NO_OVERLAP=1 keeps the serial path
+    bool overlap = std::getenv("QWEN35_NO_OVERLAP") == nullptr;
+
     qwen3_5vl_linear_block_prefill_context(
         qwen3_5vl_desc* desc,
         qwen3_5vl_npu_sequence* seq_gen,
@@ -153,43 +156,69 @@ struct qwen3_5vl_linear_block_prefill_context{
 
         PREFILL_PROF_TICK("linear:seq_gen+alloc");
 
-        linear_qkv_proj(qkv, common_bufs->x, proj_weights);
-        linear_g_proj(common_bufs->gate, common_bufs->x, proj_weights);
-
-        qkv.sync_from_device();
-        common_bufs->gate.sync_from_device();
-        PREFILL_PROF_TICK("linear:qkv+g_proj");
-
-        // copy cache back
-        cache.sync_from_device();
-        memcpy(qkv.data(), cache.data(), (size_t)(desc->conv_kernel_size - 1) * desc->Linear_DQKV * sizeof(bf16));
-        memcpy(cache.data(), qkv.data() + L * desc->Linear_DQKV, (size_t)(desc->conv_kernel_size - 1) * desc->Linear_DQKV * sizeof(bf16));
-        cache.sync_to_device();
-        qkv.sync_to_device();
-        PREFILL_PROF_TICK("linear:conv_cache");
-
         // alpha / beta depend on x only: done before conv1d, so conv1d and the delta net can run back to back
-        float* alpha_ptr = alpha_beta.data();
-        float* beta_ptr  = alpha_ptr + alpha_beta.size() / 2;
-        cpu_func::_cpu_mm<bf16>(alpha_ptr, alpha_proj_cpu.data(), common_bufs->x.data(), L, desc->D, desc->linear_num_v_heads);
-        cpu_func::_cpu_mm<bf16>(beta_ptr,  beta_proj_cpu.data(),  common_bufs->x.data(), L, desc->D, desc->linear_num_v_heads);
-        // Activate over the full 128-chunk padding the deltanet consumes, not L.
-        // The kernel reads ceil(L/128)*128 rows of alpha/beta, so the tail rows
-        // sharing the last chunk with real tokens must be activated. Leaving them
-        // raw (alpha == 0, an invalid decay) produces NaN in the chunked
-        // delta-rule scan at the end of the sequence.
-        int L_ssm_padded = (L + 127) / 128 * 128;
-        cpu_func::_activate_a(
-            alpha_ptr,
-            (float*)(ssm_weights.data() + desc->get_linear_A_offset() / sizeof(bf16)),
-            (float*)(ssm_weights.data() + desc->get_linear_dt_offset() / sizeof(bf16)),
-            L_ssm_padded,
-            desc->linear_num_v_heads
-        );
-        cpu_func::_activate_b(beta_ptr, L_ssm_padded, desc->linear_num_v_heads);
+        auto host_alpha_beta = [&]() {
+            float* alpha_ptr = alpha_beta.data();
+            float* beta_ptr  = alpha_ptr + alpha_beta.size() / 2;
+            cpu_func::_cpu_mm<bf16>(alpha_ptr, alpha_proj_cpu.data(), common_bufs->x.data(), L, desc->D, desc->linear_num_v_heads);
+            cpu_func::_cpu_mm<bf16>(beta_ptr,  beta_proj_cpu.data(),  common_bufs->x.data(), L, desc->D, desc->linear_num_v_heads);
+            // Activate over the full 128-chunk padding the deltanet consumes, not L.
+            // The kernel reads ceil(L/128)*128 rows of alpha/beta, so the tail rows
+            // sharing the last chunk with real tokens must be activated. Leaving them
+            // raw (alpha == 0, an invalid decay) produces NaN in the chunked
+            // delta-rule scan at the end of the sequence.
+            int L_ssm_padded = (L + 127) / 128 * 128;
+            cpu_func::_activate_a(
+                alpha_ptr,
+                (float*)(ssm_weights.data() + desc->get_linear_A_offset() / sizeof(bf16)),
+                (float*)(ssm_weights.data() + desc->get_linear_dt_offset() / sizeof(bf16)),
+                L_ssm_padded,
+                desc->linear_num_v_heads
+            );
+            cpu_func::_activate_b(beta_ptr, L_ssm_padded, desc->linear_num_v_heads);
+            alpha_beta.sync_to_device();
+        };
+        // conv state: qkv rows [0, k-1) take the previous chunk's last k-1 rows from cache, cache takes this chunk's
+        const size_t conv_state_bytes = (size_t)(desc->conv_kernel_size - 1) * desc->Linear_DQKV * sizeof(bf16);
+        const size_t qkv_tail_bytes = (size_t)L * desc->Linear_DQKV * sizeof(bf16);
 
-        alpha_beta.sync_to_device();
-        PREFILL_PROF_TICK("linear:alpha_beta");
+        if (overlap) {
+            // alpha / beta on the host while the array runs the qkv projection, the conv state swap while it runs the z
+            // projection; only the conv state rows of qkv cross between host and device
+            auto qkv_run = linear_qkv_proj.create_run(qkv, common_bufs->x, proj_weights);
+            qkv_run.start();
+            host_alpha_beta();
+            flm::npu::wait_for_completion(qkv_run, "linear_qkv_proj");
+            auto g_run = linear_g_proj.create_run(common_bufs->gate, common_bufs->x, proj_weights);
+            g_run.start();
+            qkv.sync_range_from_device_exact(qkv_tail_bytes, conv_state_bytes);
+            cache.sync_from_device();
+            memcpy(qkv.data(), cache.data(), conv_state_bytes);
+            memcpy(cache.data(), (u8*)qkv.data() + qkv_tail_bytes, conv_state_bytes);
+            cache.sync_to_device();
+            qkv.sync_range_to_device_exact(0, conv_state_bytes);
+            flm::npu::wait_for_completion(g_run, "linear_g_proj");
+            common_bufs->gate.sync_from_device();
+            PREFILL_PROF_TICK("linear:qkv+g_proj+alpha_beta");
+        } else {
+            linear_qkv_proj(qkv, common_bufs->x, proj_weights);
+            linear_g_proj(common_bufs->gate, common_bufs->x, proj_weights);
+
+            qkv.sync_from_device();
+            common_bufs->gate.sync_from_device();
+            PREFILL_PROF_TICK("linear:qkv+g_proj");
+
+            // copy cache back
+            cache.sync_from_device();
+            memcpy(qkv.data(), cache.data(), conv_state_bytes);
+            memcpy(cache.data(), (u8*)qkv.data() + qkv_tail_bytes, conv_state_bytes);
+            cache.sync_to_device();
+            qkv.sync_to_device();
+            PREFILL_PROF_TICK("linear:conv_cache");
+
+            host_alpha_beta();
+            PREFILL_PROF_TICK("linear:alpha_beta");
+        }
 
 #if !defined(FLM_USE_HRX)
         if (ll) {
@@ -239,7 +268,8 @@ struct qwen3_5vl_linear_block_prefill_context{
         common_bufs->after_mix.sync_to_device();
         PREFILL_PROF_TICK("linear:gated_norm");
 
-        common_bufs->x.sync_to_device();
+        // x was flushed after the input norm and the host only read it since
+        if (!overlap) common_bufs->x.sync_to_device();
         linear_o_proj(common_bufs->x, common_bufs->after_mix, proj_weights);
         common_bufs->x.sync_from_device();
         PREFILL_PROF_TICK("linear:o_proj");
