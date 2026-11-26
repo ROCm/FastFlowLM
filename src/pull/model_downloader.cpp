@@ -325,6 +325,9 @@ bool ModelDownloader::pull_model(const std::string& model_tag, bool use_modelsco
 }
 
 std::string ModelDownloader::preview_pull(const std::string& model_tag, bool use_modelscope, bool force_redownload) {
+    const auto requested = supported_models.rectify_model_tag(model_tag);
+    if (!supported_models.is_model_supported(requested))
+        throw std::runtime_error("Model not found: " + requested);
     std::ostringstream plan;
     std::uint64_t total = 0;
     const auto preview_package = [&](const std::string& tag, bool force) {
@@ -369,8 +372,8 @@ std::string ModelDownloader::preview_pull(const std::string& model_tag, bool use
             plan << '\n';
         }
     };
-    if (const auto base = supported_models.get_base_model(model_tag)) preview_package(*base, false);
-    preview_package(model_tag, force_redownload);
+    if (const auto base = supported_models.get_base_model(requested)) preview_package(*base, false);
+    preview_package(requested, force_redownload);
     plan << "Total download: " << total << " B (" << std::fixed << std::setprecision(2)
          << static_cast<double>(total) / (1024 * 1024 * 1024) << " GiB)\n";
     return plan.str();

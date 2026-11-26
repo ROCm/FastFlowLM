@@ -676,6 +676,7 @@ void TestPullPreviewCountsEachPackageWithoutWriting() {
     const auto preview = [&](bool force = false) {
         return downloader.preview_pull(kDependantTag, false, force);
     };
+    RequireContains(RequireThrows([&] { downloader.preview_pull("model-faker"); }), "Model not found");
     const auto base_bytes = fs::file_size(fixture.root / "hf/base/resolve/config.json") + 12;
     const auto own_bytes = fs::file_size(fixture.root / "hf/dep/resolve/config.json") + 13;
     const auto empty = preview();
