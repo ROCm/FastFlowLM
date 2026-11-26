@@ -111,7 +111,7 @@ flm run qwen3:8b
 - **Backend:** `core` — one engine for all four sizes. The GGUF's own metadata selects the size and is cross-checked against it.
 - **Source format:** GGUF, read directly by corelib. With a Hugging Face token that can read AMD's private repositories (`HF_TOKEN`, or `hf auth login`), `flm pull` fetches AMD's 4-bit file, which packs exactly as it is; without one, a tag below on an AMD file cannot be pulled, as corelib's own runner has no public fallback either. Only Qwen3-0.6B and Llama, which AMD ships no 4-bit file of, pull a public `Q8_0`, requantized to 4-bit groups on every load, which is lossy; corelib refuses `Q8_0` for Qwen3.5, Qwen3.6, Gemma 4 and Phi-4-mini.
 - **Context:** each tag's limit is the most corelib runs that model at; the default is lower where corelib or our own runs found answers going wrong past it. Over-capacity requests are rejected with HTTP 400 before any work reaches the device.
-- **Availability:** developer build against corelib 0.105.0 — see [Phi-4 on the core backend](phi.md).
+- **Availability:** developer build against corelib 0.116.0 — see [Phi-4 on the core backend](phi.md).
 
 The same corelib path runs every `-core` tag:
 
