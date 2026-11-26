@@ -23,7 +23,8 @@ struct program_args_t {
     std::string decision = ""; // --decision <tag>: serve a decision model (POST /v1/systemone)
     bool json_output = false;
     int ctx_length = -1; // let model decide
-    std::string backend = ""; // let the catalog decide; see AutoModel/model_backend.hpp
+     std::string backend = ""; // let the catalog decide; see AutoModel/model_backend.hpp
+     int kv_cache_bits = 0; // core backend: 8 or 16; 0 leaves it to FLM_KV_CACHE_BITS, else 16
     std::vector<std::string> model_extensions; // explicit manifests, in load order
     int prefill_chunk_len = -1; // let model decide
     int prefix_cache_mb = -1;   // host memory (MiB) for saved prompt snapshots; -1 = the model's default
