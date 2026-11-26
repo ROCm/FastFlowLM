@@ -13,7 +13,7 @@ FLM's `/v1/chat/completions` endpoint removes that markup for you. Whatever the 
 
 | Field | What it holds |
 |---|---|
-| `reasoning_content` | The model's thinking, without the tags. Left out when the model didn't reason. |
+| `reasoning_content` | The model's thinking, without the tags. Left out when the model didn't reason. See [sending a tool result](#sending-a-tool-result) for when to return it. |
 | `content` | The answer the user should see. `null` when the turn is only tool calls. |
 | `tool_calls` | The function calls the model asked for. Each one has `arguments` as a **JSON string**, whatever syntax the model used. |
 
@@ -214,7 +214,17 @@ def collect_stream(stream):
     return message, "".join(reasoning), finish_reason, usage
 ```
 
+### Sending a tool result
+
 You can append the returned assistant `message` to `messages`, followed by the tool result. On `qwen3.5-oga-hipep:9b` (GPU), a string `reasoning_content` on that tool-call message is part of the prompt while the model is answering the **same user question**. No extra option is needed. Once there is a new user question the old note drops out. `think` controls the reply being generated, not the history you send.
+
+```python
+# After collect_stream(), append the assistant message once, then one result per call.
+messages.append(message)
+for call in message["tool_calls"]:
+    messages.append({"role": "tool", "tool_call_id": call["id"], "content": results[call["id"]]})
+reply = client.chat.completions.create(model="qwen3.5-oga-hipep:9b", messages=messages)
+```
 
 **Compatibility:** earlier releases stripped the field even during a tool call. Clients that echo whole messages may now use more prompt tokens and reach the context limit sooner. Omit `reasoning_content` if you do not want to include it. Other packages retain their existing behavior.
 

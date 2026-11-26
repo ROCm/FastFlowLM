@@ -2,6 +2,7 @@
 /// \brief `developer` and later `system` messages without a model: what the probe finds on the Qwen3 and Qwen3.5
 ///        templates the models ship (templates/, copied from the packages) and on gpt-oss and ChatML shapes, and what
 ///        the normalization makes of each role order. No NPU needed.
+#include "chat/active_tool_reasoning.hpp"
 #include "chat/message_roles.hpp"
 #include "minja/chat-template.hpp"
 
@@ -285,10 +286,12 @@ void test_active_tool_reasoning() {
     history[2] = msg("user", json::array({{{"type", "text"}, {"text", " <tool_response>"}},
                                           {{"type", "text"}, {"text", "42</tool_response>\n"}}}));
     history.push_back(call);
+    history.back()["reasoning_content"] = "second synthetic note";
     history.push_back(msg("tool", "43"));
-    CHECK(prepare(history)[1].contains("reasoning_content") && prepare(history)[3].contains("reasoning_content"));
+    CHECK_EQ(gpu.render(prepare(history)), gpu.render(history));
     history.push_back(msg("user", "New question"));
-    CHECK(!prepare(history)[1].contains("reasoning_content") && !prepare(history)[3].contains("reasoning_content"));
+    const auto past = prepare(history);
+    CHECK(!past[1].contains("reasoning_content") && !past[3].contains("reasoning_content"));
     history.push_back(call);
     history.back().erase("tool_calls");
     CHECK(!prepare(history).back().contains("reasoning_content"));

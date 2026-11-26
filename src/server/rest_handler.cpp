@@ -18,6 +18,7 @@
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
 #include "chat/message_roles.hpp"
+#include "chat/active_tool_reasoning.hpp"
 #include "chat/positional_tool_results.hpp"
 #include "utils/log_privacy.hpp"
 #include <algorithm>
@@ -732,6 +733,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         prefill_chunk_len = chunk;
         positional_tool_results = plan.info.value("positional_tool_results", false)
             && engine->backend_id() == flm::backend::kOgaHipepBackendId;
+        // The history rule is verified for this package, frontend and backend together.
         active_tool_reasoning = plan.info.value("active_tool_reasoning", false)
             && dynamic_cast<Qwen3_5VL*>(engine.get()) && engine->backend_id() == flm::backend::kOgaHipepBackendId;
         {
