@@ -41,6 +41,16 @@ std::optional<AdapterId> parse_adapter(std::wstring_view s) {
     return std::nullopt;
 }
 
+std::optional<std::size_t> single_adapter(std::span<const Candidate> candidates) {
+    std::optional<std::size_t> selected;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        if (!candidates[i].hardware) continue;
+        if (selected || candidates[i].nodes != 1) return {};
+        selected = i;
+    }
+    return selected;
+}
+
 void EngineUsage::add(std::wstring_view s, double value, bool valid) {
     std::uint32_t pid, engine;
     AdapterId id{};

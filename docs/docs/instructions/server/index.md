@@ -119,10 +119,13 @@ For example, GPU utilization of 70% with own utilization of 0% means another app
 The busiest engines can differ: subtracting the two percentages does not measure other applications' load.
 `system_memory_available_bytes` is available physical RAM, not free VRAM or a guarantee that a model fits.
 
-Poll about once per second. `sampled_at` is the UTC hardware sample time. A query returns immediately;
+The first query starts sampling in the background. Poll every 1–5 seconds for live updates; sampling
+pauses after six seconds without a query. After a long idle period, query again a second or two later.
+`sampled_at` is the UTC hardware sample time. A query returns immediately;
 unavailable or expired (>3 s) readings are `null`. Rates need two samples; memory may already be available
 while rates are `null`. Hardware readings require Windows and a supported driver. If the target adapter
-cannot be identified unambiguously, FLM leaves its counters `null`.
+cannot be identified unambiguously, FLM leaves its counters `null`. If an engine row is invalid, the
+whole-device maximum is unknown; a valid maximum for this process can still be reported independently.
 
 `server.accelerator_busy` and `server.queued_requests` describe this server **at query time**, including on
 other operating systems. The waiting count excludes the active request. FLM has one shared admission queue;

@@ -19,6 +19,8 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace device_load {
@@ -47,23 +49,26 @@ class AdapterList {
 public:
     Identity select(IDXCoreAdapterFactory* factory, const GUID& kind) {
         if (list_ && !list_->IsStale()) return selected_;
-        selected_ = {};
-        if (!factory || FAILED(factory->CreateAdapterList(1, &kind, list_.ReleaseAndGetAddressOf()))) return {};
+        ComPtr<IDXCoreAdapterList> list;
+        if (FAILED(factory->CreateAdapterList(1, &kind, list.GetAddressOf()))) return {};
+        std::vector<Candidate> candidates;
         Identity candidate;
-        for (unsigned i = 0; i < list_->GetAdapterCount(); ++i) {
+        for (unsigned i = 0; i < list->GetAdapterCount(); ++i) {
             ComPtr<IDXCoreAdapter> adapter;
             bool hardware = false;
-            if (FAILED(list_->GetAdapter(i, adapter.GetAddressOf())) ||
+            if (FAILED(list->GetAdapter(i, adapter.GetAddressOf())) ||
                 FAILED(adapter->GetProperty(Property::IsHardware, &hardware))) return {};
-            if (!hardware) continue;
-            // There is no backend-to-LUID binding in FLM. Never guess between multiple GPUs
-            // or attribute node zero of a linked adapter to the model.
-            LUID luid{};
-            uint32_t nodes = 1;
+            unsigned nodes = 0;
             constexpr auto physical_count = static_cast<Property>(15); // PhysicalAdapterCount
-            if (candidate.id || FAILED(adapter->GetProperty(Property::InstanceLuid, &luid)) ||
-                (adapter->IsPropertySupported(physical_count) &&
-                 (FAILED(adapter->GetProperty(physical_count, &nodes)) || nodes != 1))) return {};
+            if (hardware && adapter->IsPropertySupported(physical_count) &&
+                FAILED(adapter->GetProperty(physical_count, &nodes))) return {};
+            candidates.push_back({hardware, nodes});
+        }
+        if (const auto index = single_adapter(candidates)) {
+            ComPtr<IDXCoreAdapter> adapter;
+            LUID luid{};
+            if (FAILED(list->GetAdapter(static_cast<unsigned>(*index), adapter.GetAddressOf())) ||
+                FAILED(adapter->GetProperty(Property::InstanceLuid, &luid))) return {};
             candidate.id = AdapterId{static_cast<uint32_t>(luid.HighPart), luid.LowPart, 0};
             size_t size = 0;
             if (SUCCEEDED(adapter->GetPropertySize(Property::DriverDescription, &size)) && size && size <= 4096) {
@@ -72,9 +77,28 @@ public:
                     candidate.name = name.data(); // DXCore specifies UTF-8.
             }
         }
+        list_ = std::move(list); // cache ambiguity, not transient enumeration errors
         return selected_ = std::move(candidate);
     }
 };
+
+class Inventory {
+    std::unique_ptr<std::remove_pointer_t<HMODULE>, decltype(&FreeLibrary)> module_{
+        LoadLibraryExW(L"dxcore.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32), FreeLibrary};
+    ComPtr<IDXCoreAdapterFactory> factory_;
+    AdapterList gpu_, npu_;
+public:
+    std::pair<Identity, Identity> read() {
+        if (!factory_) {
+            using Create = HRESULT (WINAPI*)(REFIID, void**);
+            auto create = module_ ? std::bit_cast<Create>(GetProcAddress(module_.get(), "DXCoreCreateAdapterFactory")) : nullptr;
+            if (!create || FAILED(create(IID_PPV_ARGS(factory_.GetAddressOf())))) return {};
+        }
+        return {gpu_.select(factory_.Get(), gpu_kind), npu_.select(factory_.Get(), npu_kind)};
+    }
+};
+#else
+struct Inventory { std::pair<Identity, Identity> read() const { return {}; } };
 #endif
 
 // The wildcard set can change between sizing the array and reading it. Retry with a new size.
@@ -104,25 +128,10 @@ class Provider {
     std::array<PDH_HCOUNTER, 3> counters_{};
     std::optional<Clock::time_point> previous_;
     bool reported_missing_ = false;
-#if __has_include(<dxcore.h>)
-    HMODULE dxcore_ = LoadLibraryExW(L"dxcore.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    ComPtr<IDXCoreAdapterFactory> factory_;
-    AdapterList gpu_, npu_;
-#endif
+    Inventory inventory_;
 public:
-    Provider() {
-#if __has_include(<dxcore.h>)
-        using Create = HRESULT (WINAPI*)(REFIID, void**);
-        const auto create = dxcore_ ? std::bit_cast<Create>(GetProcAddress(dxcore_, "DXCoreCreateAdapterFactory")) : nullptr;
-        if (create) create(IID_PPV_ARGS(factory_.GetAddressOf()));
-#endif
-    }
     ~Provider() {
         if (query_) PdhCloseQuery(query_);
-#if __has_include(<dxcore.h>)
-        gpu_ = {}; npu_ = {}; factory_.Reset();
-        if (dxcore_) FreeLibrary(dxcore_);
-#endif
     }
     Snapshot read() {
         Snapshot s;
@@ -133,11 +142,7 @@ public:
         s.sampled_at = stamp;
         MEMORYSTATUSEX mem{}; mem.dwLength = sizeof(mem);
         if (GlobalMemoryStatusEx(&mem)) s.available = mem.ullAvailPhys;
-        Identity gpu, npu;
-#if __has_include(<dxcore.h>)
-        gpu = gpu_.select(factory_.Get(), gpu_kind);
-        npu = npu_.select(factory_.Get(), npu_kind);
-#endif
+        const auto [gpu, npu] = inventory_.read();
         s.gpu.name = gpu.name; s.npu.name = npu.name;
         if ((!gpu.id || !npu.id) && !reported_missing_) {
             std::fprintf(stderr, "FLM device telemetry: no unambiguous %s adapter; unavailable readings are null.\n",
@@ -180,15 +185,15 @@ class Sampler {
     std::mutex mutex_;
     std::condition_variable cv_;
     std::thread worker_;
-    bool pending_ = false, stop_ = false;
+    bool stop_ = false;
     Snapshot latest_;
     std::optional<Clock::time_point> sampled_;
-    Clock::time_point refresh_after_{};
+    Clock::time_point last_poll_{};
     void run() {
         Provider provider;
         std::unique_lock lock(mutex_);
         while (true) {
-            cv_.wait(lock, [&] { return pending_ || stop_; });
+            cv_.wait(lock, [&] { return stop_ || Clock::now() - last_poll_ < 6s; });
             if (stop_) return;
             lock.unlock();
             const auto start = Clock::now();
@@ -197,8 +202,7 @@ class Sampler {
             lock.lock();
             latest_ = std::move(next);
             sampled_ = start;
-            refresh_after_ = Clock::now() + 1s; // even slow setup must leave a full interval between collections
-            pending_ = false;
+            if (cv_.wait_for(lock, 1s, [&] { return stop_; })) return;
         }
     }
 public:
@@ -210,14 +214,12 @@ public:
     Snapshot get() {
         std::lock_guard lock(mutex_);
         const auto now = Clock::now();
-        if (!pending_ && (!sampled_ || now >= refresh_after_)) {
-            if (!worker_.joinable()) {
-                try { worker_ = std::thread(&Sampler::run, this); }
-                catch (const std::system_error&) { return {}; }
-            }
-            pending_ = true;
-            cv_.notify_one();
+        last_poll_ = now;
+        if (!worker_.joinable()) {
+            try { worker_ = std::thread(&Sampler::run, this); }
+            catch (const std::system_error&) { return {}; }
         }
+        cv_.notify_one();
         return sampled_ && now - *sampled_ <= max_age ? latest_ : Snapshot{};
     }
 };

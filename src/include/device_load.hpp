@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -18,6 +19,10 @@ struct AdapterId {
 };
 
 std::optional<AdapterId> parse_adapter(std::wstring_view instance);
+
+struct Candidate { bool hardware; unsigned nodes; };
+/// Index only when exactly one hardware adapter of this kind exists and has one physical node.
+std::optional<std::size_t> single_adapter(std::span<const Candidate> candidates);
 
 struct Usage { std::optional<double> total, own; };
 
