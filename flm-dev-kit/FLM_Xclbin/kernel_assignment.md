@@ -264,6 +264,7 @@ columns on each of the two DDR channels.
 | `layer.xclbin` | `xclbins-Qwen3_5_qwen3_5_decoding_QWEN3_5_4B` | Peano |
 | `lm_head.xclbin` | `xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_4B` | Peano |
 | `mm.xclbin` | `xclbins-dequant_mm_512x512x512` | Peano |
+| `mm_rtm2_glu.xclbin` | `xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512` | Peano |
 | `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_4B-VISION-ATTENTION` | Peano |
 | `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_QWEN3_5_4B-VISION-MM` | Peano |
 

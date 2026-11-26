@@ -435,7 +435,14 @@ struct qwen3_5vl_prefill_context{
         qwen3_5vl_npu_sequence* seq_gen,
         LM_Config& config
     ) : desc(model_desc), seq_gen(seq_gen) {
-        this->gemm_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "mm.xclbin"));
+        // mm_rtm2_glu.xclbin (FLM_Xclbin/dequant_mm_bfp16_rtm2_glu_512x512x512): same Q4_K weights and dispatch layout as mm.xclbin,
+        // dequantized in the core with bfp16 activations and a native bfp16 multiply. Used when the model's xclbin folder has it;
+        // QWEN35_NO_BFP_MM=1 keeps mm.xclbin.
+        const std::string xdir = utils::path_join(config.exec_path, "xclbins", config.model_name);
+        const std::string bfp_mm = utils::path_join(xdir, "mm_rtm2_glu.xclbin");
+        const char* no_bfp = std::getenv("QWEN35_NO_BFP_MM");
+        const bool use_bfp = std::filesystem::exists(bfp_mm) && !(no_bfp && no_bfp[0] == '1');
+        this->gemm_app_manager = npu->register_xclbin(use_bfp ? bfp_mm : utils::path_join(xdir, "mm.xclbin"));
         this->conv1d_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "conv.xclbin"));
         this->gate_delta_net_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "GateDeltaNet_prefill.xclbin"));
         this->mha_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "attn.xclbin"));
