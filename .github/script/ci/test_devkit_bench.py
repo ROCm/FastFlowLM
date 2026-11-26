@@ -450,6 +450,20 @@ class SelectModels(unittest.TestCase):
         self.assertEqual(res["dropped"], [])
         self.assertIn("embed-gemma:300m", res["skipped"])
 
+    def test_smallest_is_by_footprint(self):
+        # A draft package lists a small download but runs in its base model's
+        # memory: the footprint (GB) orders it, the size only without one.
+        catalog = select_models.changes.load_catalog(json.dumps({"models": {
+            "draft": {"e4b": {"size": 2.7e8, "footprint": 8.7, "details": {"family": "draft"}}},
+            "tiny": {"1b": {"size": 6e8, "footprint": 0.65, "details": {"family": "tiny"}}},
+            "nofoot": {"2b": {"size": 2e9, "details": {"family": "nofoot"}}},
+        }}))
+        self.assertEqual(select_models.ordered(["draft:e4b", "tiny:1b", "nofoot:2b"], catalog),
+                         ["tiny:1b", "nofoot:2b", "draft:e4b"])
+        self.assertEqual(select_models.size_of("draft:e4b", catalog), 8.7e9)
+        self.assertEqual(select_models.size_of("nofoot:2b", catalog), 2e9)
+        self.assertEqual(select_models.size_of("nosuch:1b", catalog), 0.0)
+
     def test_real_maps_load(self):
         engines = select_models.changes.DevkitEngines.parse(
             (REPO / "flm-dev-kit/FLM_DLL/engines.json").read_text(encoding="utf-8"))
@@ -461,6 +475,71 @@ class SelectModels(unittest.TestCase):
         res = select_models.select(mode="pr", catalog=catalog, engines=engines, assignment=assignment,
                                    families=engines.all_families())
         self.assertLessEqual(len(res["models"]), select_models.PR_CAP)
+        # Shared code samples the engines' smallest models, by what they run
+        # in: no 8.7 GB dflash draft ahead of the sub-1 GB models.
+        footprints = [float(catalog[m["model"]].get("footprint") or 0) for m in res["models"]]
+        self.assertLess(max(footprints), 2.0, res["models"])
+
+
+def bench_comment_sanitize():
+    """sanitize() from devkit-bench-comment.yml's inline script (the
+    workflow checks nothing out, so the code lives there): the part above
+    its "--- main" line."""
+    text = (REPO / ".github/workflows/devkit-bench-comment.yml").read_text(encoding="utf-8")
+    block = text.split("python3 - <<'EOF'\n", 1)[1].split("\n          EOF\n", 1)[0]
+    lines = [l[10:] if l.startswith(" " * 10) else l.strip() for l in block.splitlines()]
+    code = "\n".join(lines).split("# --- main", 1)[0]
+    namespace: dict = {}
+    exec(compile(code, "devkit-bench-comment.yml", "exec"), namespace)  # noqa: S102 - our own workflow's code
+    return namespace["sanitize"]
+
+
+class BenchComment(unittest.TestCase):
+    """The PR comment renders the summary as Markdown (its tables), with
+    everything that acts taken out: the summary is an artifact a pull
+    request's code writes."""
+
+    sanitize = staticmethod(bench_comment_sanitize())
+
+    def test_tables_headings_and_code_render_as_they_are(self):
+        summary = ("## Dev-kit bench (pr) on `1e02187951`\n\n✅ No hard-gate failure.\n\n### Linux XRT\n\n"
+                   "| Model | Machine | Context | Decode base → dev-kit | Δ |\n|---|---|---|---|---|\n"
+                   "| qwen3:0.6b | ryzenai-npu4 | 1k | 20.0 → 18.0 | -10.0% |\n\n- Linux XRT qwen3:0.6b: decode -10.0%\n")
+        self.assertEqual(self.sanitize(summary), summary)
+
+    def test_nothing_acts(self):
+        zw = "\u200b"
+        cases = {
+            "</details><!-- devkit-bench-comment -->": "&lt;/details&gt;&lt;!-- devkit-bench-comment --&gt;",
+            '<img src="https://x/t.png">': '&lt;img src="https:/' + zw + '/x/t.png"&gt;',
+            "[click](https://evil.example)": "\\[click\\](https:/" + zw + "/evil.example)",
+            # An input backslash must not cancel the added one.
+            "\\[x\\](//evil.example)": "\\\\\\[x\\\\\\](/" + zw + "/evil.example)",
+            "github.com/o/r/pull/1 and /issues/4": "github" + zw + ".com/o/r/pull/" + zw + "1 and /issues/" + zw + "4",
+            "![pixel](http://t/x.gif)": "!\\[pixel\\](http:/" + zw + "/t/x.gif)",
+            "[ref]: https://evil.example": "\\[ref\\]: https:/" + zw + "/evil.example",
+            "see www.evil.example": "see www" + zw + ".evil.example",
+            "cc @someone @org/team": "cc @" + zw + "someone @" + zw + "org/team",
+            "fixes #12 and GH-34, gh-5": "fixes #" + zw + "12 and GH-" + zw + "34, gh-" + zw + "5",
+            "a & b": "a &amp; b",
+            "safe\u202eevil\x07": "safeevil",
+        }
+        for raw, want in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(self.sanitize(raw), want)
+        # A heading's # stays a heading.
+        self.assertEqual(self.sanitize("### Linux XRT"), "### Linux XRT")
+
+    def test_long_summary_is_cut_at_a_line(self):
+        out = self.sanitize("| a | b |\n" * 10000)
+        self.assertLessEqual(len(out), 60000 + 100)
+        self.assertTrue(out.endswith("(cut: see the run's bench-summary artifact)"))
+        self.assertIn("| a | b |\n\n(cut", out)
+
+    def test_workflow_renders_markdown_not_a_code_block(self):
+        text = (REPO / ".github/workflows/devkit-bench-comment.yml").read_text(encoding="utf-8")
+        self.assertIn("text = sanitize(raw.decode(", text)
+        self.assertNotIn("{fence}text", text)
 
 
 def run(**kw):

@@ -18,11 +18,18 @@
 #include <array>
 
 namespace {
-/// Serialize an error body. Error text can carry raw request bytes (a parse error quotes the
-/// bytes it choked on), so invalid UTF-8 is replaced instead of throwing: a throwing dump here
-/// escapes into ioc.run() and permanently kills that I/O thread.
-std::string dump_error_body(const json& body) {
-    return body.dump(-1, ' ', false, json::error_handler_t::replace);
+/// Populate a non-streaming HTTP error response in the target protocol's wire shape.
+void apply_error_response(http::response<http::string_body>& res,
+                          flm::error_model::Protocol proto,
+                          const flm::error_model::ErrorValue& err) {
+    const int status = flm::error_model::normalize_status(err.status);
+    res.result(static_cast<http::status>(status));
+    res.set(http::field::content_type, "application/json");
+    res.body() = flm::error_model::dump_json(flm::error_model::body_for(proto, err));
+    if (status == 503) {
+        res.set(http::field::retry_after, "1");
+    }
+    res.prepare_payload();
 }
 
 /// Reject a connection over the connection limit with a real HTTP 503 instead of a bare close.
@@ -43,11 +50,14 @@ struct ConnectionRejecter : std::enable_shared_from_this<ConnectionRejecter> {
     /// cors_wildcard: write "Access-Control-Allow-Origin: *". The request is never read, so its
     /// Origin is unknown; only a server configured to allow every origin can grant it here.
     void start(size_t limit, bool cors_wildcard) {
-        const std::string body = dump_error_body(json{{"error", {
-            {"message", "Server is at its connection limit (" + std::to_string(limit) +
-                        "). Please try again later."},
-            {"type", "server_busy"},
-            {"code", 503}}}});
+        const flm::error_model::ErrorValue err{
+            503,
+            "service_unavailable_error",
+            "Server is at its connection limit (" + std::to_string(limit) +
+                "). Please try again later."
+        };
+        const std::string body = flm::error_model::dump_json(
+            flm::error_model::body_for(flm::error_model::Protocol::OpenAI, err));
         reply = std::string("HTTP/1.1 503 Service Unavailable\r\n"
                 "Content-Type: application/json\r\n"
                 "Retry-After: 1\r\n"
@@ -272,8 +282,21 @@ void HttpSession::start(bool cors) {
     read_request(cors);
 }
 
+void HttpSession::abort_open_stream(flm::error_model::Protocol proto, const flm::error_model::ErrorValue& err) {
+    if (stream_finished_.load()) {
+        return;
+    }
+    if (proto == flm::error_model::Protocol::OpenAI) {
+        write_streaming_response(json(flm::error_model::stream_error_frame(proto, err)), false);
+        write_streaming_response(json("data: [DONE]\n\n"), true);
+    } else {
+        close_connection();
+    }
+}
+
 ///@brief close connection
 void HttpSession::close_connection() {
+    stream_finished_.store(true);
     boost::system::error_code ec;
     
     // Debug: Log TCP connection disconnection
@@ -283,6 +306,7 @@ void HttpSession::close_connection() {
         header_print("🔒 ", "TCP connection closing - Remote endpoint unavailable");
     }
     socket_.shutdown(tcp::socket::shutdown_both, ec);
+    socket_.cancel(ec);
     release_connection();
 }
 
@@ -306,16 +330,19 @@ void HttpSession::read_request(bool cors) {
 
             // Handle body too large explicitly with 413
             if (ec == http::error::body_limit) {
-                // The header was read: keep it so the reply's CORS headers see the Origin.
+                // The header was read: keep it so the reply's CORS headers and protocol see it.
                 self->req_ = parser->release();
                 self->res_ = {};
                 self->res_.version(11);
-                self->res_.result(http::status::payload_too_large);
-                self->res_.set(http::field::content_type, "application/json");
                 self->res_.keep_alive(false);
-                json err = {{"error", "Request payload too large"}, {"max_bytes", self->server_.get_max_body_size_bytes()}};
-                self->res_.body() = err.dump();
-                self->res_.prepare_payload();
+                const auto proto = flm::error_model::protocol_for_path(
+                    std::string_view(self->req_.target().data(), self->req_.target().size()));
+                const flm::error_model::ErrorValue err{
+                    413,
+                    "invalid_request_error",
+                    "Request payload too large (max " + std::to_string(self->server_.get_max_body_size_bytes()) + " bytes)."
+                };
+                apply_error_response(self->res_, proto, err);
                 self->write_response();
                 return;
             }
@@ -350,13 +377,12 @@ void HttpSession::handle_request(bool cors) {
                 : "Host '" + host + "' is not allowed for a server bound to a loopback address. If a proxy "
                   "forwards this name, add its origin to --cors-origins (e.g. \"https://" + host + "\").";
             header_print("🚫 ", message);
+            const auto proto = flm::error_model::protocol_for_path(
+                std::string_view(req_.target().data(), req_.target().size()));
             res_ = {};
             res_.version(req_.version());
             res_.keep_alive(false);
-            res_.result(http::status::forbidden);
-            res_.set(http::field::content_type, "application/json");
-            res_.body() = dump_error_body(flm::http_guard::error_body(message, 403));
-            res_.prepare_payload();
+            apply_error_response(res_, proto, flm::error_model::ErrorValue{403, "invalid_request_error", message});
             write_response();
             return;
         }
@@ -399,42 +425,41 @@ void HttpSession::handle_request(bool cors) {
     // Handle the request through the server. Nothing may escape into ioc.run(): answer 500
     // (or, mid-stream, drop the connection) instead of leaving the client without a reply.
     bool deferred = false;
+    const auto proto = flm::error_model::protocol_for_path(
+        std::string_view(req_.target().data(), req_.target().size()));
     try {
         deferred = server_.handle_request(req_, res_, socket_, shared_from_this());
     } catch (const std::exception& e) {
         header_print("LOG", "Unhandled exception in request: " + std::string(e.what()));
         deferred = false;
-        if (!is_streaming_) {
+        auto err = flm::error_model::exception_error(e);
+        if (err.status == 500) err.message = "Internal server error: " + err.message;
+        if (try_begin_response()) {
             res_ = {};
             res_.version(req_.version());
             res_.keep_alive(false);
-            res_.result(http::status::internal_server_error);
-            res_.set(http::field::content_type, "application/json");
-            res_.body() = dump_error_body(json{ {"error", std::string("Internal server error: ") + e.what()} });
-            res_.prepare_payload();
-        } else {
-            close_connection();
+            apply_error_response(res_, proto, err);
+        } else if (is_streaming_.load()) {
+            abort_open_stream(proto, err);
         }
     } catch (...) {
         header_print("LOG", "Unknown unhandled exception in request");
         deferred = false;
-        if (!is_streaming_) {
+        const flm::error_model::ErrorValue err{500, "server_error", "Internal server error"};
+        if (try_begin_response()) {
             res_ = {};
             res_.version(req_.version());
             res_.keep_alive(false);
-            res_.result(http::status::internal_server_error);
-            res_.set(http::field::content_type, "application/json");
-            res_.body() = dump_error_body(json{ {"error", "Internal server error"} });
-            res_.prepare_payload();
-        } else {
-            close_connection();
+            apply_error_response(res_, proto, err);
+        } else if (is_streaming_.load()) {
+            abort_open_stream(proto, err);
         }
     }
 
     // Clear the buffer after processing to prevent data accumulation
     buffer_.consume(buffer_.size());
 
-    if (!is_streaming_ && !deferred) {
+    if (!deferred && !is_streaming_.load()) {
         write_response();
     } else {
         // For streaming responses, we need to handle connection cleanup differently
@@ -444,6 +469,9 @@ void HttpSession::handle_request(bool cors) {
 
 ///@brief write response
 void HttpSession::write_response() {
+    if (is_streaming_.load()) {
+        return;
+    }
     auto self = shared_from_this();
 
     // header_print("⬆️ ", "Outgoing Response: ");
@@ -536,9 +564,15 @@ void HttpSession::start_client_disconnect_monitor(std::shared_ptr<CancellationTo
 ///@param data the data
 ///@param is_final the is final
 void HttpSession::write_streaming_response(const json& data, bool is_final) {
-    if (!is_streaming_) {
+    if (stream_finished_.load()) {
+        return;
+    }
+    if (!is_streaming_.load()) {
+        if (!try_begin_response()) {
+            return;
+        }
+        is_streaming_.store(true);
         // Initialize streaming response headers
-        is_streaming_ = true;
         res_.result(http::status::ok);
         res_.set(http::field::content_type, "application/x-ndjson");
         res_.set(http::field::cache_control, "no-cache");
@@ -559,7 +593,16 @@ void HttpSession::write_streaming_response(const json& data, bool is_final) {
         // Send headers synchronously
         boost::system::error_code ec;
         net::write(socket_, net::buffer(headers), ec);
-        if (ec) return;
+        if (ec) {
+            stream_finished_.store(true);
+            if (cancellation_token_ && !cancellation_token_->completed()) {
+                cancellation_token_->cancel();
+            }
+            boost::system::error_code ignore_ec;
+            socket_.close(ignore_ec);
+            release_connection();
+            return;
+        }
     }
     
     // Send this chunk immediately
@@ -570,58 +613,40 @@ void HttpSession::write_streaming_response(const json& data, bool is_final) {
 ///@param data the data
 ///@param is_final the is final
 void HttpSession::send_chunk_data(const json& data, bool is_final) {
-    std::string chunk_content;
-    
-    // Check if the data is a string (pre-formatted SSE with "data: " prefix)
-    if (data.is_string()) {
-        std::string data_str = data.get<std::string>();
-        // If it starts with "data: ", it's already formatted for SSE
-        if (data_str.substr(0, 6) == "data: ") {
-            chunk_content = data_str;
-        } else {
-            // Regular JSON string, add single newline for Ollama format
-            chunk_content = data_str;
-        }
-    } else {
-        // Regular JSON object, format for Ollama compatibility
-        chunk_content = data.dump() + "\n";
-    }
-    
-    // std::cout << "Chunk: " << chunk_content;
-    
-    // HTTP chunked format: size in hex + \r\n + data + \r\n
-    std::ostringstream chunk_size;
-    chunk_size << std::hex << chunk_content.length();
-    std::string http_chunk;
-    //if(is_final)
-    //    http_chunk = chunk_content + "\r\n";
-    //else
-    http_chunk = chunk_size.str() + "\r\n" + chunk_content + "\r\n";
-
-
-    // Send chunk immediately
-    boost::system::error_code ec;
-    net::write(socket_, net::buffer(http_chunk), ec);
-    
-    if (ec) {
-        if (cancellation_token_ && !cancellation_token_->completed()) {
-            cancellation_token_->cancel(); 
-        }
-
-        //socket_.shutdown(tcp::socket::shutdown_both, ec);
-
-        boost::system::error_code ignore_ec;
-        socket_.close(ignore_ec);
-        release_connection();
+    if (stream_finished_.load()) {
         return;
     }
+    const std::string chunk_content = data.is_string()
+        ? data.get<std::string>()
+        : flm::error_model::dump_json(data) + "\n";
 
-    if (is_final) {
-        // Send final chunk (0-length chunk to end stream)
+    boost::system::error_code ec;
+    if (!chunk_content.empty()) {
+        // HTTP chunked format: size in hex + \r\n + data + \r\n
+        std::ostringstream chunk_size;
+        chunk_size << std::hex << chunk_content.length();
+        std::string http_chunk = chunk_size.str() + "\r\n" + chunk_content + "\r\n";
+
+        net::write(socket_, net::buffer(http_chunk), ec);
+        if (ec) {
+            stream_finished_.store(true);
+            if (cancellation_token_ && !cancellation_token_->completed()) {
+                cancellation_token_->cancel();
+            }
+            boost::system::error_code ignore_ec;
+            socket_.close(ignore_ec);
+            release_connection();
+            return;
+        }
+    }
+
+    if (is_final && !stream_finished_.exchange(true)) {
+        // Send final chunk (0-length chunk to end stream) at most once
         std::string final_chunk = "0\r\n\r\n";
         net::write(socket_, net::buffer(final_chunk), ec);
         header_print("🔒 ", "Closing TCP connection (streaming, non-keep-alive)");
         socket_.shutdown(tcp::socket::shutdown_both, ec);
+        socket_.cancel(ec);
         // Decrement connection counter for non-keep-alive connections
         release_connection();
     }
@@ -719,7 +744,7 @@ bool WebServer::cancel_request(const std::string& request_id) {
 ///@param handler the handler
 void WebServer::register_handler(const std::string& method, const std::string& path, RequestHandler handler) {
     std::string key = method + " " + path;
-    routes[key] = handler;
+    routes[key] = std::move(handler);
 }
 
 ///@brief do accept
@@ -811,14 +836,13 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     std::string key = std::string(req.method_string()) + " " + path;
     auto it = routes.find(key);
     if (it == routes.end()) {
-        // No route: respond 404 synchronously.
-        res.result(http::status::not_found);
-        res.body() = dump_error_body(json{ {"error", "Not Found"} });
-        res.set(http::field::content_type, "application/json");
-        res.prepare_payload();
-        return false; 
+        // No route: respond 404 synchronously in the path's wire protocol.
+        apply_error_response(res, flm::error_model::protocol_for_path(path),
+                             flm::error_model::ErrorValue{404, "not_found_error", "Not Found"});
+        return false;
     }
 
+    const auto route_proto = flm::error_model::protocol_for_path(path);
     // Decide if this handler needs exclusive NPU access.
     bool needs_npu = requires_npu_access(std::string(req.method_string()), path);
 
@@ -827,7 +851,7 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     auto* res_ptr = &res;
 
     // Define a task lambda with is_deferred flag
-    auto process_task = [this, it, req_ptr, res_ptr, session, needs_npu, key, path, is_json](bool is_deferred) {
+    auto process_task = [this, it, route_proto, req_ptr, res_ptr, session, needs_npu, key, path, is_json](bool is_deferred) {
         auto& req_ref = *req_ptr;
         auto& res_ref = *res_ptr;
         AcceleratorRequestCompletionGuard completion([this, needs_npu] {
@@ -847,13 +871,8 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
         }
         catch (const std::exception& e) {
             header_print("LOG", "Invalid JSON request body: " + json_log::what(e, flm::log_privacy::content_enabled()));
-            res_ref.result(http::status::bad_request);
-            res_ref.body() = dump_error_body(json{ {"error", {
-                {"message", "Invalid JSON: " + json_log::what(e)},
-                {"type", "invalid_request_error"},
-                {"code", 400}}} });
-            res_ref.set(http::field::content_type, "application/json");
-            res_ref.prepare_payload();
+            apply_error_response(res_ref, route_proto,
+                                 flm::error_model::ErrorValue{400, "invalid_request_error", "Invalid JSON: " + json_log::what(e)});
 
             // Only write from callback when deferred
             if (is_deferred && session) session->write_response_from_callback();
@@ -875,45 +894,53 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
 
         register_active_request(request_id, cancellation_token);
 
-        // catch is_deferred 
-        auto send_response = [res_ptr, session, this, request_id, needs_npu, is_deferred, cancellation_token](const json& response_data) {
-            auto& response_ref = *res_ptr;
-            http::status status = http::status::ok;
-
-            // An OpenAI style error carries its HTTP status as error.code: 400, 404, 500, ...
-            if (response_data.contains("error") &&
-                response_data["error"].contains("code") &&
-                response_data["error"]["code"].is_number_integer())
-            {
-                int code = response_data["error"]["code"].get<int>();
-
-                if (code >= 400 && code <= 599) {
-                    status = static_cast<http::status>(code);
+        // catch is_deferred
+        auto send_response = [res_ptr, session, this, route_proto, request_id, needs_npu, is_deferred, cancellation_token](const json& response_data) {
+            if (session && session->is_streaming()) {
+                cancellation_token->complete();
+                unregister_active_request(request_id);
+                if (!session->stream_finished()) {
+                    const auto err = flm::error_model::extract_error(response_data)
+                        .value_or(flm::error_model::ErrorValue{500, "server_error", "Internal server error"});
+                    session->abort_open_stream(route_proto, err);
                 }
+                return;
             }
-
+            // Prepare the payload before claiming the session response slot so a throw here
+            // cannot lock out a subsequent error reply.
+            http::response<http::string_body> staged;
+            staged.version(res_ptr->version());
+            staged.keep_alive(res_ptr->keep_alive());
             // A handler that owns its status (System One: 422 {"detail": ...}) wraps its reply as
             // {"__http_status": code, "__http_body": body}.
-            const json* body_data = &response_data;
             if (response_data.is_object() && response_data.contains("__http_status")) {
-                status = static_cast<http::status>(response_data["__http_status"].get<int>());
-                body_data = &response_data["__http_body"];
+                staged.result(static_cast<http::status>(response_data["__http_status"].get<int>()));
+                staged.body() = flm::error_model::dump_json(response_data["__http_body"]);
+                staged.set(http::field::content_type, "application/json");
+                staged.prepare_payload();
             }
-            response_ref.result(status);
-            if (body_data != &response_data) {
-                response_ref.body() = body_data->dump(-1, ' ', false, json::error_handler_t::replace);
-                response_ref.set(http::field::content_type, "application/json");
+            else if (const auto err = flm::error_model::extract_error(response_data)) {
+                apply_error_response(staged, route_proto, *err);
             }
             else if (response_data.is_string()) {
                 // A plain-text body: the text, srt and vtt transcription formats.
-                response_ref.body() = response_data.get<std::string>();
-                response_ref.set(http::field::content_type, "text/plain; charset=utf-8");
+                staged.result(http::status::ok);
+                staged.body() = response_data.get<std::string>();
+                staged.set(http::field::content_type, "text/plain; charset=utf-8");
+                staged.prepare_payload();
             }
             else {
-                response_ref.body() = response_data.dump();
-                response_ref.set(http::field::content_type, "application/json");
+                staged.result(http::status::ok);
+                staged.body() = flm::error_model::dump_json(response_data);
+                staged.set(http::field::content_type, "application/json");
+                staged.prepare_payload();
             }
-            response_ref.prepare_payload();
+            if (session && !session->try_begin_response()) {
+                cancellation_token->complete();
+                unregister_active_request(request_id);
+                return;
+            }
+            *res_ptr = std::move(staged);
             cancellation_token->complete();
             unregister_active_request(request_id);
 
@@ -935,55 +962,49 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
             }
         };
 
+        auto finish_with_error = [&](const flm::error_model::ErrorValue& err) {
+            cancellation_token->complete();
+            unregister_active_request(request_id);
+            if (session && session->is_streaming()) {
+                session->abort_open_stream(route_proto, err);
+                return;
+            }
+            if (session && !session->try_begin_response()) {
+                return;
+            }
+            apply_error_response(res_ref, route_proto, err);
+            if (is_deferred && session) {
+                session->write_response_from_callback();
+            }
+        };
+
         try {
             it->second(req_ref, send_response, send_streaming_response, session, cancellation_token);
         }
         catch (const json::parse_error& e) {
             // A route that parses the body itself (any Content-Type) got a malformed one: 400.
             // A parse error on anything else (model output, a file) stays a 500.
-            cancellation_token->complete();
-            unregister_active_request(request_id);
-
             const bool bad_body = !json::accept(req_ref.body());
-            res_ref.result(bad_body ? http::status::bad_request : http::status::internal_server_error);
-            res_ref.body() = bad_body
-                ? dump_error_body(json{ {"error", {
-                    {"message", "Invalid JSON: " + json_log::what(e)},
-                    {"type", "invalid_request_error"},
-                    {"code", 400}}} })
-                : dump_error_body(json{ {"error", std::string("Handler exception: ") + e.what()} });
-            res_ref.set(http::field::content_type, "application/json");
-            res_ref.prepare_payload();
-
-            if (is_deferred && session) {
-                session->write_response_from_callback();
-            }
+            finish_with_error(bad_body
+                ? flm::error_model::ErrorValue{400, "invalid_request_error", "Invalid JSON: " + json_log::what(e)}
+                : flm::error_model::ErrorValue{500, "server_error", std::string("Handler exception: ") + e.what()});
+        }
+        catch (const ModelRequestError& e) {
+            flm::error_model::ErrorValue err;
+            err.status = e.http_code();
+            err.type = flm::error_model::normalize_type(e.type(), e.http_code());
+            err.message = e.what();
+            err.param = e.param();
+            err.session_cleared = e.session_cleared();
+            finish_with_error(err);
         }
         catch (const std::exception& e) {
-            cancellation_token->complete();
-            unregister_active_request(request_id);
-
-            res_ref.result(http::status::internal_server_error);
-            res_ref.body() = dump_error_body(json{ {"error", std::string("Handler exception: ") + e.what()} });
-            res_ref.set(http::field::content_type, "application/json");
-            res_ref.prepare_payload();
-
-            if (is_deferred && session) {
-                session->write_response_from_callback();
-            }
+            auto err = flm::error_model::exception_error(e);
+            if (err.status == 500) err.message = "Handler exception: " + err.message;
+            finish_with_error(err);
         }
         catch (...) {
-            cancellation_token->complete();
-            unregister_active_request(request_id);
-
-            res_ref.result(http::status::internal_server_error);
-            res_ref.body() = dump_error_body(json{ {"error", "Unknown handler exception"} });
-            res_ref.set(http::field::content_type, "application/json");
-            res_ref.prepare_payload();
-
-            if (is_deferred && session) {
-                session->write_response_from_callback();
-            }
+            finish_with_error(flm::error_model::ErrorValue{500, "server_error", "Unknown handler exception"});
         }
     }; // --- End of process_task lambda ---
 
@@ -1004,14 +1025,13 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     }
 
     if (admission == AcceleratorRequestCoordinator::Admission::queue_full) {
-        res.result(http::status::service_unavailable);
-        res.body() = dump_error_body(json{
-            {"error", "NPU is in use and request queue is full (limit: " +
+        apply_error_response(res, route_proto, flm::error_model::ErrorValue{
+            503,
+            "service_unavailable_error",
+            "NPU is in use and request queue is full (limit: " +
                 std::to_string(npu_request_coordinator_.capacity()) +
-                "). Please try again later."}
+                "). Please try again later."
         });
-        res.set(http::field::content_type, "application/json");
-        res.prepare_payload();
         header_print("🚫 ", "Accelerator busy and queue full, request denied: " + key);
         return false;
     }
@@ -1234,7 +1254,8 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
                 try {
                     parts = parse_multipart(req);
                 } catch (const std::exception& e) {   // not a multipart/form-data body: the client's mistake, not a server error
-                    send_response({{"error", {{"message", std::string("the request must be multipart/form-data with a \"file\" field: ") + e.what()}, {"type", "invalid_request_error"}, {"code", 400}}}});
+                    send_response(flm::error_model::make_error(
+                        400, std::string("the request must be multipart/form-data with a \"file\" field: ") + e.what()));
                     return;
                 }
                 json request_json;

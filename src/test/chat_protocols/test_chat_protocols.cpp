@@ -397,7 +397,22 @@ int main(int argc, char* argv[]) {
         }
         failures += check("model error that kept the conversation",
                           openai_error_json({503, "model_error", "busy", "", false}).dump(),
-                          R"({"error":{"message":"busy","type":"model_error","code":503,"session_cleared":false}})");
+                          R"({"error":{"message":"busy","type":"service_unavailable_error","param":null,"code":503,"session_cleared":false}})");
+        {
+            // Invalid UTF-8 bytes in streamed delta must replace cleanly instead of throwing type_error(316).
+            std::string raw_delta_out;
+            openai_chat_sink sink([](const json&) {},
+                                  [&](const json& d, bool) { raw_delta_out += d.get<std::string>(); }, false);
+            sink.on_begin({"m", true});
+            sink.on_start({});
+            chat_msg_delta bad_utf8;
+            bad_utf8.content = std::string("ok\xFF");
+            sink.on_delta(bad_utf8);
+            if (raw_delta_out.find("ok\xEF\xBF\xBD") == std::string::npos) {
+                std::printf("  FAIL invalid UTF-8 delta replacement: %s\n", raw_delta_out.c_str());
+                failures++;
+            }
+        }
         failures += error_routing();
         failures += flush_hook();
 

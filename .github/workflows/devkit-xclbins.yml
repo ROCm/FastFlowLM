@@ -86,6 +86,12 @@ on:
           mode changed the users of a kernel whose source changed and the
           models whose assignment changed; planned-models otherwise).
         value: ${{ jobs.plan.outputs.bench-models }}
+      empty:
+        description: >
+          "true" when the plan has nothing to build (say, a change that only
+          deletes a unit): build and assemble skip, no devkit-xclbins
+          artifact is uploaded, and the call still succeeds.
+        value: ${{ jobs.plan.outputs.empty }}
   workflow_dispatch:
     inputs:
       mode:

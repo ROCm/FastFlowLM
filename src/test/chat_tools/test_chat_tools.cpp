@@ -1064,6 +1064,114 @@ void test_glm_template_capabilities() {
     CHECK(prompt.find("\"tool_calls\"") == std::string::npos);
 }
 
+void test_minja_template_exception() {
+    std::printf("minja raise_exception throws TemplateException while other errors stay runtime_error\n");
+    // Template calling raise_exception inside nested control flow must surface minja::TemplateException
+    // with the clean message (so AutoModel::_render_chat_template can turn it into HTTP 400).
+    minja::chat_template strict(
+        "{%- for m in messages -%}"
+        "{%- if m.role == 'bad' -%}{{ raise_exception('roles must alternate') }}{%- endif -%}"
+        "{{- m.content -}}"
+        "{%- endfor -%}",
+        "", "");
+    minja::chat_template_inputs inputs;
+    inputs.messages = json::array({{{"role", "bad"}, {"content", "hi"}}});
+    bool caught_template = false;
+    std::string caught_msg;
+    try {
+        (void)strict.apply(inputs);
+    } catch (const minja::TemplateException& e) {
+        caught_template = true;
+        caught_msg = e.what();
+    } catch (const std::exception&) {
+        caught_template = false;
+    }
+    CHECK(caught_template);
+    CHECK_EQ(caught_msg, "roles must alternate");
+
+    // Ordinary render errors (e.g. calling an unsupported method) must remain std::runtime_error,
+    // NOT minja::TemplateException (so they stay HTTP 500).
+    minja::chat_template broken("{{- messages.no_such_method() -}}", "", "");
+    inputs.messages = json::array({{{"role", "user"}, {"content", "hi"}}});
+    bool caught_runtime_only = false;
+    try {
+        (void)broken.apply(inputs);
+    } catch (const minja::TemplateException&) {
+        caught_runtime_only = false;
+    } catch (const std::runtime_error&) {
+        caught_runtime_only = true;
+    }
+    CHECK(caught_runtime_only);
+}
+
+void test_inkling() {
+    std::printf("inkling: typed messages, reasoning, answers and calls\n");
+    const chat_format_spec spec = chat_format_make(chat_format_kind::INKLING, false);
+    CHECK(chat_format_detect("{{ '<|message_model|>' }}", [](const std::string& t) {
+              return t == "<|content_invoke_tool_json|>";
+          }).kind == chat_format_kind::INKLING);
+    // as the model writes a turn; the end token is dropped before parsing, or kept
+    const std::string answer = "<|message_model|><|content_thinking|>84 * 3 = 252, / 2 = 126.<|end_message|>"
+                               "<|message_model|><|content_text|>126<|end_message|>";
+    chat_msg msg = parse(spec, answer);
+    CHECK_EQ(msg.reasoning, "84 * 3 = 252, / 2 = 126.");
+    CHECK_EQ(msg.content, "126");
+    CHECK(msg.tool_calls.empty());
+    CHECK_EQ(parse(spec, answer + "<|content_model_end_sampling|>").content, "126");
+    check_prefix_stable(spec, answer, "inkling answer");
+
+    const std::string calls = "<|message_model|><|content_thinking|>Need the weather.<|end_message|>"
+                              "<|message_model|>get_weather<|content_invoke_tool_json|>"
+                              "{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\",\"unit\":\"celsius\"}}<|end_message|>"
+                              "<|message_model|>ping<|content_invoke_tool_json|>{\"name\":\"ping\",\"args\":{}}<|end_message|>";
+    msg = parse(spec, calls);
+    CHECK_EQ(msg.reasoning, "Need the weather.");
+    CHECK_EQ(msg.content, "");
+    CHECK(msg.tool_calls.size() == 2);
+    if (msg.tool_calls.size() == 2) {
+        CHECK_EQ(msg.tool_calls[0].name, "get_weather");
+        CHECK_EQ(msg.tool_calls[0].arguments, "{\"city\":\"Paris\",\"unit\":\"celsius\"}");
+        CHECK_EQ(msg.tool_calls[1].name, "ping");
+        CHECK_EQ(msg.tool_calls[1].arguments, "{}");
+    }
+    check_prefix_stable(spec, calls, "inkling calls");
+    // tool calls not asked for are dropped, not shown as text
+    msg = parse(spec, calls, false, false);
+    CHECK(msg.tool_calls.empty() && msg.content.empty());
+    // a call with no JSON stands by its header
+    msg = parse(spec, "<|message_model|>now<|content_invoke_tool_json|><|end_message|>");
+    CHECK(msg.tool_calls.size() == 1 && msg.tool_calls[0].name == "now" && msg.tool_calls[0].arguments == "{}");
+    // text before any message is the answer's
+    msg = parse(spec, "hello");
+    CHECK_EQ(msg.content, "hello");
+    // a stream stops at a half written marker
+    msg = parse(spec, "<|message_model|><|content_text|>Hi<|end_mes", true);
+    CHECK_EQ(msg.content, "Hi");
+
+    // a continued answer hands its open message on
+    CHECK_EQ(chat_format_prefill(spec, "<|end_message|><|message_model|><|content_text|>The", true), "<|message_model|><|content_text|>The");
+    CHECK_EQ(chat_format_prefill(spec, "<|message_user|><|content_text|>hi<|end_message|>"), "");
+
+    grammar_fixture grammar(spec);
+    const std::string think = "<|message_model|><|content_thinking|>Let me see.<|end_message|>";
+    const std::string weather = "<|message_model|>get_weather<|content_invoke_tool_json|>"
+                                "{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\",\"unit\":\"celsius\"}}<|end_message|>";
+    CHECK(grammar.accepts(tools_request(), think + weather, "inkling auto call"));
+    CHECK(grammar.accepts(tools_request(), think + "<|message_model|><|content_text|>Hi.<|end_message|>", "inkling auto text"));
+    CHECK(grammar.accepts(tools_request(chat_tool_choice::REQUIRED), think + weather, "inkling required"));
+    CHECK(grammar.accepts(tools_request(chat_tool_choice::FUNCTION, "get_weather"), weather, "inkling function"));
+    CHECK(!grammar.takes(tools_request(chat_tool_choice::REQUIRED), think + "<|message_model|><|content_text|>Hi.<|end_message|>"));
+    // a forced call gets one thinking message: a second one would let the model loop
+    CHECK(!grammar.takes(tools_request(chat_tool_choice::REQUIRED), think + think + weather));
+    CHECK(grammar.accepts(tools_request(), think + think + weather, "inkling auto two thoughts"));
+    CHECK(!grammar.takes(tools_request(chat_tool_choice::FUNCTION, "ping"), weather));
+    CHECK(!grammar.takes(tools_request(), think + "<|message_model|>get_weather<|content_invoke_tool_json|>"
+                                                  "{\"name\":\"get_weather\",\"args\":{\"unit\":\"celsius\"}}<|end_message|>"));
+    chat_constraint_request schema = string_schema_request({{"type", "string"}});
+    CHECK(grammar.accepts(schema, think + "<|message_model|><|content_text|>{\"v\": \"x\"}<|end_message|>", "inkling schema"));
+    CHECK(!grammar.takes(schema, think + "<|message_model|><|content_text|>x<|end_message|>"));
+}
+
 } // namespace
 
 int main() {
@@ -1090,6 +1198,8 @@ int main() {
     test_glm_string_length();
     test_minja_tojson_ensure_ascii();
     test_glm_template_capabilities();
+    test_minja_template_exception();
+    test_inkling();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

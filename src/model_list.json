@@ -106,6 +106,45 @@
                 "footprint": 22.0
             }
         },
+        "inkling-2": {
+            "mini": {
+                "supported_platforms": ["aie2p"],
+                "name": "Inkling-2-Mini-NPU2",
+                "url": "https://huggingface.co/FastFlowLM/Inkling-2-Mini-NPU2",
+                "file_url": "https://huggingface.co/api/models/FastFlowLM/Inkling-2-Mini-NPU2/tree/main",
+                "ms_url": "https://modelscope.cn/models/amd/Inkling-2-Mini-NPU2",
+                "modified_at": "2026-11-21T00:00:00Z",
+                "size": 17273146180,
+                "flm_min_version": "1.0.14",
+                "default_context_length": 65536,
+                "max_prefill_len": 4096,
+                "files": [
+                    "config.json",
+                    "model.q4nx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "chat_template.jinja",
+                    "vision_weight.q4nx"
+                ],
+                "vlm": true,
+                "asr": false,
+                "tools": true,
+                "details": {
+                    "format": "NPU2",
+                    "family": "inkling-2",
+                    "think": true,
+                    "think_toggleable": true,
+                    "parameter_size": "26B-A3B",
+                    "quantization_level": "Q4_K"
+                },
+                "label": [
+                    "vision",
+                    "reasoning",
+                    "tool-calling"
+                ],
+                "footprint": 20.0
+            }
+        },
         "r2t2": {
             "1.7b": {
                 "supported_platforms": ["aie2p"],
@@ -113,7 +152,7 @@
                 "url": "https://huggingface.co/FastFlowLM/Confucius4-R2T2-NPU2",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Confucius4-R2T2-NPU2/tree/main",
                 "ms_url": "https://modelscope.cn/models/amd/Confucius4-R2T2-NPU2",
-                "modified_at": "2026-11-02T00:00:00Z",
+                "modified_at": "2026-11-25T00:00:00Z",
                 "size": 3920000000,
                 "flm_min_version": "1.0.14",
                 "default_context_length": 2048,
@@ -141,7 +180,7 @@
                     "audio",
                     "transcription"
                 ],
-                "footprint": 4.2
+                "footprint": 3.6
             }
         },
         "nanbeige4.1": {
@@ -2907,7 +2946,7 @@
             "file_url": "https://huggingface.co/api/models/amd/Qwen3.6-35B-A3B-Q4_G32-GGUF/tree/53a2155ba4237f4bffc3914b2f63cbb0bc68585b",
             "use_hf_token": true,
             "size": 21311733654,
-            "default_context_length": 32768,
+            "default_context_length": 262144,
             "max_prefill_len": 4096,
             "details": {
                 "family": "qwen3.6-moe",

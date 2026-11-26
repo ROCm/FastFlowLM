@@ -157,6 +157,8 @@ docs_nav:
         url: "/docs/models/flash/"
       - label: Confucius4-R2T2
         url: "/docs/models/r2t2/"
+      - label: Inkling
+        url: "/docs/models/inkling/"
   - label: Benchmarks
     children:
       - label: Overview
@@ -209,3 +211,5 @@ docs_nav:
         url: "/docs/benchmarks/whisper_results/"
       - label: Confucius4-R2T2
         url: "/docs/benchmarks/r2t2_results/"
+      - label: Inkling
+        url: "/docs/benchmarks/inkling_results/"

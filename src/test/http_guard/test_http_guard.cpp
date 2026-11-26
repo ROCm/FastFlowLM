@@ -268,10 +268,16 @@ void test_required_fields() {
     CHECK(!validate_cancel_request_id(ojson{{"request_id", "req_1"}}));
     CHECK(!validate_cancel_request_id(empty));  // absent: the handler's own message (WP-02)
 
-    // send_response turns error.code into the HTTP status: it must be an integer.
+    // error_body delegates to error_model so server.cpp renders it per route protocol.
     const auto e = error_body("x", 400, "model");
     CHECK(e["error"]["code"].is_number_integer());
     CHECK(error_body("x", 403)["error"]["param"].is_null());
+    const auto extracted = flm::error_model::extract_error(e);
+    CHECK(extracted.has_value() && extracted->status == 400 && extracted->param == "model");
+    if (extracted) {
+        const auto oll = flm::error_model::body_for(flm::error_model::Protocol::Ollama, *extracted);
+        CHECK(oll.size() == 1 && oll["error"] == "x");
+    }
 }
 }  // namespace
 

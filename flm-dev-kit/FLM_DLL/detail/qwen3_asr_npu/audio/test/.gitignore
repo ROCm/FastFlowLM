@@ -1,2 +1,3 @@
 audio_encoder_test
+audio_encoder_test_npu
 conv_cache_test

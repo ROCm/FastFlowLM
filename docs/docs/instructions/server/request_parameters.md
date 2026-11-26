@@ -63,7 +63,7 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think`, `reasoning_effort` (GPT-OSS's and Hy-Memory's levels too), `conversational_mode` and `image-max-tokens` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).
+> ℹ️ **Every request starts from the model's defaults.** A sampling field applies only to the request that sends it. A request that leaves a field out gets the model's default, not what an earlier request set. `think`, `reasoning_effort` (GPT-OSS's, Hy-Memory's and Inkling-2's levels too), `conversational_mode` and `image-max-tokens` [work the same way](https://fastflowlm.com/docs/instructions/server/reasoning_and_tools/#-turning-thinking-on-and-off).
 
 > ⚠️ **Out-of-range values are ignored, not rejected.** A negative `temperature` or `presence_penalty`, or a `top_p` above 1, gets HTTP 200: the server logs a warning and keeps the value it had. OpenAI accepts penalties from −2 to 2, but FLM ignores negative ones, so a penalty can't be used to *encourage* repetition. `repeat_last_n` and `seed` are stricter: a value that isn't an integer, or a `repeat_last_n` below −1, is rejected with HTTP 400.
 
@@ -280,7 +280,7 @@ Before generating, FLM reads the prompt into the model's KV cache. This is the *
 
 The prompt has to fit in the **context length**, with room left over to generate:
 
-- A prompt of as many tokens as the context length, or more, is **rejected whole** with HTTP 400. On most models the message is `"Max length reached!"` (`"type": "model_error"`). Models on the `core` backend check before reading anything, and they also reject a request whose `max_tokens` doesn't fit in what is left. FLM never truncates a prompt.
+- A prompt of as many tokens as the context length, or more, is **rejected whole** with HTTP 400. On most models the message is `"Max length reached!"` (`"type": "invalid_request_error"`). Models on the `core` backend check before reading anything, and they also reject a request whose `max_tokens` doesn't fit in what is left. FLM never truncates a prompt.
 - A prompt that fits starts generating, and generation stops when the context is full, with `finish_reason: "length"`.
 
 So for a 32k-token prompt, start the server with a context comfortably above 32k. The model must support that length (see its [model card](https://fastflowlm.com/docs/models/)):

@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include "error_model.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -275,14 +277,12 @@ inline HeaderList cors_headers(const OriginPolicy& policy, std::string_view orig
 }
 
 // ---------------------------------------------------------------------------------------------
-// Errors (interim shape until WP-02's make_error) and required fields
+// Errors (built via error_model::make_error) and required fields
 
-/// {"error": {message, type, param, code}}: the integer code is what send_response turns into the
-/// HTTP status, so a 400 built here is sent as 400, not 200.
+/// Canonical structured error body; server.cpp formats it into the route's wire protocol.
 inline ojson error_body(const std::string& message, int code, const std::string& param = {},
                         const std::string& type = "invalid_request_error") {
-    ojson e = {{"message", message}, {"type", type}, {"param", param.empty() ? ojson(nullptr) : ojson(param)}, {"code", code}};
-    return ojson{{"error", e}};
+    return flm::error_model::make_error(code, message, param, type);
 }
 
 /// Missing or not a string -> 400 naming the field.

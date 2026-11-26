@@ -3,7 +3,8 @@
 
 // Engine-level harness for libqwen3_asr_npu.so: prefill on the CPU, decode on the NPU, against the frozen goldens.
 //
-//   qwen3_asr_engine_run <pkg_dir> <xclbin_root> <goldens_dir> <clip> [<clip> ...] [--max-length N] [--cpu-decode]
+//   qwen3_asr_engine_run <pkg_dir> <xclbin_root> <goldens_dir> <clip> [<clip> ...] [--max-length N] [--mel] [--out-ids f]
+//                        [--split-at-audio]   (two prefills: the text before the audio, then the rest after it)
 //
 // pkg_dir: the weights package (config.json, model.q4nx, tokenizer.json); the engine reads
 //   <xclbin_root>/xclbins/<basename of pkg_dir>/layer.xclbin.
@@ -38,13 +39,14 @@ int main(int argc, char** argv) {
     const std::string pkg = p.string(), xroot = argv[2], gdir = argv[3];
     std::vector<std::string> clips;
     int max_length = 8192;
-    bool use_mel = false;
+    bool use_mel = false, split_at_audio = false;   // split: prefill the text before the audio, then the rest after it
     std::string out_ids;
     for (int i = 4; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--max-length" && i + 1 < argc) max_length = std::stoi(argv[++i]);
         else if (a == "--mel") use_mel = true;
         else if (a == "--out-ids" && i + 1 < argc) out_ids = argv[++i];
+        else if (a == "--split-at-audio") split_at_audio = true;
         else clips.push_back(a);
     }
     constexpr int EOS0 = 151645, EOS1 = 151643;
@@ -97,7 +99,15 @@ int main(int argc, char** argv) {
 
         engine.clear_context();
         auto t0 = std::chrono::steady_clock::now();
-        buffer<bf16> logits = engine.prefill(ids, &payload);
+        buffer<bf16> logits;
+        const auto pad = std::find(ids.begin(), ids.end(), payload.audio_pad_id);
+        if (split_at_audio && pad != ids.begin() && pad != ids.end()) {
+            std::vector<int> head(ids.begin(), pad), rest(pad, ids.end());
+            engine.prefill(head, nullptr);
+            logits = engine.prefill(rest, &payload);
+        } else {
+            logits = engine.prefill(ids, &payload);
+        }
         const double prefill_ms = ms_since(t0);
 
         std::vector<int> mine;

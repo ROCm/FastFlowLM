@@ -14,6 +14,9 @@
 #include <vector>
 
 #include "../qwen3_asr_audio_encoder.hpp"
+#ifdef AUDIO_TEST_NPU
+#include "../qwen3_asr_audio_gemm_npu.hpp"
+#endif
 
 static std::vector<float> load_npy(const std::string& path, std::vector<long>& shape) {
     std::ifstream f(path, std::ios::binary);
@@ -45,7 +48,16 @@ static float bf2f(uint16_t b) { uint32_t u = (uint32_t)b << 16; float f; std::me
 int main(int argc, char** argv) {
     if (argc < 4) { std::fprintf(stderr, "usage: %s audio_weight.q4nx goldens_dir clip...\n", argv[0]); return 2; }
     auto t0 = std::chrono::steady_clock::now();
+#ifdef AUDIO_TEST_NPU   // matrix products on the NPU: AUDIO_GEMM_XCLBIN=<audio_gemm.xclbin>
+    const char* xclbin = std::getenv("AUDIO_GEMM_XCLBIN");
+    if (!xclbin) { std::fprintf(stderr, "set AUDIO_GEMM_XCLBIN\n"); return 2; }
+    xrt::device device(0);
+    npu_xclbin_manager npu(npu_device::device_npu2, &device, false);
+    qwen3_asr_audio_gemm_npu gemm(npu.register_xclbin(xclbin));
+    qwen3_asr_audio_encoder enc(argv[1], {}, &gemm);
+#else
     qwen3_asr_audio_encoder enc(argv[1]);
+#endif
     std::printf("load %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
     const int D = 2048, WT = enc.config().window_tokens();
     int fails = 0;

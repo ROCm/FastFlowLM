@@ -184,6 +184,11 @@ class Synthetic(unittest.TestCase):
                 self.assertTrue(any("is not a plain relative path" in x for x in e), e)
         e = errors({"a": {"folder": "F", "kernels": {"../attn.xclbin": "xclbins-Attn"}}})
         self.assertTrue(any("is not a plain file name" in x for x in e), e)
+        # A slot is an .xclbin or a .switches file, nothing else.
+        e = errors({"a": {"folder": "F", "kernels": {"inkling2.switches": "xclbins-Attn"}}})
+        self.assertFalse(any("slot" in x for x in e), e)
+        e = errors({"a": {"folder": "F", "kernels": {"attn.bin": "xclbins-Attn"}}})
+        self.assertTrue(any("does not end in .xclbin or .switches" in x for x in e), e)
 
     def test_markdown_must_agree(self):
         cases = {
