@@ -31,13 +31,17 @@ public:
     std::unique_lock<std::mutex> AcquireExecution();
     const std::shared_ptr<CorelibApi>& api() const noexcept;
     const std::filesystem::path& loaded_library_path() const noexcept;
+    /// \brief whether corelib's streams run NPU direct, as it said when the
+    ///        runtime came up
+    bool npu_direct() const noexcept;
 
 private:
-    explicit CorelibRuntime(std::shared_ptr<CorelibApi> api);
+    CorelibRuntime(std::shared_ptr<CorelibApi> api, bool npu_direct);
     static std::shared_ptr<CorelibRuntime> CreateReady(
         std::shared_ptr<CorelibApi> api);
 
     std::shared_ptr<CorelibApi> api_;
+    bool npu_direct_;
     std::mutex execution_mutex_;
 };
 

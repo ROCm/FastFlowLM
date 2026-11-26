@@ -24,10 +24,11 @@ using corelib::UniqueModelSnapshot;
 
 struct CorelibModel::Impl {
     Impl(ModelSpec model_spec, const std::filesystem::path& file,
-         std::shared_ptr<CorelibRuntime> owner, std::uint32_t maximum)
+         std::shared_ptr<CorelibRuntime> owner, std::uint32_t maximum, KvCache layout)
         : spec(std::move(model_spec)),
           runtime(std::move(owner)),
           api(runtime ? runtime->api() : nullptr),
+          kv_cache(layout),
           max_length(maximum) {
         if (spec.rewind != Rewind::kSeek && spec.continuation != Continuation::kAnywhere)
             throw std::invalid_argument(spec.display_name +
@@ -59,6 +60,7 @@ struct CorelibModel::Impl {
     ModelSpec spec;
     std::shared_ptr<CorelibRuntime> runtime;
     std::shared_ptr<const CorelibApi> api;
+    KvCache kv_cache;
     UniqueModel model;
     UniqueModelSession session;
     std::uint32_t capacity = 0;
@@ -283,9 +285,16 @@ private:
         ryzenai_corelib_model_session_options options{};
         options.size = sizeof(options);
         options.max_sequence_length = static_cast<std::int64_t>(n);
+        options.kv_cache_bits = kv_cache == KvCache::k8Bit ? 8 : 0;
         void* raw = nullptr;
-        api->Check(api->functions().model_create_session(model.get(), &options, &raw),
-                   "ryzenai_corelib_model_create_session");
+        try {
+            api->Check(api->functions().model_create_session(model.get(), &options, &raw),
+                       "ryzenai_corelib_model_create_session");
+        } catch (const std::exception& error) {
+            if (kv_cache != KvCache::k8Bit) throw;
+            throw std::runtime_error(spec.display_name + " has no 8-bit KV cache here (" +
+                                     error.what() + "); run it with a 16-bit one");
+        }
         UniqueModelSession created(api, raw);
         ryzenai_corelib_model_metadata info{};
         info.size = sizeof(info);
@@ -348,8 +357,9 @@ private:
 
 CorelibModel::CorelibModel(ModelSpec spec, std::filesystem::path weights,
                            std::shared_ptr<corelib::CorelibRuntime> runtime,
-                           std::uint32_t max_length)
-    : impl_(std::make_unique<Impl>(std::move(spec), weights, std::move(runtime), max_length)) {}
+                           std::uint32_t max_length, KvCache kv_cache)
+    : impl_(std::make_unique<Impl>(std::move(spec), weights, std::move(runtime), max_length,
+                                   kv_cache)) {}
 
 CorelibModel::~CorelibModel() = default;
 

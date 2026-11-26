@@ -53,9 +53,10 @@ struct Package {
 struct Runtime {
     std::shared_ptr<CorelibRuntime> runtime;
 
-    Runtime() {
+    explicit Runtime(bool npu_direct = true) {
         fake_corelib::Reset();
         fake_corelib::GetState().model_vocab = 300000;
+        fake_corelib::GetState().npu_direct = npu_direct;
         runtime = CorelibRuntime::CreateForTest(CorelibApi::ResolveForTest(fake_corelib::Resolver()));
     }
     ~Runtime() {
@@ -267,6 +268,101 @@ void TestPoisonedFollowsTheEngine() {
     TEST_REQUIRE(backend->poisoned());
 }
 
+/// \brief --kv-cache-bits and FLM_KV_CACHE_BITS for one scope, both cleared after
+struct KvCacheSetting {
+    KvCacheSetting(int flag, const char* environment) {
+        flm::core::SetRequestedKvCacheBits(flag);
+        _putenv_s("FLM_KV_CACHE_BITS", environment);
+    }
+    ~KvCacheSetting() {
+        flm::core::SetRequestedKvCacheBits(0);
+        _putenv_s("FLM_KV_CACHE_BITS", "");
+    }
+};
+
+std::vector<std::int32_t> SessionBits() { return fake_corelib::GetState().session_kv_cache_bits; }
+
+void TestTheKvCacheIsBf16UnlessAsked() {
+    Runtime r;
+    Package p({"m.gguf"});
+    auto backend = flm::core::Factory(Spec())(Context(p, 4096));
+    TEST_REQUIRE(SessionBits() == std::vector<std::int32_t>{0});
+    TEST_REQUIRE(backend->detail().find("8-bit") == std::string::npos);
+}
+
+void TestTheFlagWinsOverTheEnvironment() {
+    {
+        Runtime r;
+        Package p({"m.gguf"});
+        KvCacheSetting kv(0, "8");
+        auto backend = flm::core::Factory(Spec())(Context(p, 4096));
+        TEST_REQUIRE(SessionBits() == std::vector<std::int32_t>{8});
+        TEST_REQUIRE(backend->detail().find("(NPU direct, 8-bit KV cache)") != std::string::npos);
+    }
+    {
+        Runtime r;
+        Package p({"m.gguf"});
+        KvCacheSetting kv(16, "8");
+        auto backend = flm::core::Factory(Spec())(Context(p, 4096));
+        TEST_REQUIRE(SessionBits() == std::vector<std::int32_t>{0});
+    }
+    {
+        Runtime r;
+        Package p({"m.gguf"});
+        KvCacheSetting kv(8, "16");
+        auto backend = flm::core::Factory(Spec())(Context(p, 4096));
+        TEST_REQUIRE(SessionBits() == std::vector<std::int32_t>{8});
+    }
+}
+
+void TestABadKvCacheSettingIsRefusedBeforeTheWeightsAreOpened() {
+    for (const char* bad : {"12", "8x", "eight"}) {
+        Runtime r;
+        Package p({"m.gguf"});
+        KvCacheSetting kv(0, bad);
+        RequireContains(RequireThrows<std::invalid_argument>(
+                            [&] { (void)flm::core::Factory(Spec())(Context(p, 4096)); }),
+                        "FLM_KV_CACHE_BITS");
+        TEST_REQUIRE(WeightLoads() == 0);
+    }
+    (void)RequireThrows<std::invalid_argument>([] { flm::core::SetRequestedKvCacheBits(4); });
+    flm::core::SetRequestedKvCacheBits(0);
+}
+
+void TestAn8BitCacheWithoutNpuDirectIsRefusedBeforeTheWeightsAreOpened() {
+    std::ostringstream ignored;
+    auto* previous = std::cerr.rdbuf(ignored.rdbuf());
+    Runtime r(false);
+    std::cerr.rdbuf(previous);
+    Package p({"m.gguf"});
+    KvCacheSetting kv(8, "");
+    RequireContains(RequireThrows([&] { (void)flm::core::Factory(Spec())(Context(p, 4096)); }),
+                    "needs NPU direct");
+    TEST_REQUIRE(WeightLoads() == 0);
+}
+
+void TestAModelWithoutAn8BitCacheSaysSo() {
+    Runtime r;
+    Package p({"m.gguf"});
+    KvCacheSetting kv(8, "");
+    fake_corelib::GetState().statuses["ryzenai_corelib_model_create_session"] =
+        ryzenai_corelib_status_unsupported;
+    RequireContains(RequireThrows([&] { (void)flm::core::Factory(Spec())(Context(p, 4096)); }),
+                    "Qwen3 has no 8-bit KV cache here");
+}
+
+void TestALongerContextKeepsThe8BitCache() {
+    Runtime r;
+    Package p({"m.gguf"});
+    KvCacheSetting kv(8, "");
+    auto spec = Spec();
+    spec.model.context_limit = 16384;
+    auto backend = flm::core::Factory(spec)(Context(p, 4096));
+    backend->engine().update_max_length(8192);
+    TEST_REQUIRE(fake_corelib::GetState().session_creates == 2);
+    TEST_REQUIRE((SessionBits() == std::vector<std::int32_t>{8, 8}));
+}
+
 }  // namespace
 
 int main() {
@@ -286,6 +382,12 @@ int main() {
     RUN(TestAConfigJsonThatIsNotAnObjectIsNamed);
     RUN(TestDestroyingTheBackendReleasesEveryCorelibObject);
     RUN(TestPoisonedFollowsTheEngine);
+    RUN(TestTheKvCacheIsBf16UnlessAsked);
+    RUN(TestTheFlagWinsOverTheEnvironment);
+    RUN(TestABadKvCacheSettingIsRefusedBeforeTheWeightsAreOpened);
+    RUN(TestAn8BitCacheWithoutNpuDirectIsRefusedBeforeTheWeightsAreOpened);
+    RUN(TestAModelWithoutAn8BitCacheSaysSo);
+    RUN(TestALongerContextKeepsThe8BitCache);
 #undef RUN
     std::cout << "All core backend tests passed\n";
     return 0;
