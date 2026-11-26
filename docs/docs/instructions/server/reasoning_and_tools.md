@@ -209,10 +209,14 @@ def collect_stream(stream):
     message = {"role": "assistant", "content": "".join(content) or None}
     if calls:
         message["tool_calls"] = [calls[i] for i in sorted(calls)]
+        if reasoning:
+            message["reasoning_content"] = "".join(reasoning)
     return message, "".join(reasoning), finish_reason, usage
 ```
 
-`message` can go straight back into `messages` for the next turn. Leave the reasoning out: FLM strips `reasoning_content` from earlier assistant turns before it builds the prompt anyway.
+You can append the returned assistant `message` to `messages`, followed by the tool result. On `qwen3.5-oga-hipep:9b` (GPU), a string `reasoning_content` on that tool-call message is part of the prompt while the model is answering the **same user question**. No extra option is needed. Once there is a new user question the old note drops out. `think` controls the reply being generated, not the history you send.
+
+**Compatibility:** earlier releases stripped the field even during a tool call. Clients that echo whole messages may now use more prompt tokens and reach the context limit sooner. Omit `reasoning_content` if you do not want to include it. Other packages retain their existing behavior.
 
 ### 📊 Usage in streams
 

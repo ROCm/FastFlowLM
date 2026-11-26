@@ -2313,6 +2313,7 @@
             "9b": {
                 "tools": true,
                 "name": "Qwen3.5-9B_gpuep_1.0_gpu_128",
+                "active_tool_reasoning": true,
                 "positional_tool_results": true,
                 "url": "https://huggingface.co/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/resolve/f3a9b4aeb60a42542cc4fec561e1f1095e427483",
                 "file_url": "https://huggingface.co/api/models/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/tree/f3a9b4aeb60a42542cc4fec561e1f1095e427483",

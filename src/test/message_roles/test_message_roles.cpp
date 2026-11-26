@@ -269,6 +269,7 @@ void test_active_tool_reasoning() {
     const auto prepare = [&](const json& history) {
         std::vector<std::size_t> indices;
         auto messages = flatten(flm::chat::normalize_messages(history, roles, &indices));
+        flm::chat::apply_active_tool_reasoning(messages, history, indices);
         return messages;
     };
     auto call = msg("assistant", "");
@@ -277,6 +278,9 @@ void test_active_tool_reasoning() {
     call["reasoning_content"] = "synthetic note";
     auto history = json::array({msg("user", "Q"), call, msg("tool", "42")});
     CHECK_EQ(gpu.render(prepare(history)), gpu.render(history));
+    // A removed instruction and merged user messages must not shift the note to another call.
+    CHECK_EQ(gpu.render(prepare(json::array({msg("developer", ""), msg("user", ""), msg("user", "Q"),
+                                             call, msg("tool", "42")}))), gpu.render(history));
     // An entire wrapped tool result is a continuation, including when sent as text parts.
     history[2] = msg("user", json::array({{{"type", "text"}, {"text", " <tool_response>"}},
                                           {{"type", "text"}, {"text", "42</tool_response>\n"}}}));
