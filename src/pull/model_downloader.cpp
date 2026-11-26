@@ -12,7 +12,6 @@
 #include <fstream>
 #include <cctype>
 #include <limits>
-#include <map>
 #include <unordered_set>
 
 namespace {
@@ -335,24 +334,19 @@ std::string ModelDownloader::preview_pull(const std::string& model_tag, bool use
         choose_pull_source(tag, use_modelscope, force, /*offline=*/true);
         const auto [resolved, info] = supported_models.get_model_info(tag);
         const auto path = supported_models.get_model_path(resolved);
+        const auto status = own_model_status(resolved, /*sub_process_mode=*/true, /*fast_check=*/true);
+        plan << resolved << ":\n";
+        if (status == ModelStatus::Incompatible) {
+            // A pull leaves files made for a newer FastFlowLM alone and goes on.
+            plan << "  keep installed files: they need a newer FastFlowLM, so pull downloads nothing\n";
+            return;
+        }
         const auto records = load_model_file_records(info, resolved);
         const std::vector<std::string> files = info.at("files");
         if (files.empty()) throw std::runtime_error("No required files listed for " + resolved);
-        std::map<std::string, const nlohmann::json*> pending;
-        for (const auto& record : records) {
-            const auto name = record.at("path").get<std::string>();
-            if (!pending.emplace(name, &record).second) throw std::runtime_error("Duplicate file record for " + name);
-        }
-
-        const auto status = own_model_status(resolved, /*sub_process_mode=*/true, /*fast_check=*/true);
-        if (status == ModelStatus::Incompatible)
-            throw std::runtime_error("Model is incompatible with this version of FastFlowLM: " + resolved);
         const bool verify = uses_pinned_upstream_integrity(info) || status == ModelStatus::Outdated;
-        plan << resolved << ":\n";
         for (const auto& name : files) {
-            const auto entry = pending.extract(name);
-            if (!entry) throw std::runtime_error("Missing file record or duplicate required file: " + name);
-            const auto& record = *entry.mapped();
+            const auto& record = find_file_record(records, name);
             const auto& size = record.at("size");
             if (!size.is_number_integer() || (!size.is_number_unsigned() && size.get<std::int64_t>() < 0))
                 throw std::runtime_error("invalid download size for " + name);
@@ -360,8 +354,11 @@ std::string ModelDownloader::preview_pull(const std::string& model_tag, bool use
             if (file.hash.size() != (file.hash_algorithm == download_utils::HashAlgorithm::Sha256 ? 64u : 40u)
                 || !std::all_of(file.hash.begin(), file.hash.end(), [](unsigned char c) { return std::isxdigit(c); }))
                 throw std::runtime_error("invalid download hash for " + name);
+            // A pull checks outdated files against the Hugging Face records (own_model_status).
+            const auto checked = status == ModelStatus::Outdated
+                ? resolve_model_file(info, record, name, false) : file;
             const auto local = get_model_file_path(path, name);
-            const bool reuse = !force && file_exists(local) && (!verify || matches_record(local, file));
+            const bool reuse = !force && file_exists(local) && (!verify || matches_record(local, checked));
             plan << (reuse ? "  reuse " : "  download ") << name << " (" << file.size << " B)";
             if (!reuse) {
                 if (file.size > std::numeric_limits<std::uint64_t>::max() - total)

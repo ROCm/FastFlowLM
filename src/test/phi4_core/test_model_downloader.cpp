@@ -726,6 +726,54 @@ void TestPreviewOnlyUsesLocallyDeterminedPreferredSource() {
     RequireContains(RequireThrows([&] { preview(true); }), "offline");
 }
 
+void TestForcedPreviewKeepsPartFiles() {
+    BaseModelFixture fixture("dry-run-force-part");
+    fixture.InstallBase();
+    fixture.InstallDependant();
+    Write(fixture.dep_path() / "draft.bin.part", "draft");
+    ModelDownloader downloader(fixture.models);
+    RequireContains(downloader.preview_pull(kDependantTag, false, true), "download draft.bin (13 B) [.part");
+    TEST_REQUIRE(Read(fixture.dep_path() / "draft.bin.part") == "draft");
+    TEST_REQUIRE(Read(fixture.dep_path() / "draft.bin") == "draft-weights");
+}
+
+void TestPreviewMatchesPullOnIncompatibleAndOutdatedPackages() {
+    BaseModelFixture fixture("dry-run-status");
+    ModelDownloader downloader(fixture.models);
+    const auto own_bytes = fs::file_size(fixture.root / "hf/dep/resolve/config.json") + 13;
+    // A pull skips a base made for a newer FastFlowLM and still pulls the tag.
+    fixture.InstallBase("9.9.9");
+    const auto plan = downloader.preview_pull(kDependantTag);
+    RequireContains(plan, "keep installed files");
+    RequireContains(plan, "Total download: " + std::to_string(own_bytes) + " B");
+    bool pulled = false;
+    Captured([&] { pulled = downloader.pull_model(kDependantTag); });
+    TEST_REQUIRE(pulled);
+    TEST_REQUIRE(Read(fixture.base_path() / "config.json") == ConfigWithVersion("qwen3", "9.9.9"));
+    TEST_REQUIRE(Read(fixture.dep_path() / "draft.bin") == "draft-weights");
+    // An outdated base under --modelscope: the stale config is fetched again, the weights are kept.
+    fixture.InstallBase("1.0.2");
+    const auto outdated = downloader.preview_pull(kBaseTag, true);
+    RequireContains(outdated, "download config.json");
+    RequireContains(outdated, "reuse main.bin");
+    Captured([&] { pulled = downloader.pull_model(kBaseTag, true); });
+    TEST_REQUIRE(pulled);
+    RequireContains(downloader.preview_pull(kBaseTag, true), "Total download: 0 B");
+}
+
+void TestPreviewToleratesDuplicateEntriesLikePull() {
+    BaseModelFixture fixture("dry-run-duplicates", true,
+                             {{"files", {"config.json", "draft.bin", "draft.bin"}}});
+    auto info = ReadJson(fixture.root / "model_info.json");
+    info[kDependantTag].push_back(info[kDependantTag][1]);
+    info[kDependantTag].push_back({{"path", "unused.bin"}, {"size", 1}});
+    info[kDependantTag].push_back({{"path", "unused.bin"}, {"size", 1}});
+    Write(fixture.root / "model_info.json", info.dump());
+    fixture.InstallBase();
+    ModelDownloader downloader(fixture.models);
+    TEST_REQUIRE(CountOccurrences(downloader.preview_pull(kDependantTag), "download draft.bin") == 2);
+}
+
 void TestBaseModelCatalogRelations() {
     BaseModelFixture fixture("base-catalog");
     TEST_REQUIRE(fixture.models.get_base_model(kDependantTag) == std::string(kBaseTag));
@@ -1029,6 +1077,9 @@ int main() {
     RunTest(TestPullPreviewCountsEachPackageWithoutWriting, "read-only pull preview");
     RunTest(TestPreviewInspectsPinnedFinalsWithoutRepair, "preview pinned integrity");
     RunTest(TestPreviewOnlyUsesLocallyDeterminedPreferredSource, "preview offline source selection");
+    RunTest(TestForcedPreviewKeepsPartFiles, "forced preview keeps .part files");
+    RunTest(TestPreviewMatchesPullOnIncompatibleAndOutdatedPackages, "preview incompatible and outdated packages");
+    RunTest(TestPreviewToleratesDuplicateEntriesLikePull, "preview duplicate entries");
     RunTest(TestCatalogFileRecordsDoNotNeedGlobalMetadata, "extension file records");
     RunTest(TestCoreCatalogHasExactlyFourFilesAndExpectedDirectoryName, "core catalog");
     RunTest(TestGgufUrlContainsAmdRevisionAndFilename, "GGUF URL");
