@@ -291,7 +291,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
 
         // Validate command-specific requirements
         if (parsed_args.command == "run" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check") {
-            if (parsed_args.model_tag.empty()) {
+            if (parsed_args.model_tag.empty() || (parsed_args.dry_run && !vm.count("model_tag"))) {
                 std::cerr << "Error: Model tag is required for command '" << parsed_args.command << "'" << std::endl;
                 return false;
             }

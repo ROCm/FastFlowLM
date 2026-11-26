@@ -41,6 +41,9 @@ def check_preview(exe, root):
             def preview():
                 return subprocess.check_output([*args, "--dry-run"], env=env, cwd=root, text=True, timeout=30)
 
+            for invalid in (["pull", "--dry-run"], ["list", "--dry-run"]):
+                failed = subprocess.run([str(exe), *invalid], env=env, cwd=root, capture_output=True, text=True, timeout=30)
+                assert failed.returncode != 0 and "Total download:" not in failed.stdout
             assert f"Total download: {sum(map(len, files.values()))} B" in preview()
             assert not store.exists() and not requests
             installed = store / "models/tiny"
