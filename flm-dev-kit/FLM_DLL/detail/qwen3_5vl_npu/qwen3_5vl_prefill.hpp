@@ -464,6 +464,9 @@ struct qwen3_5vl_mlp_prefill_context{
             if (!glu_now) upgate = this->upgate_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->intermediate_size * 2);
             hid = this->upgate_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->intermediate_size);
             memset(hid.data(), 0, hid.size() * sizeof(bf16));
+            // write the zeros back now: with the fused GLU the host never syncs hid again, and dirty cache lines left by
+            // the memset would otherwise be evicted over the array's output at random later (first prefill after a resize)
+            hid.sync_to_device();
         }
         PREFILL_PROF_TICK("mlp:seq_gen+alloc");
 
