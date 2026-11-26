@@ -48,8 +48,18 @@ inline std::string text_parts(const json& parts, const std::string& field,
 
 inline json to_chat_request(const json& req) {
     if (!req.is_object()) throw request_error("body", "expected an object");
-    for (auto key : {"previous_response_id", "conversation", "background"})
-        if (req.contains(key)) throw request_error(key, "not supported; send the complete history in input");
+    // null means unset for every optional field; only a value that asks for server state is refused.
+    for (auto key : {"previous_response_id", "conversation"})
+        if (provided(req, key)) throw request_error(key, "not supported; send the complete history in input");
+    if (provided(req, "background") && member(req, "background", "", json::value_t::boolean).get<bool>())
+        throw request_error("background", "not supported; send the complete history in input");
+    // Fields that would change the output if honored are refused unless they ask for the default.
+    if (provided(req, "truncation") && req["truncation"] != "disabled")
+        throw request_error("truncation", "only \"disabled\" is supported");
+    if (provided(req, "top_logprobs") && req["top_logprobs"] != 0)
+        throw request_error("top_logprobs", "not supported");
+    for (auto key : {"max_tool_calls", "prompt"})
+        if (provided(req, key)) throw request_error(key, "not supported");
 
     // A final chat_msg groups all text ahead of calls and loses their emission order.
     // Consume the core's ordered deltas for both wire modes; only the sink decides
@@ -76,9 +86,9 @@ inline json to_chat_request(const json& req) {
         const auto& r = member(req, "reasoning", "", json::value_t::object);
         if (provided(r, "effort")) chat["reasoning_effort"] = member(r, "effort", "reasoning.", json::value_t::string);
     }
-    if (req.contains("text")) {
+    if (provided(req, "text")) {
         const auto& t = member(req, "text", "", json::value_t::object);
-        if (t.contains("format")) {
+        if (provided(t, "format")) {
             auto fmt = member(t, "format", "text.", json::value_t::object);
             auto type = member(fmt, "type", "text.format.", json::value_t::string);
             if (type == "json_schema") {
@@ -91,7 +101,7 @@ inline json to_chat_request(const json& req) {
             } else throw request_error("text.format.type", "unsupported format");
         }
     }
-    if (req.contains("tools")) {
+    if (provided(req, "tools")) {
         const auto& tools = member(req, "tools", "", json::value_t::array);
         chat["tools"] = json::array();
         for (size_t i = 0; i < tools.size(); ++i) {
@@ -103,13 +113,12 @@ inline json to_chat_request(const json& req) {
                 throw request_error(p + "name", "expected a non-empty function name");
             if (provided(fn, "strict")) member(fn, "strict", p, json::value_t::boolean);
             else fn.erase("strict"); // null selects the chat core's default
-            if (fn.contains("parameters") && !fn["parameters"].is_null())
-                member(fn, "parameters", p, json::value_t::object);
+            if (provided(fn, "parameters")) member(fn, "parameters", p, json::value_t::object);
             fn.erase("type");
             chat["tools"].push_back({{"type","function"},{"function",std::move(fn)}});
         }
     }
-    if (req.contains("tool_choice")) {
+    if (provided(req, "tool_choice")) {
         const auto& choice = req["tool_choice"];
         if (choice.is_string()) chat["tool_choice"] = choice;
         else if (member(choice, "type", "tool_choice.", json::value_t::string) == "function")
@@ -118,7 +127,7 @@ inline json to_chat_request(const json& req) {
     }
 
     json messages = json::array();
-    if (req.contains("instructions") && !req["instructions"].is_null())
+    if (provided(req, "instructions"))
         messages.push_back({{"role","system"},{"content",member(req, "instructions", "", json::value_t::string)}});
     if (!req.contains("input")) throw request_error("input", "expected text or ordered input items");
     const auto& input = req["input"];
@@ -133,7 +142,7 @@ inline json to_chat_request(const json& req) {
         for (size_t i = 0; i < input.size(); ++i) {
             const auto p = "input[" + std::to_string(i) + "].";
             const auto& item = input[i];
-            const json type = item.contains("type") ? item["type"] : json("message");
+            const json type = provided(item, "type") ? item["type"] : json("message");
             const bool waiting_for_results = !pending.empty();
             const bool receiving_results = waiting_for_results && messages.back()["role"] == "tool";
             if (type == "message") {
@@ -152,10 +161,10 @@ inline json to_chat_request(const json& req) {
                 else messages.push_back({{"role",role},{"content",text}});
             } else if (type == "reasoning") {
                 if (receiving_results) throw request_error(p + "type", "expected outstanding function results first");
-                if (item.contains("encrypted_content") && !item["encrypted_content"].is_null())
+                if (provided(item, "encrypted_content"))
                     throw request_error(p + "encrypted_content", "cannot replay encrypted reasoning");
                 auto reasoning = text_parts(member(item, "summary", p, json::value_t::array), p + "summary", "summary_text");
-                if (item.contains("content") && !item["content"].is_null()) {
+                if (provided(item, "content")) {
                     auto raw = text_parts(item["content"], p + "content", "reasoning_text");
                     if (!raw.empty()) reasoning = std::move(raw);
                 }

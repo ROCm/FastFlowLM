@@ -21,7 +21,16 @@ not store a response for later retrieval, even when the request says `store: tru
 | `text.format` | `text`, `json_object`, or `json_schema`. For `json_schema`, put `name` and `schema` directly in `format`. Model and schema limits match Chat Completions. |
 | `stream` | `false` returns one `response` object. `true` returns named SSE events, not `chat.completion.chunk` objects. |
 | `store` | Accept either boolean; always report `store: false`. There is no GET or DELETE by response ID. |
-| `previous_response_id`, `conversation`, `background` | HTTP 400 naming the supplied field. Omit the field rather than passing `null` or `false`. |
+| `previous_response_id`, `conversation`, `background` | HTTP 400 naming the field when it asks for stored state: a non-null ID or conversation, or `background: true`. `null` and `background: false` are accepted. |
+| `truncation`, `top_logprobs`, `max_tool_calls`, `prompt` | HTTP 400 naming the field, unless it has its default value: `truncation: "disabled"`, `top_logprobs: 0`, or `null`. |
+
+A `null` value means the field was not sent, for every optional field.
+Any other request field is accepted and ignored, including those clients send
+by default: `include`, `metadata`, `user`, `safety_identifier`,
+`prompt_cache_key`, `prompt_cache_retention`, `service_tier` and
+`stream_options`. Inside the objects above, `reasoning.summary` and
+`text.verbosity` are ignored too; reasoning text is returned as summary text
+whenever the model produces it.
 
 The `output` array can contain assistant text (`message`), model reasoning
 (`reasoning` summary text), and `function_call` items. The stream identifies

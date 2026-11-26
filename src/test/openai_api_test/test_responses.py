@@ -23,22 +23,42 @@ def expect_field_error(api: Api, field: str, value: object) -> None:
            f"expected error.param={field!r}, got {reply.body}")
 
 
+def expect_accepted(api: Api, fields: dict) -> None:
+    reply = api.post({"model": api.model, "input": "Say OK.", "max_output_tokens": 4, **fields},
+                     url=responses_url(api))
+    expect(reply.status == 200 and reply.body.get("object") == "response",
+           f"{fields}: expected a response, got {reply.status}: {reply.body}")
+
+
 @case
 def previous_response_id_is_refused(api: Api) -> None:
     expect_field_error(api, "previous_response_id", "resp_not_stored")
-    expect_field_error(api, "previous_response_id", None)
 
 
 @case
 def conversation_is_refused(api: Api) -> None:
     expect_field_error(api, "conversation", "conv_not_stored")
-    expect_field_error(api, "conversation", None)
 
 
 @case
 def background_is_refused(api: Api) -> None:
     expect_field_error(api, "background", True)
-    expect_field_error(api, "background", False)
+
+
+@case
+def unsupported_controls_are_refused(api: Api) -> None:
+    for field, value in (("truncation", "auto"), ("top_logprobs", 2), ("max_tool_calls", 1),
+                         ("prompt", {"id": "pmpt_not_stored"})):
+        expect_field_error(api, field, value)
+
+
+@case
+def null_and_defaults_are_unset(api: Api) -> None:
+    expect_accepted(api, {"previous_response_id": None, "conversation": None, "background": False,
+                          "truncation": "disabled", "top_logprobs": 0, "max_tool_calls": None,
+                          "prompt": None, "instructions": None, "text": None, "tools": None,
+                          "tool_choice": None, "reasoning": None, "temperature": None, "top_p": None,
+                          "include": ["reasoning.encrypted_content"], "metadata": {}})
 
 
 @case

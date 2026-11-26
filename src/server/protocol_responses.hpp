@@ -4,6 +4,7 @@
 
 #include <ctime>
 #include <map>
+#include "error_model.hpp"
 #include "protocol_openai_chat.hpp"
 #include "responses_request.hpp"
 
@@ -20,7 +21,8 @@ public:
         response_ = {{"id","resp_" + suffix},{"object","response"},{"created_at",std::time(nullptr)},
             {"model",begin.model},{"status","in_progress"},{"output",json::array()},
             {"error",nullptr},{"incomplete_details",nullptr},{"usage",nullptr},{"store",false},
-            {"tools",request_.value("tools", json::array())},{"tool_choice",request_.value("tool_choice", json("auto"))},
+            {"tools",provided(request_,"tools") ? request_["tools"] : json::array()},
+            {"tool_choice",provided(request_,"tool_choice") ? request_["tool_choice"] : json("auto")},
             {"parallel_tool_calls",!provided(request_,"parallel_tool_calls") || request_["parallel_tool_calls"].get<bool>()}};
         for (auto key : {"instructions", "max_output_tokens", "reasoning", "text", "temperature", "top_p"})
             if (request_.contains(key)) response_[key] = request_[key];
@@ -88,7 +90,9 @@ private:
     void emit(const std::string& type, json fields, bool last = false) {
         fields["type"] = type;
         fields["sequence_number"] = sequence_++;
-        send_stream_("event: " + type + "\ndata: " + fields.dump() + "\n\n", last);
+        // Byte-fallback tokens can leave invalid UTF-8 in a delta or the snapshot:
+        // replace it rather than let json::dump() throw mid-stream.
+        send_stream_("event: " + type + "\ndata: " + flm::error_model::dump_json(fields) + "\n\n", last);
     }
 
     json address(size_t i) {
@@ -168,7 +172,7 @@ private:
         for (size_t i = 0; i < output().size(); ++i) done(i, status);
         response_["status"] = status;
         if (stream_) emit("response." + status, {{"response",response_}}, true);
-        else send_(response_);
+        else send_(response_); // the server writes it with flm::error_model::dump_json as well
     }
 
     const json& request_;
