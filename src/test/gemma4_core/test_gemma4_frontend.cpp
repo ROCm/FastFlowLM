@@ -359,9 +359,10 @@ public:
 };
 
 std::unique_ptr<Gemma4eFrontendTestAccess> MakeGemma4eWithStubEngineForTest(
-    const TempPackage& package, const std::string& backend = "") {
+    const TempPackage& package, const std::string& backend = "",
+    const nlohmann::ordered_json& model_info = ModelInfo()) {
     auto model = std::make_unique<Gemma4eFrontendTestAccess>(nullptr);
-    model->load_model(package.path().string(), ModelInfo(), -1, false, backend);
+    model->load_model(package.path().string(), model_info, -1, false, backend);
     return model;
 }
 
@@ -473,6 +474,80 @@ void TestTextGenerationNeverAsksForEngineConfig() {
     TEST_REQUIRE(model->engine_config_calls == 0);
 }
 
+/// \brief one user message carrying `key` ("images" or "audios"), as the server hands it over
+lm_uniform_input_t MessageWith(const char* key) {
+    lm_uniform_input_t value;
+    value.messages = nlohmann::ordered_json::array(
+        {{{"role", "user"}, {"content", "hi"}, {key, nlohmann::ordered_json::array({"AAAA"})}}});
+    return value;
+}
+
+/// \brief the message of the HTTP 400 insert() refuses `input` with
+std::string RequireRefused(Gemma4eFrontendTestAccess& model, lm_uniform_input_t input) {
+    auto meta = Meta();
+    try {
+        (void)model.insert(meta, input);
+    } catch (const ModelRequestError& error) {
+        TEST_REQUIRE(error.http_code() == 400);
+        return error.what();
+    }
+    throw std::runtime_error("insert() took a request it should have refused");
+}
+
+void TestATextOnlyEntryRefusesImagesBeforeTheEngine() {
+    // An entry without "vlm" may run an engine with no vision tower, such as an
+    // extension engine behind this frontend, which cannot read the image payload.
+    TempPackage package;
+    FactoryScope scope;
+    auto model = MakeGemma4eWithStubEngineForTest(package);
+    RequireContains(RequireRefused(*model, MessageWith("images")), "does not accept image input");
+    TEST_REQUIRE(model->engine_config_calls == 0);
+}
+
+void TestATextOnlyEntryRefusesAudioBeforeTheEngine() {
+    TempPackage package;
+    FactoryScope scope;
+    auto model = MakeGemma4eWithStubEngineForTest(package);
+    RequireContains(RequireRefused(*model, MessageWith("audios")), "does not accept audio input");
+    TEST_REQUIRE(model->engine_config_calls == 0);
+}
+
+/// \brief ModelInfo() with `key` ("vlm" or "asr") set, as the built-in Gemma 4 entries set both
+nlohmann::ordered_json ModelInfoWith(const char* key) {
+    auto info = ModelInfo();
+    info[key] = true;
+    return info;
+}
+
+void TestAVisionEntryStillTakesImages() {
+    TempPackage package;
+    FactoryScope scope;
+    auto model = MakeGemma4eWithStubEngineForTest(package, "", ModelInfoWith("vlm"));
+    // The stubbed decoder returns an empty image, which insert() skips, so the
+    // request prefills its text: it got past the refusal.
+    g_encoded_tokens = {11, 12, 13};
+    auto meta = Meta();
+    auto input = MessageWith("images");
+    TEST_REQUIRE(model->insert(meta, input));
+}
+
+void TestAnAudioEntryStillHandsAudioToTheEngine() {
+    TempPackage package;
+    FactoryScope scope;
+    auto model = MakeGemma4eWithStubEngineForTest(package, "", ModelInfoWith("asr"));
+    // The audio path asks the engine for its resample rate first; the fake
+    // engine is not gemma4e_npu, so that throws, but not the 400 refusal.
+    auto meta = Meta();
+    auto input = MessageWith("audios");
+    try {
+        (void)model->insert(meta, input);
+    } catch (const ModelRequestError& error) {
+        throw std::runtime_error(std::string("an \"asr\" entry refused audio: ") + error.what());
+    } catch (const std::exception&) {
+    }
+    TEST_REQUIRE(model->engine_config_calls == 1);
+}
+
 void TestAnOgaLoadDoesNotCallTheNpuEngine() {
     // WP-26 (PR #1066 review): the Windows OGA build delay-loads the NPU engine
     // DLLs. Calling gemma4e_npu_state_api would load gemma4e_npu.dll, which
@@ -547,6 +622,13 @@ int main() {
     RunTest(TestRequestSettingsInModelFieldsFallBackToTheLoadedValues,
              "TestRequestSettingsInModelFieldsFallBackToTheLoadedValues");
     RunTest(TestTopKOfZeroOrMinusOneTurnsTopKOff, "TestTopKOfZeroOrMinusOneTurnsTopKOff");
+    RunTest(TestATextOnlyEntryRefusesImagesBeforeTheEngine,
+             "TestATextOnlyEntryRefusesImagesBeforeTheEngine");
+    RunTest(TestATextOnlyEntryRefusesAudioBeforeTheEngine,
+             "TestATextOnlyEntryRefusesAudioBeforeTheEngine");
+    RunTest(TestAVisionEntryStillTakesImages, "TestAVisionEntryStillTakesImages");
+    RunTest(TestAnAudioEntryStillHandsAudioToTheEngine,
+             "TestAnAudioEntryStillHandsAudioToTheEngine");
     RunTest(TestAnOgaLoadDoesNotCallTheNpuEngine, "TestAnOgaLoadDoesNotCallTheNpuEngine");
     RunTest(TestAnNpuLoadStillAsksForTheStateTable, "TestAnNpuLoadStillAsksForTheStateTable");
     std::cout << "test_gemma4_frontend: PASS\n";
