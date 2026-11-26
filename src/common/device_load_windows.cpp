@@ -103,6 +103,7 @@ class Provider {
     PDH_HQUERY query_{};
     std::array<PDH_HCOUNTER, 3> counters_{};
     std::optional<Clock::time_point> previous_;
+    bool reported_missing_ = false;
 #if __has_include(<dxcore.h>)
     HMODULE dxcore_ = LoadLibraryExW(L"dxcore.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     ComPtr<IDXCoreAdapterFactory> factory_;
@@ -138,6 +139,11 @@ public:
         npu = npu_.select(factory_.Get(), npu_kind);
 #endif
         s.gpu.name = gpu.name; s.npu.name = npu.name;
+        if ((!gpu.id || !npu.id) && !reported_missing_) {
+            std::fprintf(stderr, "FLM device telemetry: no unambiguous %s adapter; unavailable readings are null.\n",
+                         !gpu.id && !npu.id ? "GPU or NPU" : !gpu.id ? "GPU" : "NPU");
+            reported_missing_ = true;
+        }
         if (!gpu.id && !npu.id) return s;
         if (!query_ && PdhOpenQueryW(nullptr, 0, &query_) != ERROR_SUCCESS) return s;
         constexpr const wchar_t* paths[] = {LR"(\GPU Engine(*)\Utilization Percentage)",
@@ -177,6 +183,7 @@ class Sampler {
     bool pending_ = false, stop_ = false;
     Snapshot latest_;
     std::optional<Clock::time_point> sampled_;
+    Clock::time_point refresh_after_{};
     void run() {
         Provider provider;
         std::unique_lock lock(mutex_);
@@ -190,6 +197,7 @@ class Sampler {
             lock.lock();
             latest_ = std::move(next);
             sampled_ = start;
+            refresh_after_ = Clock::now() + 1s; // even slow setup must leave a full interval between collections
             pending_ = false;
         }
     }
@@ -202,7 +210,7 @@ public:
     Snapshot get() {
         std::lock_guard lock(mutex_);
         const auto now = Clock::now();
-        if (!pending_ && (!sampled_ || now - *sampled_ >= 1s)) {
+        if (!pending_ && (!sampled_ || now >= refresh_after_)) {
             if (!worker_.joinable()) {
                 try { worker_ = std::thread(&Sampler::run, this); }
                 catch (const std::system_error&) { return {}; }

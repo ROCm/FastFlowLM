@@ -27,7 +27,7 @@ public:
     void add(std::wstring_view instance, double value, bool valid);
     Usage get(AdapterId adapter) const;
 private:
-    struct Sum { double total = 0, own = 0; bool valid = true, own_valid = true; };
+    struct Sum { double total = 0, own = 0; bool valid = true, own_valid = true, measured = false; };
     std::uint32_t pid_;
     std::map<AdapterId, std::map<std::uint32_t, Sum>> engines_;
 };

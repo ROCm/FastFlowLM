@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Host telemetry and accelerator admission. These read-only cases also run on the HTTP harness."""
+"""Host telemetry and accelerator admission. Read-only cases also run on the HTTP harness.
+
+Set FLM_TEST_DEVICE_LOAD=gpu or npu on a Windows test host with working counters to require
+measured work from the running model, rather than accepting the unsupported-host nulls.
+"""
 
 import json
+import os
+import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 import flm_api
+from fixtures import user
 from flm_api import Api, case, expect
 
 
@@ -38,6 +46,30 @@ def device_load_snapshot(api: Api) -> None:
     s = data['server']
     expect(set(s) == {'accelerator_busy', 'queued_requests'} and type(s['accelerator_busy']) is bool
            and type(s['queued_requests']) is int and s['queued_requests'] >= 0, str(s))
+
+
+@case
+def activity_belongs_to_the_serving_process(api: Api) -> None:
+    kind = os.environ.get('FLM_TEST_DEVICE_LOAD')
+    if not kind:
+        raise flm_api.Skip('set FLM_TEST_DEVICE_LOAD to the model device on a supported Windows host')
+    expect(kind in ('gpu', 'npu'), f'unknown FLM_TEST_DEVICE_LOAD={kind}')
+    path = '/v1/flm/devices'
+    get(api, path)  # prime the rate counter
+    body = api.body(user('List 200 distinct picnic ideas in a numbered list, with details.'), max_tokens=320)
+    measured = False
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        turn = pool.submit(api.post, body)
+        while not turn.done():
+            data = get(api, path)
+            row = next(d for d in data['devices'] if d['device'] == kind)
+            own, total = row['own_utilization_percent'], row['utilization_percent']
+            if data['server']['accelerator_busy'] and own is not None and total is not None and 50 < own <= total:
+                measured = True
+                break
+            time.sleep(.1)
+        expect(turn.result().status == 200, 'generation must complete')
+    expect(measured, f'never observed this process using the {kind} under load')
 
 
 @case

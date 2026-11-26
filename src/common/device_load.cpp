@@ -51,6 +51,7 @@ void EngineUsage::add(std::wstring_view s, double value, bool valid) {
         sum.valid = false;
         if (pid == pid_) sum.own_valid = false;
     } else {
+        sum.measured = true;
         sum.total += value;
         if (pid == pid_) sum.own += value;
     }
@@ -60,13 +61,15 @@ Usage EngineUsage::get(AdapterId id) const {
     const auto it = engines_.find(id);
     if (it == engines_.end()) return {};
     Usage result{0, 0};
+    bool measured = false;
     for (const auto& [engine, sum] : it->second) {
+        measured |= sum.measured;
         if (!sum.valid) result.total.reset();
         else if (result.total) result.total = std::min(100., std::max(*result.total, sum.total));
         if (!sum.own_valid) result.own.reset();
         else if (result.own) result.own = std::min(100., std::max(*result.own, sum.own));
     }
-    return result;
+    return measured ? result : Usage{};
 }
 
 #ifndef _WIN32

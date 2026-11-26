@@ -26,6 +26,9 @@ int main() {
     if (external != 100 || idle != 0 || usage.get({0, 1234, 0}).total) return 1;
     usage.add(L"pid_7_luid_0x0_0xd80bb6be_phys_1_eng_0_engtype_Copy", 0, false);
     if (usage.get({0, gpu.low, 1}).own || usage.get(gpu).total != 70) return 1;
+    // A counter set with no valid value for this adapter does not prove the observer was idle.
+    usage.add(L"pid_8_luid_0x0_0x1234_phys_0_eng_0_engtype_Copy", 0, false);
+    if (usage.get({0, 0x1234, 0}).own) return 1;
 #ifndef _WIN32
     auto snapshot = make_reader()();
     if (snapshot.sampled_at || snapshot.available || snapshot.gpu.name || snapshot.npu.name ||
