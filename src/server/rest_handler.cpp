@@ -764,10 +764,9 @@ RestHandler::ChatModel* RestHandler::ensure_model_loaded(const std::string& mode
 
         const auto index = slot(), peer = 1 - index;
         auto& registry = flm::frontend::FrontendRegistry::instance();
-        auto provider = plan.info.value("frontend_provider", std::string());
+        const auto provider = registry.generation_provider(plan.family, plan.info.value("frontend_provider", std::string()));
         std::uint64_t peak = 0;
         if (max_loaded_models == 2) {
-            provider = registry.generation_provider(plan.family, provider);
             if (provider == flm::backend::kBuiltinProviderId && plan.selection.provider == flm::backend::kBuiltinProviderId &&
                 !flm::backend::device_for_backend(plan.selection.backend).empty() &&
                 ctx_length <= plan.info.value("default_context_length", 0) && prefix_slots == -1 &&

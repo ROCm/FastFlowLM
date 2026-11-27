@@ -185,11 +185,6 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
                   .positional(pos_desc)
                   .run(), vm);
         po::notify(vm);
-        if (!vm["max-loaded-models"].defaulted() &&
-            (parsed_args.command != "serve" || (parsed_args.max_loaded_models != 1 && parsed_args.max_loaded_models != 2))) {
-            std::cerr << "Error: --max-loaded-models requires serve and a value of 1 or 2\n";
-            return false;
-        }
 
         // -a / -e take a model tag, or the legacy 0 / 1 (off / the default model)
         auto resolve_model_arg = [](const std::string& arg, bool& enabled, std::string& tag) {
@@ -217,6 +212,13 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             print_help(general);
             parsed_args.command = "help";
             return true;
+        }
+
+        if (!vm["max-loaded-models"].defaulted() &&
+            (parsed_args.command != "serve" || vm.count("version") ||
+             (parsed_args.max_loaded_models != 1 && parsed_args.max_loaded_models != 2))) {
+            std::cerr << "Error: --max-loaded-models requires serve and a value of 1 or 2\n";
+            return false;
         }
 
         if (parsed_args.dry_run && (parsed_args.command != "pull" || vm.count("version"))) {

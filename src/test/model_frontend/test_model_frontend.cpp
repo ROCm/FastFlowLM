@@ -209,6 +209,7 @@ void test_frontend_provider_selection() {
     RequireThrows([&] { marker("missing"); });
     registry.register_embedding("embedding", [](void*) { return std::make_unique<MarkerEmbedding>(3); });
     TEST_REQUIRE(marker() == 3);
+    RequireContains(RequireThrows([&] { registry.generation_provider("embedding", ""); }), "does not support generation");
     RequireThrows([&] { registry.create("embedding", nullptr); });
     RequireThrows([&] { registry.create_embedding("shared", nullptr); });
 }
