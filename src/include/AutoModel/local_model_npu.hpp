@@ -64,16 +64,19 @@ inline const bool kNpuPackageRegistered = register_local_package_format(
 /// \param family details.family of the package (--family)
 /// \param requested the folder under xclbins the user named (--xclbin-folder), "" if none
 /// \param xclbin_root the folder that holds the xclbins folders
-/// \return a note for the user when a folder was chosen for them, else ""
+/// \return a note for the user when the package runs on another model's
+///         kernels (they asked for it with --xclbin-folder), else ""
 /// \throws std::runtime_error naming the kernel folders to choose from, or if
 ///         a folder was requested for a model that does not run on the NPU
 /// \note The engine looks the kernels up under the model folder's name. A
 ///       folder named like a shipped model needs nothing. Under another name
-///       the kernels of a shipped model are used: the one asked for, else the
-///       only shipped model of the family. The kernels belong to the model's
+///       the kernels of a shipped model are used only when the user names
+///       them with --xclbin-folder. The kernels belong to the model's
 ///       dimensions and nothing checks that a package matches them (a mismatch
-///       is wrong output or a hang), so a guess is made only when the family
-///       has exactly one shipped kernel folder.
+///       is wrong output or an NPU hang that can wedge the driver until a
+///       reboot), so FLM never guesses: running a package on another model's
+///       kernels is always the user's explicit choice, even when the family
+///       has only one shipped kernel folder.
 inline std::string select_npu_kernels(model_list& models, const std::string& tag, const std::string& family,
                                       const std::string& requested, const std::filesystem::path& xclbin_root) {
     namespace fs = std::filesystem;
@@ -101,17 +104,18 @@ inline std::string select_npu_kernels(model_list& models, const std::string& tag
                                      xclbin_root.string() +
                                      (choices.empty() ? std::string() : " (family " + family + ": " + choices + ")"));
         }
-        if (requested != folder_name) models.set_local_xclbin_folder(tag, requested);
-        return "";
+        if (requested == folder_name) return "";
+        models.set_local_xclbin_folder(tag, requested);
+        return "Running '" + folder_name + "' on the kernels of " + requested +
+               " (--xclbin-folder); FLM cannot check that the package matches them";
     }
     if (has(folder_name)) return "";
-    if (candidates.size() == 1) {
-        models.set_local_xclbin_folder(tag, candidates.front());
-        return "No kernels are filed under '" + folder_name + "'; running on those of " + candidates.front() +
-               " (the only " + family + " model; --xclbin-folder picks another)";
-    }
+    // Never borrow another model's kernels on our own: nothing checks that the
+    // package's dimensions match them, and a mismatch is wrong output or a hang.
     throw std::runtime_error("NPU kernels are looked up under the model folder's name and none are filed under '" +
-                             folder_name + "'; pass --xclbin-folder <name>" +
+                             folder_name + "'; FLM does not guess them, because kernels built for other dimensions "
+                             "give wrong output or hang the NPU. Pass --xclbin-folder <name> to run on the kernels of "
+                             "a shipped model that matches this package" +
                              (choices.empty() ? " (no shipped model of family " + family + " found under " + xclbin_root.string() + ")"
                                               : ", one of: " + choices));
 }

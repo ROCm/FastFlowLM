@@ -299,18 +299,44 @@ void test_the_kernels_of_a_folder_named_like_a_shipped_model() {
     TEST_REQUIRE(setup.kernels().empty());
 }
 
-void test_the_only_shipped_model_of_the_family_lends_its_kernels() {
-    KernelSetup setup("my-own-name", {"Demo-VL-NPU2"});
-    const auto note = flm::catalog::select_npu_kernels(setup.models, setup.local.tag, "qwen3vl", "", setup.xclbins.path);
-    RequireContains(note, "Demo-VL-NPU2");
-    TEST_REQUIRE(setup.kernels() == "Demo-VL-NPU2");
+void test_kernels_of_another_model_are_never_guessed() {
+    // The family has exactly one shipped kernel folder, but nothing says the package matches it:
+    // FLM refuses and lists the choice instead of starting on it.
+    KernelSetup single("my-own-name", {"Demo-VL-NPU2"});
+    const auto one = RequireThrows<std::runtime_error>([&] {
+        flm::catalog::select_npu_kernels(single.models, single.local.tag, "qwen3vl", "", single.xclbins.path);
+    });
+    RequireContains(one, "--xclbin-folder");
+    RequireContains(one, "my-own-name");
+    RequireContains(one, "Demo-VL-NPU2");
+    TEST_REQUIRE(single.kernels().empty());
+
+    // a kernels folder that is not a model of the family is not offered
+    KernelSetup other("my-own-name", {"Demo-VL-NPU2", "Other-NPU2"});
+    const auto offered = RequireThrows<std::runtime_error>([&] {
+        flm::catalog::select_npu_kernels(other.models, other.local.tag, "qwen3vl", "", other.xclbins.path);
+    });
+    RequireContains(offered, "Demo-VL-NPU2");
+    TEST_REQUIRE(other.kernels().empty());
 }
 
 void test_the_kernels_can_be_named() {
     KernelSetup setup("my-own-name", {"Demo-VL-NPU2", "Other-NPU2"});
-    // no folder under the package's name and more than one candidate would be a guess; a name settles it
-    TEST_REQUIRE(flm::catalog::select_npu_kernels(setup.models, setup.local.tag, "qwen3vl", "Other-NPU2", setup.xclbins.path).empty());
+    // no folder under the package's name: a name is the user's explicit choice, and is said aloud
+    const auto note = flm::catalog::select_npu_kernels(setup.models, setup.local.tag, "qwen3vl", "Other-NPU2", setup.xclbins.path);
+    RequireContains(note, "Other-NPU2");
     TEST_REQUIRE(setup.kernels() == "Other-NPU2");
+
+    // naming the only candidate is an explicit choice too
+    KernelSetup single("my-own-name", {"Demo-VL-NPU2"});
+    RequireContains(flm::catalog::select_npu_kernels(single.models, single.local.tag, "qwen3vl", "Demo-VL-NPU2", single.xclbins.path),
+                    "Demo-VL-NPU2");
+    TEST_REQUIRE(single.kernels() == "Demo-VL-NPU2");
+
+    // a folder named like a shipped model that is also named needs no note
+    KernelSetup same("Demo-VL-NPU2", {"Demo-VL-NPU2"});
+    TEST_REQUIRE(flm::catalog::select_npu_kernels(same.models, same.local.tag, "qwen3vl", "Demo-VL-NPU2", same.xclbins.path).empty());
+    TEST_REQUIRE(same.kernels().empty());
 }
 
 void test_kernels_that_cannot_be_chosen_say_why() {
@@ -357,8 +383,8 @@ int main() {
     RunTest(test_model_list_takes_an_npu_entry, "model_list takes an NPU entry");
     RunTest(test_the_kernels_of_a_folder_named_like_a_shipped_model,
             "the kernels of a folder named like a shipped model");
-    RunTest(test_the_only_shipped_model_of_the_family_lends_its_kernels,
-            "the only shipped model of the family lends its kernels");
+    RunTest(test_kernels_of_another_model_are_never_guessed,
+            "the kernels of another model are never guessed");
     RunTest(test_the_kernels_can_be_named, "the kernels can be named");
     RunTest(test_kernels_that_cannot_be_chosen_say_why, "kernels that cannot be chosen say why");
     RunTest(test_xclbin_folder_is_for_an_npu_model, "--xclbin-folder is for an NPU model");
