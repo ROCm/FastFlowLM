@@ -20,6 +20,19 @@
 // #define DEBUG_PRINT_ENCODE_TIME_DETAIL 1
 // #define DEBUG_PRINT_ENCODE_ERROR_METRICS 1
 
+// f(first row, end row) on `threads` contiguous row blocks in one parallel region; the OpenMP loops of the helpers
+// f calls are then nested and run serially, so each row sees the same arithmetic as before
+template <typename F>
+static void for_row_blocks(int rows, int threads, F&& f)
+{
+    #pragma omp parallel for num_threads(threads) schedule(static)
+    for (int t = 0; t < threads; t++) {
+        const int r0 = (int)((int64_t)rows * t / threads), r1 = (int)((int64_t)rows * (t + 1) / threads);
+        if (r1 > r0)
+            f(r0, r1);
+    }
+}
+
 Qwen3_5VLImageEncoder::~Qwen3_5VLImageEncoder()
 {
 }
@@ -115,6 +128,7 @@ Qwen3_5VLImageEncoder::Qwen3_5VLImageEncoder(LM_Config config, npu_xclbin_manage
     patch_k = round_up_to_multiple(patch_volume(), MM_tile_K);
     if (patch_npu)
         this->patch_embed_app = this->proj->create_app();
+    vis_threads = config.model_name == "Qwen3.5-4B-NPU2" ? 8 : 4;
 }
 void Qwen3_5VLImageEncoder::init_weights(SafeTensors &q4nx){
     // std::cout << "Loading Qwen3VL Image Encoder weights from " << this->config.get<std::string>("vision_model_weight", "") << " ..." <<std::endl;
@@ -559,7 +573,8 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     // );
     //note: because patch_embed is seq_len * _QWEN3_5_VISION_EMBED_DIM, and hidden_state is seq_len * Padded_QWEN3_5_VISION_HIDDEN_SIZE
     assert(QWEN3_5_VISION_EMBED_DIM  == _QWEN3_5_VISION_HIDDEN_SIZE);
-    for(int ll = 0; ll < seq_len; ll++){
+    for_row_blocks(seq_len, vis_threads, [&](int r0, int r1) {
+    for(int ll = r0; ll < r1; ll++){
         simd_add(
             patch_rows + ll * patch_stride,
             pos_embeds.data() + ll * QWEN3_5_VISION_EMBED_DIM,
@@ -567,6 +582,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
             QWEN3_5_VISION_EMBED_DIM
         );
     }
+    });
 
     auto time_end_pose_embed_plus_patch_embed = std::chrono::high_resolution_clock::now();
     #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
@@ -685,16 +701,18 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
 
         // first, do the norm_1 output
         auto time_start_layernorm1 = std::chrono::high_resolution_clock::now();
+        for_row_blocks(seq_len, vis_threads, [&](int r0, int r1) {
         layernorm_parallel(
-            seq_len,
+            r1 - r0,
             _QWEN3_5_VISION_HIDDEN_SIZE,
             Padded_QWEN3_5_VISION_HIDDEN_SIZE,
-            hidden_state.data(),
+            hidden_state.data() + r0 * H,
             norm_1_weight[layer_idx].data(),
             norm_1_bias[layer_idx].data(),
             QWEN3_5_VISION_LAYER_NORM_EPSILON,
-            mm_qkv_input.data()  // Use separate output buffer!
+            mm_qkv_input.data() + r0 * H  // Use separate output buffer!
         );
+        });
         auto time_end_layernorm1 = std::chrono::high_resolution_clock::now();
         #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
             auto duration_layernorm1 = std::chrono::duration_cast<std::chrono::milliseconds>(time_end_layernorm1 - time_start_layernorm1).count();
@@ -788,16 +806,18 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         //         QWEN3_5_VISION_NUM_HEADS
         //     );
         // }else{
+            for_row_blocks(seq_len, vis_threads, [&](int r0, int r1) {
             apply_rotary_pos_emb_vision_inplace(
-                mm_qkv_output_mha_input.data(),
-                cos_emb.data(),
-                sin_emb.data(),
-                seq_len,
+                mm_qkv_output_mha_input.data() + r0 * 3 * H,
+                cos_emb.data() + (size_t)r0 * QWEN3_5_VISION_HEAD_DIM,
+                sin_emb.data() + (size_t)r0 * QWEN3_5_VISION_HEAD_DIM,
+                r1 - r0,
                 seq_len_padded,
                 _QWEN3_5_VISION_HIDDEN_SIZE,
                 Padded_QWEN3_5_VISION_HIDDEN_SIZE * 3,
                 QWEN3_5_VISION_NUM_HEADS
             );
+            });
         // }
 
         auto time_end_rotary_pos_emb_application = std::chrono::high_resolution_clock::now();
@@ -945,12 +965,14 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         #endif
 
         auto time_start_residual_add_1 = std::chrono::high_resolution_clock::now();
+        for_row_blocks(seq_len, vis_threads, [&](int r0, int r1) {
         simd_add(
-            mm_o_output_fc1_proj_input.data(),
-            host_v1 ? residual_buffer.data() : hidden_state.data(),
-            hidden_state.data(),
-            (size_t)seq_len * Padded_QWEN3_5_VISION_HIDDEN_SIZE
+            mm_o_output_fc1_proj_input.data() + r0 * H,
+            (host_v1 ? residual_buffer.data() : hidden_state.data()) + r0 * H,
+            hidden_state.data() + r0 * H,
+            (size_t)(r1 - r0) * Padded_QWEN3_5_VISION_HIDDEN_SIZE
         );
+        });
         auto time_end_residual_add_1 = std::chrono::high_resolution_clock::now();
         #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
             auto duration_residual_add_1 = std::chrono::duration_cast<std::chrono::milliseconds>(time_end_residual_add_1 - time_start_residual_add_1).count();
@@ -965,16 +987,18 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
 
         // norm2
         auto time_start_layernorm2 = std::chrono::high_resolution_clock::now();
+        for_row_blocks(seq_len, vis_threads, [&](int r0, int r1) {
         layernorm_parallel(
-            seq_len,
+            r1 - r0,
             _QWEN3_5_VISION_HIDDEN_SIZE,
             Padded_QWEN3_5_VISION_HIDDEN_SIZE,
-            hidden_state.data(),
+            hidden_state.data() + r0 * H,
             norm_2_weight[layer_idx].data(),
             norm_2_bias[layer_idx].data(),
             QWEN3_5_VISION_LAYER_NORM_EPSILON,
-            mm_o_output_fc1_proj_input.data()
+            mm_o_output_fc1_proj_input.data() + r0 * H
         );
+        });
         auto time_end_layernorm2 = std::chrono::high_resolution_clock::now();
         #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
             auto duration_layernorm2 = std::chrono::duration_cast<std::chrono::milliseconds>(time_end_layernorm2 - time_start_layernorm2).count();
@@ -1073,12 +1097,14 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         #endif
 
         auto time_start_mlp_residual_add = std::chrono::high_resolution_clock::now();
+        for_row_blocks(seq_len, vis_threads, [&](int r0, int r1) {
         simd_add(
-            mm_fc2_output.data(),
-            host_v1 ? residual_buffer.data() : hidden_state.data(),
-            hidden_state.data(),
-            (size_t)seq_len * Padded_QWEN3_5_VISION_HIDDEN_SIZE
+            mm_fc2_output.data() + r0 * H,
+            (host_v1 ? residual_buffer.data() : hidden_state.data()) + r0 * H,
+            hidden_state.data() + r0 * H,
+            (size_t)(r1 - r0) * Padded_QWEN3_5_VISION_HIDDEN_SIZE
         );
+        });
         auto time_end_mlp_residual_add = std::chrono::high_resolution_clock::now();
         #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
             auto duration_mlp_residual_add = std::chrono::duration_cast<std::chrono::milliseconds>(time_end_mlp_residual_add - time_start_mlp_residual_add).count();
@@ -1116,7 +1142,8 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     // where self.hidden_size = spatial_merge_size^2 * embed_dim = 4 * 1152 = 4608
     // This packs every spatial_merge_size^2 consecutive tokens into one merged row.
     int spatial_merge_size_sq = this->parent_npu_ptr->QWEN3_5_SPATIAL_MERGE_SIZE * this->parent_npu_ptr->QWEN3_5_SPATIAL_MERGE_SIZE;
-    for(int s = 0; s < seq_len; s++){
+    for_row_blocks(seq_len, vis_threads, [&](int r0, int r1) {
+    for(int s = r0; s < r1; s++){
         int merged_row = s / spatial_merge_size_sq;
         int sub_idx = s % spatial_merge_size_sq;
         layernorm_high_precision(
@@ -1128,6 +1155,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
             merger_fc1_input.data() + merged_row * Padded_QWEN3_5_MERGER_HIDDEN_SIZE + sub_idx * _QWEN3_5_VISION_HIDDEN_SIZE
         );
     }
+    });
 
     auto time_start_merger = std::chrono::high_resolution_clock::now();
     if (host_v1) {

@@ -97,6 +97,9 @@ class Qwen3_5VLImageEncoder{
         buffer<bf16> patch_embed_input;
         buffer<bf16> patch_embed_output;
 
+        // threads of the row-parallel host stages (pos add, layer norms, RoPE, residual adds): 8 on the 4B
+        int vis_threads = 4;
+
         // The weights
         buffer<bf16> patch_embed_proj_weight;
         buffer<bf16> patch_embed_proj_bias;
