@@ -121,6 +121,10 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return capacity_;
     }
+    std::pair<bool, std::size_t> status(const std::atomic<bool>& in_use) const {
+        std::lock_guard<std::mutex> lock(mutex_);  // same snapshot as admit / complete_current
+        return {in_use.load(), tasks_.size()};
+    }
 private:
     mutable std::mutex mutex_;
     std::queue<Task> tasks_;
@@ -236,6 +240,7 @@ public:
     bool cancel_request(const std::string& request_id);
     
     // Statistics
+    auto accelerator_status() const { return npu_request_coordinator_.status(g_npu_in_use); }
     size_t get_active_connections() const { return active_connections_.load(); }
     size_t get_active_requests() const { 
         std::lock_guard<std::mutex> lock(active_requests_mutex_);
