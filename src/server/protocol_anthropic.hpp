@@ -2,7 +2,6 @@
 /// \brief Write a single chat turn as an Anthropic Message or a sequence of named SSE events.
 #pragma once
 #include "protocol_openai_chat.hpp"
-#include "anthropic_request.hpp"
 
 namespace flm::anthropic {
 class sink final : public chat_sink {
@@ -10,8 +9,8 @@ class sink final : public chat_sink {
     enum class block { none, thinking, text, tool };
 public:
     sink(std::function<void(const json&)> send, std::function<void(const json&,bool)> stream,
-         display thinking_display = display::local)
-        : send_(std::move(send)), stream_(std::move(stream)), display_(thinking_display) {}
+         bool show_local_thinking = true)
+        : send_(std::move(send)), stream_(std::move(stream)), show_thinking_(show_local_thinking) {}
     void on_begin(const chat_turn_begin& begin) override {
         streaming_ = begin.stream;
         message_ = {{"type","message"},{"id","msg_"+chat_new_tool_call_id().substr(5)},
@@ -34,8 +33,7 @@ public:
             if (!d.tool_arguments.empty()) delta({{"type","input_json_delta"},{"partial_json",d.tool_arguments}});
         } else if (!d.reasoning.empty()) {
             if (active_!=block::thinking) open(block::thinking,{{"type","thinking"},{"thinking",""},{"signature",""}});
-            thinking_bytes_ += d.reasoning.size();
-            if (display_==display::local) delta({{"type","thinking_delta"},{"thinking",d.reasoning}});
+            if (show_thinking_) delta({{"type","thinking_delta"},{"thinking",d.reasoning}});
         } else if (!d.content.empty()) {
             if (active_!=block::text) open(block::text,{{"type","text"},{"text",""}});
             delta({{"type","text_delta"},{"text",d.content}});
@@ -50,26 +48,28 @@ public:
         const char* reason = end.finish==chat_finish::LENGTH ? "max_tokens" :
                              end.finish==chat_finish::TOOL_CALLS ? "tool_use" : "end_turn";
         auto counts = usage(end.prompt_tokens,end.cached_prompt_tokens,end.generated_tokens);
+        const auto& msg = *end.message;
+        auto& content = message_["content"];
+        if (!streaming_) {
+            if (!msg.reasoning.empty()) content.push_back({{"type","thinking"},
+                {"thinking",show_thinking_ ? msg.reasoning : ""},{"signature",""}});
+            if (!msg.content.empty()) content.push_back({{"type","text"},{"text",msg.content}});
+        }
+        for (const auto& call : msg.tool_calls) {
+            auto args = json::parse(call.arguments,nullptr,false);
+            if (!args.is_object()) {
+                if (end.finish==chat_finish::LENGTH) continue; // an unfinished call is not executable
+                on_error({500,"server_error","Model produced invalid tool input",{},std::nullopt});
+                return;
+            }
+            if (!streaming_) content.push_back({{"type","tool_use"},{"id",call.id},{"name",call.name},{"input",std::move(args)}});
+        }
         if (streaming_) {
             close();
             emit("message_delta",{{"delta",{{"stop_reason",reason},{"stop_sequence",nullptr}}},{"usage",counts}});
             terminal_ = true;
             emit("message_stop",json::object(),true);
         } else {
-            auto& content = message_["content"];
-            const auto& msg = *end.message;
-            if (!msg.reasoning.empty()) content.push_back({{"type","thinking"},
-                {"thinking",display_==display::local ? msg.reasoning : summary(msg.reasoning.size())},{"signature",""}});
-            if (!msg.content.empty()) content.push_back({{"type","text"},{"text",msg.content}});
-            for (const auto& call : msg.tool_calls) {
-                auto args = json::parse(call.arguments,nullptr,false);
-                if (!args.is_object()) {
-                    if (end.finish==chat_finish::LENGTH) continue; // incomplete call is not executable
-                    on_error({500,"server_error","Model produced invalid tool input",{},std::nullopt});
-                    return;
-                }
-                content.push_back({{"type","tool_use"},{"id",call.id},{"name",call.name},{"input",std::move(args)}});
-            }
             message_["usage"] = std::move(counts);
             message_["stop_reason"] = reason;
             terminal_ = true;
@@ -98,8 +98,6 @@ private:
     void close() {
         if (active_==block::none) return;
         if (active_==block::thinking) {
-            if (display_==display::summarized) delta({{"type","thinking_delta"},{"thinking",summary(thinking_bytes_)}});
-            thinking_bytes_=0;
             delta({{"type","signature_delta"},{"signature",""}});
         }
         emit("content_block_stop",{{"index",index_}});
@@ -113,11 +111,7 @@ private:
     }
     std::function<void(const json&)> send_;
     std::function<void(const json&,bool)> stream_;
-    std::string summary(size_t bytes) const {
-        return display_==display::omitted ? "" : "Local reasoning: "+std::to_string(bytes)+" bytes.";
-    }
-    display display_;
-    size_t thinking_bytes_=0;
+    bool show_thinking_;
     json message_;
     bool streaming_ = false, started_ = false, terminal_ = false;
     block active_ = block::none;

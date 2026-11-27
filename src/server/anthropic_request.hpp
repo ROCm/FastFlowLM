@@ -159,8 +159,7 @@ inline json prompt_fields(const json& req, std::string& first_image) {
     return result;
 }
 
-enum class display { local, summarized, omitted };
-struct generation_request { json chat; int thinking_budget = 0; display thinking_display = display::local; std::string first_image; };
+struct generation_request { json chat; int thinking_budget = 0; bool show_local_thinking = true; std::string first_image; };
 inline generation_request convert(const json& req) {
     keys(req,"",{"model","max_tokens","messages","system","tools","tool_choice","thinking","stream",
                  "temperature","top_p","top_k","stop_sequences","metadata","service_tier","cache_control"});
@@ -200,9 +199,11 @@ inline generation_request convert(const json& req) {
             keys(t,"thinking",{"type","budget_tokens","display"});
             if (t.contains("display")) {
                 const auto mode_display = text(t,"display","thinking");
-                if (mode_display=="summarized") out.thinking_display = display::summarized;
-                else if (mode_display=="omitted") out.thinking_display = display::omitted;
-                else throw request_error("thinking.display","expected summarized or omitted");
+                if (mode_display!="summarized" && mode_display!="omitted")
+                    throw request_error("thinking.display","expected summarized or omitted");
+                // Local models have no summarizer. Withhold raw reasoning rather than
+                // mislabel it as a summary or replay fabricated text on the next turn.
+                out.show_local_thinking = false;
             }
             out.thinking_budget = integer(t,"budget_tokens","thinking",1024);
             if (out.thinking_budget >= total) throw request_error("thinking.budget_tokens","must be below max_tokens");

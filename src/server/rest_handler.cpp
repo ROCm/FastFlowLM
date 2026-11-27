@@ -1518,7 +1518,7 @@ void RestHandler::handle_anthropic_messages(const json& request, std::function<v
                 throw flm::anthropic::request_error(converted.first_image, "this model does not accept images");
             }
         }
-        flm::anthropic::sink sink(send, std::move(stream), converted.thinking_display);
+        flm::anthropic::sink sink(send, std::move(stream), converted.show_local_thinking);
         run_chat_turn(converted.chat, sink, std::move(cancel), converted.thinking_budget);
     } catch (const flm::anthropic::request_error& e) {
         send(flm::error_model::make_error(400, e.what()));

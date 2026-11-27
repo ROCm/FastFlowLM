@@ -1,9 +1,7 @@
 """Anthropic Messages acceptance and route-specific errors."""
-import urllib.request
-
 import flm_api
 from flm_api import Api, case, expect
-from test_http_safety import cors_mode
+from test_http_safety import call, cors_mode
 
 
 def post(api, **changes):
@@ -42,16 +40,26 @@ def messages_unknown_model(api: Api):
 
 
 @case
+def messages_unsupported_budget(api: Api):
+    # Must refuse at ingress; this model must not be downloaded or made resident.
+    reply = post(api, model="gpt-oss:20b", stream=True, max_tokens=2048,
+                 thinking={"type": "enabled", "budget_tokens": 1024})
+    if reply.status == 404:  # Not in this platform's catalog.
+        raise flm_api.Skip("gpt-oss:20b not in the local catalog")
+    expect(reply.status == 400 and reply.body.get("type") == "error" and
+           "thinking.budget_tokens" in reply.body["error"]["message"], str(reply.body))
+
+
+@case
 def messages_browser_preflight(api: Api):
-    url = api.url.removesuffix("/chat/completions") + "/messages"
-    req = urllib.request.Request(url, method="OPTIONS", headers={
+    status, headers, _ = call(api, "OPTIONS", "/v1/messages", headers={
         "Origin": "http://localhost", "Access-Control-Request-Method": "POST"})
-    with urllib.request.urlopen(req, timeout=10) as reply:
-        headers = reply.headers.get("Access-Control-Allow-Headers", "").lower()
-        if cors_mode(api) == "off":
-            expect(not headers, headers)
-        else:
-            expect("anthropic-version" in headers and "x-api-key" in headers, headers)
+    allowed = headers.get("access-control-allow-headers", "").lower()
+    if cors_mode(api) == "off":
+        expect(not allowed, allowed)
+    else:
+        expect(status == 200 and "anthropic-version" in allowed and "x-api-key" in allowed,
+               f"{status}: {allowed}")
 
 
 CASES = flm_api.collect(globals())

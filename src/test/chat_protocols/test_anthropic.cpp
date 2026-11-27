@@ -76,5 +76,31 @@ int test_anthropic() {
     interrupted.on_error({500,"server_error","failed",{},std::nullopt});
     interrupted.on_end(end); interrupted.on_error({500,"server_error","repeated",{},std::nullopt});
     check(wire.size()==2 && wire.back()==*abort,"one error event, no later success");
+    wire.clear();
+    sink invalid_tool([&](const json&){check(false,"HTTP body after invalid streamed tool");},
+        [&](const json& frame,bool){wire.push_back(frame.get<std::string>());});
+    invalid_tool.on_begin({"m",true}); invalid_tool.on_start({});
+    d={}; d.tool_index=0; d.tool_id="a"; d.tool_name="f"; d.tool_arguments="[]"; invalid_tool.on_delta(d);
+    m.tool_calls.push_back({"a","f","[]"});
+    invalid_tool.on_end(end);
+    check(wire.back().starts_with("event: error\n") &&
+          wire.back().find("message_stop")==std::string::npos,"invalid tool input cannot stream tool_use success");
+    for (const char* mode : {"summarized","omitted"}) for (bool streaming : {false,true}) {
+        auto req=input; req["thinking"]["display"]=mode;
+        auto cfg=convert(req);
+        std::string out;
+        sink hidden([&](const json& body){out=body.dump();},
+                    [&](const json& frame,bool){out+=frame.get<std::string>();},cfg.show_local_thinking);
+        chat_msg done; done.reasoning="PRIVATE"; done.content="OK";
+        chat_turn_end e; e.message=&done;
+        hidden.on_begin({"m",streaming}); hidden.on_start({});
+        if (streaming) {
+            d={}; d.reasoning=done.reasoning; hidden.on_delta(d);
+            d={}; d.content=done.content; hidden.on_delta(d);
+        }
+        hidden.on_end(e);
+        check(out.find("PRIVATE")==std::string::npos && out.find("\"thinking\":\"\"")!=std::string::npos &&
+              out.find("OK")!=std::string::npos, "display never leaks raw reasoning");
+    }
     return failures;
 }
