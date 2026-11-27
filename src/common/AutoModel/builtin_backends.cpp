@@ -152,6 +152,9 @@ void register_builtin_backends(BackendRegistry& registry) {
     registry.register_backend("nemotron-h", flm::backend::kOgaHipepBackendId,
                               flm::oga::hipep_factory(),
                               flm::oga::hipep_traits());
+    registry.register_backend("step3.5", flm::backend::kOgaHipepBackendId,
+                              flm::oga::hipep_factory(),
+                              flm::oga::hipep_traits());
 #endif
 }
 

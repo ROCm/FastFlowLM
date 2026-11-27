@@ -634,7 +634,7 @@ ENGINES = {
     # its streaming frontend.
     ("qwen3_asr", "qwen3_asr_stream"):       ("r2t2",),
     # A frontend with no engine library: its families run on oga-hipep alone.
-    ("template_chat",):                      ("laguna", "nemotron-h"),
+    ("template_chat",):                      ("laguna", "nemotron-h", "step3.5"),
     # Built but registered for no catalog family.
     ("qwen3_5_omni",):                       (),
 }

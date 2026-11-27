@@ -49,6 +49,9 @@ MARKERS = (
     "<|tool_call>", "<tool_call|>", "<|channel>", "<channel|>", "<|tool_response>",
     "<|channel|>", "<|message|>", "<|start|>", "<|end|>", "<|call|>", "<|return|>",
 )
+# The call markup of the <tool_call><function=...> formats, which a model may quote
+# in its reasoning when drafting a call (calls_in_reasoning below)
+CALL_MARKERS = ("<tool_call>", "</tool_call>", "<function=", "<parameter=")
 
 TOOL_CALL_ID = re.compile(r"^call_[A-Za-z0-9]{24}$")
 
@@ -284,9 +287,11 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def assert_no_markers(text: str | None, where: str) -> None:
+def assert_no_markers(text: str | None, where: str, allowed: tuple[str, ...] = ()) -> None:
     """No raw template markup may leak into what the client sees."""
     for marker in MARKERS:
+        if marker in allowed:
+            continue
         expect(marker not in (text or ""), f"raw marker {marker!r} leaked into {where}: {text!r}")
 
 
@@ -320,8 +325,12 @@ def check_tool_calls(calls: list[dict[str, Any]], tools: list[dict[str, Any]]) -
         validate(args, tool_schema(tools, call["function"]["name"]), f"call {i} arguments")
 
 
-def check_message_contract(choice: dict[str, Any]) -> dict[str, Any]:
-    """The non-streaming message shape every response must have."""
+def check_message_contract(choice: dict[str, Any], *, calls_in_reasoning: bool = False) -> dict[str, Any]:
+    """The non-streaming message shape every response must have.
+
+    calls_in_reasoning: the reasoning may quote call markup, as a draft of a call;
+    the reasoning is not parsed for calls, so it is text like any other.
+    """
     msg = choice.get("message")
     expect(isinstance(msg, dict), f"choice has no message: {choice!r}")
     expect(msg.get("role") == "assistant", f"role is {msg.get('role')!r}")
@@ -331,7 +340,8 @@ def check_message_contract(choice: dict[str, Any]) -> dict[str, Any]:
         expect(isinstance(msg["reasoning_content"], str) and msg["reasoning_content"] != "",
                "reasoning_content, when present, must be a non-empty string")
     assert_no_markers(msg.get("content"), "content")
-    assert_no_markers(msg.get("reasoning_content"), "reasoning_content")
+    assert_no_markers(msg.get("reasoning_content"), "reasoning_content",
+                      CALL_MARKERS if calls_in_reasoning else ())
     if msg.get("tool_calls"):
         expect(msg.get("content") is None or isinstance(msg["content"], str),
                "content must be a string or null")
@@ -343,8 +353,11 @@ def check_message_contract(choice: dict[str, Any]) -> dict[str, Any]:
     return msg
 
 
-def check_stream_contract(s: Stream, *, include_usage: bool) -> Folded:
-    """The chunk-level shape every stream must have; returns the folded turn."""
+def check_stream_contract(s: Stream, *, include_usage: bool, calls_in_reasoning: bool = False) -> Folded:
+    """The chunk-level shape every stream must have; returns the folded turn.
+
+    calls_in_reasoning: as for check_message_contract.
+    """
     expect(len(s.chunks) > 0, "stream has no chunks")
     ids = {c.get("id") for c in s.chunks}
     expect(len(ids) == 1, f"chunks carry different ids: {ids}")
@@ -384,7 +397,7 @@ def check_stream_contract(s: Stream, *, include_usage: bool) -> Folded:
     expect(finish_chunks == 1, f"expected one chunk with a finish_reason, got {finish_chunks}")
     folded = fold_stream(s.chunks)
     assert_no_markers(folded.content, "streamed content")
-    assert_no_markers(folded.reasoning, "streamed reasoning_content")
+    assert_no_markers(folded.reasoning, "streamed reasoning_content", CALL_MARKERS if calls_in_reasoning else ())
     if include_usage:
         expect(folded.usage is not None, "include_usage was asked but no usage arrived")
     return folded

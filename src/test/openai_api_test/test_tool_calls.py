@@ -39,10 +39,22 @@ from fixtures import BOOK_FLIGHT, GET_WEATHER, WEATHER_TOOLS, function_choice, u
 WEATHER_PROMPT = "What's the weather in Paris right now?"
 TWO_CITIES_PROMPT = "What's the weather in Paris and in Tokyo?"
 
+# Models whose template always reasons first and whose greedy reasoning does not
+# end on a request its own tool schema contradicts, so the grammar these cases
+# check, which applies after the reasoning, is never reached.
+ENDLESS_ON_CONTRADICTION = ("step3.5-flash-oga-hipep:196b-a11b",)
+# Models that, offered no tools, still answer a weather question with a made-up call
+# after their reasoning; the server leaves it as text, as it should.
+CALLS_WITHOUT_TOOLS = ("step3.5-flash-oga-hipep:196b-a11b",)
+# Models whose reasoning drafts the calls two cities ask for before the one call
+# parallel_tool_calls=false allows.
+DRAFTS_CALLS_IN_REASONING = ("step3.5-flash-oga-hipep:196b-a11b",)
 
-def expect_calls(choice: dict, tools: list[dict], *, at_least: int = 1) -> list[dict]:
+
+def expect_calls(choice: dict, tools: list[dict], *, at_least: int = 1,
+                 calls_in_reasoning: bool = False) -> list[dict]:
     """A finished turn with valid calls; returns them."""
-    msg = flm_api.check_message_contract(choice)
+    msg = flm_api.check_message_contract(choice, calls_in_reasoning=calls_in_reasoning)
     expect(choice["finish_reason"] != "length", "ran out of max_tokens inside a tool call")
     calls = msg.get("tool_calls") or []
     expect(len(calls) >= at_least, f"expected at least {at_least} tool call(s), got {len(calls)}: {msg}")
@@ -51,9 +63,11 @@ def expect_calls(choice: dict, tools: list[dict], *, at_least: int = 1) -> list[
     return calls
 
 
-def expect_streamed_calls(api: Api, body: dict, tools: list[dict], *, at_least: int = 1) -> list[dict]:
+def expect_streamed_calls(api: Api, body: dict, tools: list[dict], *, at_least: int = 1,
+                          calls_in_reasoning: bool = False) -> list[dict]:
     """The streamed version of expect_calls."""
-    folded = flm_api.check_stream_contract(api.ok_stream(body), include_usage=False)
+    folded = flm_api.check_stream_contract(api.ok_stream(body), include_usage=False,
+                                           calls_in_reasoning=calls_in_reasoning)
     expect(folded.finish_reason != "length", "ran out of max_tokens inside a tool call")
     expect(len(folded.tool_calls) >= at_least,
            f"expected at least {at_least} streamed tool call(s), got {len(folded.tool_calls)}")
@@ -89,6 +103,8 @@ def auto_stream(api: Api) -> None:
 @case
 def no_tools_no_calls(api: Api) -> None:
     """Without tools in the request nothing is parsed as a tool call."""
+    if api.model in CALLS_WITHOUT_TOOLS:
+        raise Skip("the model answers with a made-up call even when the request has no tools")
     msg = flm_api.check_message_contract(api.ok(api.body(user(WEATHER_PROMPT), max_tokens=96)))
     expect("tool_calls" not in msg, f"a request without tools returned tool_calls: {msg}")
 
@@ -122,9 +138,10 @@ def required_single_call(api: Api) -> None:
     """required + parallel_tool_calls=false: exactly one call, even when two are asked for."""
     body = api.body(user(TWO_CITIES_PROMPT), tools=WEATHER_TOOLS, tool_choice="required",
                     parallel_tool_calls=False)
-    calls = expect_calls(api.ok(body), WEATHER_TOOLS)
+    drafts = api.model in DRAFTS_CALLS_IN_REASONING
+    calls = expect_calls(api.ok(body), WEATHER_TOOLS, calls_in_reasoning=drafts)
     expect(len(calls) == 1, f"parallel_tool_calls=false allowed {len(calls)} calls")
-    calls = expect_streamed_calls(api, body, WEATHER_TOOLS)
+    calls = expect_streamed_calls(api, body, WEATHER_TOOLS, calls_in_reasoning=drafts)
     expect(len(calls) == 1, f"parallel_tool_calls=false allowed {len(calls)} streamed calls")
 
 
@@ -191,6 +208,8 @@ NOTE = ("The quarterly review moved to Thursday at three in the afternoon, "
 @case
 def function_pattern_keeps_length_bounds(api: Api) -> None:
     """A one-character pattern such as \\S still leaves maxLength in force."""
+    if api.model in ENDLESS_ON_CONTRADICTION:
+        raise Skip("the model reasons without end about a note longer than maxLength")
     tool = {"type": "function", "function": {
         "name": "save_note", "description": "Save a note",
         "parameters": {"type": "object", "required": ["text"], "properties": {
@@ -229,6 +248,8 @@ def function_with_thinking(api: Api) -> None:
 @case
 def non_strict_tool(api: Api) -> None:
     """strict=false only requires well-formed JSON arguments."""
+    if api.model in ENDLESS_ON_CONTRADICTION:
+        raise Skip("the model reasons without end about a city typed as an integer")
     loose = json.loads(json.dumps(GET_WEATHER))
     loose["function"]["strict"] = False
     loose["function"]["parameters"]["properties"]["city"] = {"type": "integer"}
@@ -339,7 +360,8 @@ def round_trip(api: Api) -> None:
 
 def positional_shelf_history(api: Api) -> tuple[list[dict], list[dict]]:
     if api.model not in ("qwen3.5-oga-hipep:9b", "qwen2.5-it-oga-hipep:14b", "laguna2.1-oga-hipep:33b-a3b",
-                         "laguna2.1-oga-hipep:118b-a8b", "nemotron3.5-lightning-oga-hipep:30b-a3b"):
+                         "laguna2.1-oga-hipep:118b-a8b", "nemotron3.5-lightning-oga-hipep:30b-a3b",
+                         "step3.5-flash-oga-hipep:196b-a11b"):
         raise Skip("only the verified positional OGA packages use this adapter")
     turns = user("Read the red and blue shelves. Report each shelf and its numeric value as JSON.")
     calls = [{"id": ident, "type": "function", "function": {

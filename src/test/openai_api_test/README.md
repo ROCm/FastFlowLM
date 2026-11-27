@@ -22,8 +22,8 @@ python3 run_all.py qwen3:4b -k schema  # only cases whose name contains "schema"
 |---|---|
 | `--endpoint URL` | Server base URL, default `http://127.0.0.1:52625` |
 | `--timeout T` | Per-request timeout in seconds, default 300 |
-| `--always-thinks` | The model reasons even with `think: false` (`qwen3-tk`, `lfm2.5-tk`, `deepseek-r1`, `deepseek-r1-0528`, `nanbeige4.1`, `gpt-oss`). Don't require reasoning to disappear, and give every answer room for the reasoning before it. |
-| `--reasoning-budget N` | With `--always-thinks`, tokens added to each request that expects an answer (`max_tokens` ≥ 32), default 1024 |
+| `--always-thinks` | The model reasons even with `think: false` (`qwen3-tk`, `lfm2.5-tk`, `deepseek-r1`, `deepseek-r1-0528`, `nanbeige4.1`, `gpt-oss`, `step3.5`). Don't require reasoning to disappear, and give every answer room for the reasoning before it. |
+| `--reasoning-budget N` | With `--always-thinks`, tokens added to each request that expects an answer (`max_tokens` ≥ 32), default 1024; npu_test passes 4096 for `step3.5` (`REASONING_BUDGETS` in `.github/script/npu_test/plan.py`) |
 | `-k NAME` | Run only matching cases |
 | `-v` | Print tracebacks for failures |
 

@@ -1,5 +1,5 @@
 /// \file modeling_template_chat.hpp
-/// \brief Text chat models that only run on OGA hip-ep: Laguna 2.1, Nemotron 3.5 Lightning
+/// \brief Text chat models that only run on OGA hip-ep: Laguna 2.1, Nemotron 3.5 Lightning, Step 3.5 Flash
 /// \author FastFlowLM Team
 #pragma once
 
@@ -13,11 +13,22 @@
 class TemplateChat : public AutoModel {
 private:
     sampler_config sampling_;
-    bool enable_think = false;
+    bool think_toggleable_;
+    bool enable_think;
+
+    bool _insert_checkpointing_reply_header(chat_meta_info_t& meta_info, std::vector<int>& tokens,
+                                            std::function<bool()> is_cancelled, std::optional<int> requested_max_new_tokens);
+
+protected:
+    /// \brief Checkpoint each prompt at its reply header, before the reasoning block the
+    ///        template opens there, so the next turn can rewind to it
+    bool checkpoint_reply_header_ = false;
 
 public:
     /// \param sampling the model card's recommended sampling
-    TemplateChat(flm_rt::device* npu_device_inst, const std::string& current_model, const sampler_config& sampling);
+    /// \param think_toggleable false for a template that always opens a reasoning block
+    TemplateChat(flm_rt::device* npu_device_inst, const std::string& current_model, const sampler_config& sampling,
+                 bool think_toggleable);
 
     void load_model(std::string model_path, json model_inf, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
     bool insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std::function<bool()> is_cancelled = [] { return false; }) override;
@@ -42,4 +53,10 @@ public:
 class NemotronH : public TemplateChat {
 public:
     explicit NemotronH(flm_rt::device* npu_device_inst);
+};
+
+/// \brief StepFun Step-3.5-Flash; its template always opens a reasoning block; Qwen XML tool calls
+class Step3_5 : public TemplateChat {
+public:
+    explicit Step3_5(flm_rt::device* npu_device_inst);
 };

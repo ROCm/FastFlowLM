@@ -105,7 +105,7 @@ EXACT_RETRY_FAMILIES = ("qwen2", "qwen3.5")
 # off. An exact retry there replays the prompt (cached_tokens 0). Follow-up of WP-33.
 EXACT_RETRY_MISSING_FAMILIES = ("gemma3", "gemma4e")
 # Not known either way: the cases have not run on a model of these families.
-EXACT_RETRY_UNVERIFIED_FAMILIES = ("gemma4-12b", "gpt-oss", "laguna", "nemotron-h")
+EXACT_RETRY_UNVERIFIED_FAMILIES = ("gemma4-12b", "gpt-oss", "laguna", "nemotron-h", "step3.5")
 # check_exact_retry_families.py (CPU CI) holds the three lists to the catalog: every family with an
 # oga-hipep model is in exactly one of them, and none names a family the catalog does not have.
 
