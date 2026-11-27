@@ -17,7 +17,7 @@ namespace flm::error_model {
 
 using ojson = nlohmann::ordered_json;
 
-enum class Protocol { OpenAI, Ollama, SystemOne };
+enum class Protocol { OpenAI, Ollama, SystemOne, Anthropic };
 
 struct ErrorValue {
     int status = 500;
@@ -51,6 +51,7 @@ inline Protocol protocol_for_path(std::string_view target) {
     const auto cut = target.find_first_of("?#");
     std::string_view path = target.substr(0, cut);
     while (path.size() > 1 && path.back() == '/') path.remove_suffix(1);
+    if (path == "/v1/messages") return Protocol::Anthropic;
     if (path == "/api" || path.rfind("/api/", 0) == 0) return Protocol::Ollama;
     if (path == "/v1/systemone" || path.rfind("/v1/systemone/", 0) == 0 ||
         path == "/v1/decisions" || path.rfind("/v1/decisions/", 0) == 0) {
@@ -67,6 +68,14 @@ inline std::string dump_json(const ojson& body) {
 /// Render an ErrorValue in the target protocol's JSON wire shape.
 inline ojson body_for(Protocol protocol, const ErrorValue& raw) {
     const int status = normalize_status(raw.status);
+    if (protocol == Protocol::Anthropic) {
+        const char* type = status == 404 ? "not_found_error" : status == 401 ? "authentication_error" :
+                           status == 403 ? "permission_error" : status == 413 ? "request_too_large" :
+                           status == 429 ? "rate_limit_error" : status == 503 || status == 529 ? "overloaded_error" :
+                           status >= 500 ? "api_error" : "invalid_request_error";
+        const auto message = raw.param.empty() ? raw.message : raw.param + ": " + raw.message;
+        return {{"type","error"},{"error",{{"type",type},{"message",message}}}};
+    }
     if (protocol == Protocol::Ollama) {
         ojson out = {{"error", raw.message}};
         if (raw.session_cleared.has_value()) out["session_cleared"] = *raw.session_cleared;
@@ -179,6 +188,7 @@ inline ErrorValue prefill_error(int error_code, const std::string& error_message
 /// Format one mid-stream error frame (OpenAI SSE data event or Ollama NDJSON line).
 inline std::string stream_error_frame(Protocol protocol, const ErrorValue& err) {
     const std::string payload = dump_json(body_for(protocol, err));
+    if (protocol == Protocol::Anthropic) return "event: error\ndata: " + payload + "\n\n";
     if (protocol == Protocol::OpenAI) {
         return "data: " + payload + "\n\n";
     }
@@ -190,6 +200,7 @@ inline std::string stream_error_frame(Protocol protocol, const ErrorValue& err) 
 inline std::optional<std::string> stream_abort_frames(Protocol protocol, const ErrorValue& err) {
     switch (protocol) {
         case Protocol::OpenAI: return stream_error_frame(protocol, err) + "data: [DONE]\n\n";
+        case Protocol::Anthropic:
         case Protocol::Ollama: return stream_error_frame(protocol, err);
         case Protocol::SystemOne: break;
     }

@@ -76,6 +76,7 @@ struct chat_token_logprob {
 };
 
 struct chat_meta_info_t {
+    int thinking_budget = 0;  ///< Per turn; zero means no manual reasoning-token limit.
 	int max_prefill_len;
     int prompt_tokens;        // whole prompt, cached prefix included
     int cached_prompt_tokens; // subset of prompt_tokens served from the KV cache

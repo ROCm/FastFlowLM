@@ -59,7 +59,7 @@ void test_engine_routes_take_npu_queue() {
     const std::string src = ss.str();
 
     const std::set<std::string> engine = {"handle_generate", "handle_chat", "handle_embeddings",
-        "handle_openai_chat_completion", "handle_openai_responses", "handle_openai_completion", "handle_openai_audio_transcriptions",
+        "handle_openai_chat_completion", "handle_openai_responses", "handle_anthropic_messages", "handle_openai_completion", "handle_openai_audio_transcriptions",
         "handle_systemone"};
     const std::set<std::string> no_engine = {"handle_show", "handle_ps", "handle_models", "handle_models_openai",
         "handle_version", "handle_pull", "handle_systemone_models"};
@@ -108,6 +108,8 @@ void test_engine_routes_take_npu_queue() {
     }
     CHECK(engine_routes >= 9);
     CHECK(requires_npu_access("POST", "/api/embeddings"));
+    CHECK(requires_npu_access("POST", "/v1/messages"));
+    CHECK(!requires_npu_access("POST", "/v1/messages/count_tokens"));
     CHECK(!requires_npu_access("GET", "/api/embeddings"));
     CHECK(!requires_npu_access("POST", "/api/show"));
 }

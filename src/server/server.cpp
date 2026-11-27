@@ -400,7 +400,8 @@ void HttpSession::handle_request(bool cors) {
         options_res->keep_alive(req_.keep_alive());
 
         set_cors_headers(*options_res, flm::http_guard::cors_headers(server_.origin_policy(),
-            req_[http::field::origin], req_[http::field::access_control_request_headers], true));
+            req_[http::field::origin], req_[http::field::access_control_request_headers], true,
+            flm::http_guard::route_path(std::string_view(req_.target().data(), req_.target().size())) == "/v1/messages"));
 
         options_res->prepare_payload();
         auto self = shared_from_this();
@@ -1252,6 +1253,13 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             rest_handler->handle_openai_chat_completion(request_json, send_response, send_streaming_response, cancellation_token);
         });
     
+    server->register_handler("POST", "/v1/messages",
+        [rest_handler](const http::request<http::string_body>& req, auto send, auto stream,
+                       std::shared_ptr<HttpSession>, auto cancel) {
+            rest_handler->handle_anthropic_messages(json::parse(req.body()), std::move(send),
+                                                    std::move(stream), std::move(cancel));
+        });
+
     server->register_handler("POST", "/v1/responses",
         [rest_handler](const http::request<http::string_body>& req, auto send_response,
                        auto send_streaming_response, std::shared_ptr<HttpSession>, auto cancellation_token) {

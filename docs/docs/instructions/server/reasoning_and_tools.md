@@ -9,6 +9,36 @@ parent: Local Server (Server Mode)
 
 Every model writes its answer in its own markup. Qwen3 wraps its thinking in `<think>…</think>` and tool calls in `<tool_call>…</tool_call>`. Gemma4 thinks in a `<|channel>thought` channel and writes calls as `call:f{…}`. gpt-oss uses Harmony channels. LFM2 writes Python calls.
 
+## Anthropic Messages clients
+
+Point the Anthropic SDK's **base URL** at `http://127.0.0.1:52625` (or the port used by `flm serve`), without `/v1`. The SDK appends `/v1/messages`. Use an installed FLM model tag; the server does not translate Claude model names. If the SDK requires an API key, use a placeholder for local serving.
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(base_url="http://127.0.0.1:52625", api_key="local")
+with client.messages.stream(
+    model="qwen3:4b",
+    max_tokens=2048,
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    messages=[{"role": "user", "content": "What is 17 times 23?"}],
+) as stream:
+    message = stream.get_final_message()
+```
+
+| Request field | Local behavior |
+|---|---|
+| `model`, `messages`, `max_tokens` | Required. `max_tokens` caps the whole output, including thinking. Top-level `system` takes a string or text blocks. Use `user` and `assistant` roles in `messages`. |
+| Text and images | Accepts text and inline base64 image sources; image inference requires a vision model. Remote URL sources, documents and unknown blocks return a field-specific 400. |
+| `tools`, `tool_choice` | Client-executed tools with `input_schema`; `auto`, `any`, `tool` by name, `none`, and `disable_parallel_tool_use`. Return text results with the original `tool_use_id`; unknown, duplicated or missing IDs are refused. `eager_input_streaming` is accepted; the parser emits tool argument fragments when available. Server tools and `is_error:true` results are not supported. |
+| `thinking` | On the Qwen3 NPU frontend, `enabled` requires an integer `budget_tokens` of at least 1024 and less than `max_tokens`. When a thinking block reaches its budget, FLM feeds its closing token back to the model and continues decoding the answer within the **original** total limit. A natural close may occur sooner. Unsupported backends, invalid budgets and `adaptive` return 400 before streaming. `disabled` uses the model's native no-thinking policy. |
+| Thinking output | Without `display`, local thinking is returned as text. Explicit `display:"summarized"` returns a size-only local summary, not a model-generated abridgement; `"omitted"` returns no reasoning text. Local signatures are empty; nonempty foreign signatures and redacted blocks cannot be replayed. |
+| `stream`, `temperature`, `top_p`, `top_k` | Forwarded to the shared chat turn. Streams have named events and end with `message_stop`, not `[DONE]`. A failure after streaming begins is an `error` event. |
+| `cache_control`, `metadata`, `service_tier` | Accepted but ignored. FLM manages its local cache: `input_tokens` excludes `cache_read_input_tokens`, and cache creation is reported as zero. |
+| `stop_sequences` | Nonempty custom sequences are refused; FLM cannot report which matched. |
+
+`anthropic-version`, `anthropic-beta`, `x-api-key` and `Authorization` are optional for local serving. Sending a beta header does not enable hosted features. `/v1/messages/count_tokens` is not part of this route.
+
 FLM's `/v1/chat/completions` endpoint removes that markup for you. Whatever the model, you get the same OpenAI-shaped message:
 
 | Field | What it holds |
