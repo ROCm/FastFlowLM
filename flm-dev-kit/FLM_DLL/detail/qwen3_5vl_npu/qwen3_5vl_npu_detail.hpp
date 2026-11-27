@@ -94,6 +94,16 @@ struct qwen3_5vl_npu::Impl{
 
     flm_rt::runlist layers_run;
     flm_rt::run lm_head_run;
+    /// @brief decode control-packet switches (FLM_Xclbin/Qwen3_5/decode_switches): the q4_k lm_head runs as a guest
+    ///        of the layer hardware context, one window cold_layer -> layer_then_lm -> lm_head -> lm_then_layer
+    qwen3_5vl_launch dll{{"cold_layer", "layer_then_lm", "lm_then_layer"}, "QWEN35_DECODE"};
+#if !defined(FLM_USE_HRX)
+    xrt::runlist lm_head_window;
+#endif
+    /// @brief start lm_head on x (in its own context, or as a window in the layer context)
+    void lm_head_start();
+    /// @brief wait for lm_head_start's run
+    void lm_head_wait();
     int current_context_length;
     int general_token_idx;
 

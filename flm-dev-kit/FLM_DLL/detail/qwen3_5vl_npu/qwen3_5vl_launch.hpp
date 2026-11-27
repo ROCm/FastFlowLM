@@ -25,6 +25,11 @@
 ///        The vision encoder (qwen3_5vl_image.cpp) has a second instance, switches cold_mm, mm_then_attn and
 ///        attn_then_mm for vision_mm.xclbin and vision_attn.xclbin (FLM_Xclbin/Qwen3_5/vision_switches), file
 ///        qwen3_5_vision.switches, environment QWEN35_VISION_NO_SWITCH / QWEN35_VISION_SWITCH_DIR.
+///
+///        The decode (qwen3_5vl_npu.cpp) has a third, switches cold_layer, layer_then_lm and lm_then_layer for
+///        layer.xclbin and lm_head_q4k.xclbin (FLM_Xclbin/Qwen3_5/decode_switches), file qwen3_5_decode.switches,
+///        environment QWEN35_DECODE_NO_SWITCH / QWEN35_DECODE_SWITCH_DIR: the array is the layer's outside a window,
+///        and each token's lm_head is one window built once (build()) and executed again.
 
 #include <algorithm>
 #include <cstdint>
@@ -226,6 +231,20 @@ struct qwen3_5vl_launch {
     ///        rely on).
     template <class Mgr>
     void window(Mgr* mgr, std::vector<hop>& hops, const char* back) {
+        submit(mgr, hops, back).wait();
+    }
+
+    /// @brief window() without the wait: the submitted runlist, for the caller to wait on
+    template <class Mgr>
+    xrt::runlist submit(Mgr* mgr, std::vector<hop>& hops, const char* back) {
+        xrt::runlist rl = build(mgr, hops, back);
+        rl.execute();
+        return rl;
+    }
+
+    /// @brief the window's runlist, not started; one whose runs keep their arguments can be executed again
+    template <class Mgr>
+    xrt::runlist build(Mgr* mgr, std::vector<hop>& hops, const char* back) {
         xrt::runlist rl = mgr->create_runlist();
         rl.add(make_run(names[0]));
         for (hop& h : hops) {
@@ -233,8 +252,7 @@ struct qwen3_5vl_launch {
             for (xrt::run& r : h.runs) rl.add(r);
         }
         rl.add(make_run(back));
-        rl.execute();
-        rl.wait();
+        return rl;
     }
 #endif
 

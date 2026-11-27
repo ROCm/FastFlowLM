@@ -69,7 +69,17 @@ qwen3_5vl_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, qw
         const std::string q4k_lm_head = utils::path_join(xdir, "lm_head_q4k.xclbin");
         const char* keep_q8 = std::getenv("QWEN35_LMHEAD_Q8");
         lm_head_q4k = std::filesystem::exists(q4k_lm_head) && !(keep_q8 && keep_q8[0] == '1');
-        lm_head_app_manager = npu->register_xclbin(lm_head_q4k ? q4k_lm_head : utils::path_join(xdir, "lm_head.xclbin"));
+        // with qwen3_5_decode.switches (built against layer.xclbin and the q4_k lm_head, see qwen3_5vl_launch.hpp) the
+        // q4_k lm_head runs in the layer context: two warm switches per token instead of two context switches.
+        // Runlists need preemption off; QWEN35_DECODE_NO_SWITCH=1 keeps lm_head in its own context.
+        if (lm_head_q4k && !npu->is_preemption_enabled() &&
+            dll.ensure(layer_app_manager, utils::path_join(xdir, "qwen3_5_decode.switches"))) {
+            header_print("qwen3.5", "decode lm_head shares the layer hardware context (control-packet switches)");
+            lm_head_app_manager = layer_app_manager;
+        }
+        else {
+            lm_head_app_manager = npu->register_xclbin(lm_head_q4k ? q4k_lm_head : utils::path_join(xdir, "lm_head.xclbin"));
+        }
     }
     this->lm_head = lm_head_app_manager->create_app();
 
@@ -237,6 +247,33 @@ void qwen3_5vl_npu::Impl::set_context_length(int L, int new_general_token_idx){
     this->_set_rope_rms_weights(new_general_token_idx);
 }
 
+void qwen3_5vl_npu::Impl::lm_head_start(){
+#if !defined(FLM_USE_HRX)
+    if (dll.ready) {
+        // lm_head's arguments never change: the window is built once and executed every token
+        if (!this->lm_head_window) {
+            std::vector<qwen3_5vl_launch::hop> hops(1);
+            hops[0].to = "layer_then_lm";
+            hops[0].runs.push_back(this->lm_head.create_run(this->logits, this->lm_head_weights, this->x));
+            this->lm_head_window = dll.build(layer_app_manager, hops, "lm_then_layer");
+        }
+        this->lm_head_window.execute();
+        return;
+    }
+#endif
+    this->lm_head_run.start();
+}
+
+void qwen3_5vl_npu::Impl::lm_head_wait(){
+#if !defined(FLM_USE_HRX)
+    if (dll.ready) {
+        flm::npu::wait_for_completion(this->lm_head_window, "lm_head_window");
+        return;
+    }
+#endif
+    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+}
+
 buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 #ifdef QWEN35_DECODE_PROF
     auto t0 = DP_NOW();
@@ -296,7 +333,7 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
     auto t2 = DP_NOW();
 #endif
     this->x.sync_to_device();
-    this->lm_head_run.start();
+    this->lm_head_start();
 #ifdef QWEN35_DECODE_PROF
     auto t3 = DP_NOW();
 #endif
@@ -304,7 +341,7 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 #ifdef QWEN35_DECODE_PROF
     auto t4 = DP_NOW();
 #endif
-    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+    this->lm_head_wait();
 #ifdef QWEN35_DECODE_PROF
     auto t5 = DP_NOW();
 #endif
@@ -315,8 +352,8 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
     double dp_lm2 = 0;
     if (DP_LMX2) {
         auto a = DP_NOW();
-        this->lm_head_run.start();
-        flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+        this->lm_head_start();
+        this->lm_head_wait();
         dp_lm2 = DP_US(a, DP_NOW());
     }
     fprintf(stderr, "DECPROF2 gap %.0f warm_rtp %.0f rtp %.0f lin1 %.0f lin %.0f attn %.0f lm2 %.0f us\n", dp_gap, dp_warm, dp_k[0], dp_k[1], dp_k[2], dp_k[3], dp_lm2);
@@ -353,8 +390,8 @@ buffer<bf16> qwen3_5vl_npu::Impl::_prefill_with_mv(std::vector<int>& ids, void* 
         this->set_context_length(this->current_context_length + 1, this->general_token_idx + 1);
         std::cout << "Token " << i << " done!" << std::endl;
     }
-    this->lm_head_run.start();
-    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+    this->lm_head_start();
+    this->lm_head_wait();
     this->logits.sync_from_device();
 
     utils::print_matrix(logits_valid, desc.vocab_size);
@@ -525,8 +562,8 @@ buffer<bf16> qwen3_5vl_npu::Impl::get_v_cache(int layer_idx, int idx){
 buffer<bf16> qwen3_5vl_npu::Impl::get_logits(buffer<bf16>& predict){
     memcpy(this->x.data(), predict.data(), desc.D * sizeof(bf16));
     this->x.sync_to_device();
-    this->lm_head_run.start();
-    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+    this->lm_head_start();
+    this->lm_head_wait();
     this->logits.sync_from_device();
     return this->logits_valid;
 }
@@ -725,12 +762,14 @@ qwen3_5vl_npu::qwen3_5vl_npu(LM_Config config, npu_xclbin_manager *npu_instance,
 }
 
 buffer<bf16> qwen3_5vl_npu::forward(int ids){
+    // the decode lm_head window is a warm switch too (qwen3_5vl_launch.hpp)
+    qwen3_5vl_array_lock array(this->_impl->dll.ready);
     return this->_impl->forward(ids);
 }
 
 buffer<bf16> qwen3_5vl_npu::prefill(std::vector<int>& ids, void* payload){
     // warm switches need the array to themselves from the first layer to the last (qwen3_5vl_launch.hpp)
-    qwen3_5vl_array_lock array((this->_impl->pctx && this->_impl->pctx->ll.ready) ||
+    qwen3_5vl_array_lock array(this->_impl->dll.ready || (this->_impl->pctx && this->_impl->pctx->ll.ready) ||
                                (this->_impl->qwen3_5vl_image_encoder && this->_impl->qwen3_5vl_image_encoder->vll.ready));
     try {
         buffer<bf16> result = this->_impl->prefill(ids, payload);
