@@ -475,6 +475,68 @@ def think_does_not_carry_over(api: Api) -> None:
                f"{'reasoned' if not default else 'did not reason'}, unlike the model's default")
 
 
+@case
+def openrouter_errors(api: Api) -> None:
+    """Invalid reasoning controls return a named JSON error, including on streaming requests."""
+    default = api.body(user(PROMPT), max_tokens=32)
+    del default["think"]
+    resident = loaded_models(api)
+    for fields, param in [
+        ({"reasoning": {"effort": "bogus"}}, "reasoning.effort"),
+        ({"reasoning": {"enabled": 1}}, "reasoning.enabled"),
+        ({"reasoning": {"max_tokens": 4}}, "reasoning.max_tokens"),
+        ({"reasoning": {"exclude": True}}, "reasoning.exclude"),
+        ({"reasoning": {"effort": "none"}, "think": True}, "reasoning.effort"),
+        ({"reasoning": {"enabled": False}, "reasoning_effort": "high"}, "reasoning.enabled"),
+    ]:
+        body = {**default, **fields}
+        for stream in (False, True):
+            result = api.stream(body) if stream else api.post(body)
+            expect(result.status == 400, f"{fields}, stream={stream}: expected 400, got {result.status}")
+            err = (result.error if stream else result.body)["error"]
+            expect(err["type"] == "invalid_request_error" and err["param"] == param, repr(err))
+            if stream:
+                expect(not result.chunks, "unexpected SSE before validation")
+    # A native `none` as well makes this safe to run even on an older server:
+    # gpt-oss refuses it before loading. The alias must keep its original error path.
+    cross = {**default, "model": "gpt-oss:20b", "reasoning": {"enabled": False}, "reasoning_effort": "none"}
+    resp = api.post(cross)
+    if resp.status != 404:  # the catalog can omit the model on unsupported hardware
+        expect(resp.status == 400 and resp.body["error"]["param"] == "reasoning.enabled", repr(resp.body))
+        expect("reasoning.enabled" in resp.error_message(), resp.error_message())
+    malformed = api.stream({**cross, "reasoning": {"enabled": "false"}})
+    expect(malformed.status == 400 and not malformed.chunks and
+           malformed.error["error"]["param"] == "reasoning.enabled", repr(malformed.error))
+    expect(loaded_models(api) == resident, "invalid reasoning changed the resident model")
+
+
+@case
+def openrouter_effort(api: Api) -> None:
+    """On toggleable Qwen, the reasoning object works in both JSON and SSE without changing defaults."""
+    if api.always_thinks or loaded_family(api) not in ("qwen3", "qwen3.5"):
+        raise Skip("requires a toggleable Qwen model")
+    default = api.body(user(PROMPT), max_tokens=128)
+    del default["think"]
+
+    def thinks(fields, stream):
+        body = {**default, **fields}
+        if stream:
+            return bool(flm_api.check_stream_contract(api.ok_stream(body), include_usage=False).reasoning)
+        return bool(flm_api.check_message_contract(api.ok(body)).get("reasoning_content"))
+
+    for stream in (False, True):
+        before = thinks({}, stream)
+        for obj, level in [({"effort": "high"}, "high"), ({"enabled": True}, "medium"),
+                           ({"effort": "none"}, "none"), ({"enabled": False}, "none")]:
+            native = thinks({"reasoning_effort": level}, stream)
+            expect(native == (level != "none"), f"native {level} control did not work")
+            expect(thinks({"reasoning": obj}, stream) == native, f"{obj} != native {level}, stream={stream}")
+        expect(thinks({"reasoning": {"enabled": not before}}, stream) != before, "opposite setting had no effect")
+        conflict = {**default, "reasoning": {"enabled": False}, "reasoning_effort": "high"}
+        expect(api.post(conflict).status == 400, "conflicting effort succeeded")
+        expect(thinks({}, stream) == before, "nested reasoning changed next request's default")
+
+
 CASES = flm_api.collect(globals())
 
 
