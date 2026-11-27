@@ -10,6 +10,12 @@
 #include <cstdio>
 #define DP_NOW() std::chrono::steady_clock::now()
 #define DP_US(a,b) std::chrono::duration<double,std::micro>((b)-(a)).count()
+#include <cstdlib>
+// profile-only knobs (QWEN35_DECODE_PROF builds): SPLIT runs the layers one call each, timed per layer kind;
+// LMX2 runs lm_head a second time (same hw_context, idempotent); WARM runs set_layer_rtp alone before the runlist
+static bool dp_env(const char* n){ const char* v = std::getenv(n); return v && v[0] == '1'; }
+static const bool DP_SPLIT = dp_env("QWEN35_DPROF_SPLIT"), DP_LMX2 = dp_env("QWEN35_DPROF_LMX2"), DP_WARM = dp_env("QWEN35_DPROF_WARM");
+static std::chrono::steady_clock::time_point dp_last_end{};
 #endif
 #include "qwen3_5vl_npu_detail.hpp"
 #include "metrices.hpp"
@@ -220,6 +226,32 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 
 #ifdef QWEN35_DECODE_PROF
     auto t1 = DP_NOW();
+    // gap: host time between the previous forward's return and this call (sampling, detok, framework)
+    const double dp_gap = dp_last_end.time_since_epoch().count() ? DP_US(dp_last_end, t0) : 0.0;
+    double dp_warm = 0, dp_k[4] = {0, 0, 0, 0};   // set_layer_rtp, first linear, linear (sum), attn (sum)
+    if (DP_WARM) {
+        set_layer_rtp();
+        dp_warm = DP_US(t1, DP_NOW());
+        t1 = DP_NOW();
+    }
+    if (DP_SPLIT) {
+        auto a = DP_NOW();
+        set_layer_rtp();
+        auto b = DP_NOW(); dp_k[0] += DP_US(a, b); a = b;
+        for (uint32_t i = 0; i < desc.num_hidden_layers; i++){
+            int k;
+            if (is_attn_layer(i)){
+                this->layer(this->x, this->proj_weights[i], this->rms_weights[i], this->rope_rms_weights[i], this->kv_caches[i]); k = 3;
+            }
+            else if (is_first_linear_layer(i)) {
+                this->first_linear_layer(this->x, this->proj_weights[i], this->rms_weights[i], this->rope_rms_weights[i], this->kv_caches[i]); k = 1;
+            }
+            else {
+                this->linear_layer(this->x, this->proj_weights[i], this->rms_weights[i], this->rope_rms_weights[i], this->kv_caches[i]); k = 2;
+            }
+            b = DP_NOW(); dp_k[k] += DP_US(a, b); a = b;
+        }
+    } else
 #endif
     if (!this->npu->is_preemption_enabled()){
         this->layers_run.execute();
@@ -260,6 +292,15 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 #ifdef QWEN35_DECODE_PROF
     auto t6 = DP_NOW();
     fprintf(stderr, "DECPROF embed %.0f layers %.0f xsync+lmstart %.0f setctx(host) %.0f lm_wait %.0f logits_sync %.0f total %.0f us\n", DP_US(t0,t1), DP_US(t1,t2), DP_US(t2,t3), DP_US(t3,t4), DP_US(t4,t5), DP_US(t5,t6), DP_US(t0,t6));
+    double dp_lm2 = 0;
+    if (DP_LMX2) {
+        auto a = DP_NOW();
+        this->lm_head_run.start();
+        flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+        dp_lm2 = DP_US(a, DP_NOW());
+    }
+    fprintf(stderr, "DECPROF2 gap %.0f warm_rtp %.0f rtp %.0f lin1 %.0f lin %.0f attn %.0f lm2 %.0f us\n", dp_gap, dp_warm, dp_k[0], dp_k[1], dp_k[2], dp_k[3], dp_lm2);
+    dp_last_end = DP_NOW();
 #endif
     return this->logits_valid;
 }
