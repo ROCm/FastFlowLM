@@ -123,9 +123,11 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             ("family", po::value<std::string>(&parsed_args.family)->default_value(""),
              "With --model-dir: the model family that runs the package, e.g. qwen3.5")
             ("think", po::value<std::string>(&parsed_args.think)->default_value(""),
-             "With --model-dir: on or off to set whether the model reasons; default reads the chat template")
+             "With --model-dir: on or off for the thinking flag /v1/models declares; default reads the chat template. "
+             "It does not change how the model runs")
             ("tools", po::value<std::string>(&parsed_args.tools)->default_value(""),
-             "With --model-dir: on or off to set whether the model takes tools; default reads the chat template")
+             "With --model-dir: on or off for the tools flag /v1/models declares; default reads the chat template. "
+             "For --family qwen2 it also decides whether tool definitions go into the prompt")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),
