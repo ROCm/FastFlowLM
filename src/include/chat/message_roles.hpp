@@ -243,8 +243,8 @@ inline nlohmann::ordered_json normalize_messages(nlohmann::ordered_json messages
             current_msg["content"] = merged_content_array;
         }
         else if (role == "assistant") {
-            // Strip prior assistant "thinking" / reasoning fields so they are not
-            // fed back into the model on subsequent turns.
+            // History drops reasoning by default. The Qwen GPU tool-call policy is applied
+            // separately, once the final user-turn boundaries are visible to the template.
             current_msg.erase("thinking");
             current_msg.erase("reasoning");
             current_msg.erase("reasoning_content");

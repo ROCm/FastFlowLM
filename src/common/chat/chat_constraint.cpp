@@ -35,7 +35,42 @@ bool has_tool_turns(const json& messages) {
     return false;
 }
 
+/// \brief Map one of the seven OpenAI `reasoning_effort` levels to the four canonical FLM levels
+std::optional<std::string> canonical_reasoning_effort(const std::string& level) {
+    if (level == "none") return std::string("none");
+    if (level == "minimal" || level == "low") return std::string("low");
+    if (level == "medium") return std::string("medium");
+    if (level == "high" || level == "xhigh" || level == "max") return std::string("high");
+    return std::nullopt;
+}
+
 } // namespace
+
+bool chat_reasoning_effort_from_openai(const json& request, std::optional<std::string>& canonical_effort,
+                                       std::string& error, bool allow_no_think) {
+    canonical_effort.reset();
+    const json& effort = field(request, "reasoning_effort");
+    if (effort.is_null()) {
+        return true;
+    }
+    if (!effort.is_string()) {
+        error = "reasoning_effort must be a string";
+        return false;
+    }
+    const std::string raw = effort.get<std::string>();
+    if (allow_no_think && raw == "no_think") {
+        canonical_effort = raw;
+        return true;
+    }
+    auto mapped = canonical_reasoning_effort(raw);
+    if (!mapped.has_value()) {
+        error = std::string("reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max") +
+                (allow_no_think ? ", no_think" : "") + "; got \"" + raw + "\"";
+        return false;
+    }
+    canonical_effort = std::move(*mapped);
+    return true;
+}
 
 bool chat_thinking_override_from_openai(const json& request, std::optional<bool>& override_value,
                                         std::string& error) {
@@ -66,10 +101,14 @@ bool chat_thinking_override_from_openai(const json& request, std::optional<bool>
     const json& effort = field(request, "reasoning_effort");
     if (effort.is_string()) {
         const std::string level = effort.get<std::string>();
-        const bool effort_on = level == "low" || level == "medium" || level == "high";
-        if ((level == "none" && nested) || (effort_on && !nested)) {
-            error = "chat_template_kwargs.enable_thinking contradicts reasoning_effort \"" + level + "\"";
-            return false;
+        // no_think is Hy-Memory's "none"; other models refuse it in chat_reasoning_effort_from_openai
+        const auto canonical = level == "no_think" ? std::optional<std::string>("none") : canonical_reasoning_effort(level);
+        if (canonical) {
+            const bool effort_on = *canonical != "none";
+            if ((!effort_on && nested) || (effort_on && !nested)) {
+                error = "chat_template_kwargs.enable_thinking contradicts reasoning_effort \"" + level + "\"";
+                return false;
+            }
         }
     }
     override_value = nested;
@@ -87,9 +126,17 @@ bool chat_constraint_request_from_openai(const json& request, const json& tools,
     }
     out.parallel_tool_calls = parallel.is_null() || parallel.get<bool>();
     // thinking turned off: some models still get an empty think block fed in, but
-    // the grammar must not offer room to reason
+    // the grammar must not offer room to reason. reasoning_effort is applied after
+    // think in configure_chat_engine_parameters, so when both appear it decides.
     const json& think = field(request, "think");
-    if ((think.is_boolean() && !think.get<bool>()) || field(request, "reasoning_effort") == "none") {
+    const json& effort = field(request, "reasoning_effort");
+    const auto canonical = effort.is_string() ? canonical_reasoning_effort(effort.get<std::string>()) : std::nullopt;
+    if (canonical.has_value()) {
+        out.allow_reasoning = (*canonical != "none");
+    } else if (effort == "no_think") {
+        // Hy-Memory's "none"; any other model refuses the request
+        out.allow_reasoning = false;
+    } else if (think.is_boolean() && !think.get<bool>()) {
         out.allow_reasoning = false;
     }
 

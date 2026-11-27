@@ -58,7 +58,7 @@ build_units.json ("make bitstream [MODEL_TYPE=...]" in that unit).
               changes.py gives toolchain.lock and docker/aie-build* no area
               (devkit-aie-image.yml checks them), so those two only add the
               canary when another change already selected the xclbin area
-            - a shipped kernel, src/xclbins/<folder>/<slot>.xclbin (added,
+            - a shipped kernel, src/xclbins/<folder>/<slot> (added,
               replaced or removed): the artifact kernel_assignment.json
               puts in <slot> for every model whose folder is <folder>, so
               devkit_xclbin_compare.py reports how the rebuild compares with
@@ -309,7 +309,7 @@ def changed_plan(plan: Plan, files: list[str], base_units: dict[str, list],
 
 
 def add_shipped_kernel(plan: Plan, path: str) -> None:
-    """src/xclbins/<folder>/<slot>.xclbin: the artifact each model using
+    """src/xclbins/<folder>/<slot>: the artifact each model using
     <folder> assigns to <slot>, to compare with the shipped file."""
     folder, slot = path[len("src/xclbins/"):].rsplit("/", 1)
     hits = {m: e["kernels"][slot] for m, e in sorted(plan.assignment.items())

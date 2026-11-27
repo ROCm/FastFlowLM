@@ -319,23 +319,23 @@ final:    data: [DONE]
 
 
 ### prefill_failed_400 [nstream]
-response: {"error":{"message":"the prompt is longer than the context","type":"invalid_request_error","code":400}}
+response: {"error":{"message":"the prompt is longer than the context","type":"invalid_request_error","param":null,"code":400}}
 
 ### prefill_failed_400 [stream]
-response: {"error":{"message":"the prompt is longer than the context","type":"invalid_request_error","code":400}}
+response: {"error":{"message":"the prompt is longer than the context","type":"invalid_request_error","param":null,"code":400}}
 
 ### prefill_failed_400 [stream+usage]
-response: {"error":{"message":"the prompt is longer than the context","type":"invalid_request_error","code":400}}
+response: {"error":{"message":"the prompt is longer than the context","type":"invalid_request_error","param":null,"code":400}}
 
 ### generate_throw_mid [nstream]
-response: {"error":{"message":"the scripted model threw","type":"server_error","code":500}}
+response: {"error":{"message":"the scripted model threw","type":"server_error","param":null,"code":500}}
 
 ### generate_throw_mid [stream]
 chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0,"model":"model-faker","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}
 
 chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0,"model":"model-faker","choices":[{"index":0,"delta":{"role":"assistant","content":"lo"},"finish_reason":null}]}
 
-chunk:    data: {"error":{"message":"the scripted model threw","type":"server_error","code":500}}
+chunk:    data: {"error":{"message":"the scripted model threw","type":"server_error","param":null,"code":500}}
 
 final:    data: [DONE]
 
@@ -345,20 +345,20 @@ chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0
 
 chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0,"model":"model-faker","choices":[{"index":0,"delta":{"role":"assistant","content":"lo"},"finish_reason":null}],"usage":null}
 
-chunk:    data: {"error":{"message":"the scripted model threw","type":"server_error","code":500}}
+chunk:    data: {"error":{"message":"the scripted model threw","type":"server_error","param":null,"code":500}}
 
 final:    data: [DONE]
 
 
 ### generate_model_error_mid [nstream]
-response: {"error":{"message":"the scripted model failed","type":"model_error","code":503,"session_cleared":true}}
+response: {"error":{"message":"the scripted model failed","type":"service_unavailable_error","param":null,"code":503,"session_cleared":true}}
 
 ### generate_model_error_mid [stream]
 chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0,"model":"model-faker","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}
 
 chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0,"model":"model-faker","choices":[{"index":0,"delta":{"role":"assistant","content":"lo"},"finish_reason":null}]}
 
-chunk:    data: {"error":{"message":"the scripted model failed","type":"model_error","code":503,"session_cleared":true}}
+chunk:    data: {"error":{"message":"the scripted model failed","type":"service_unavailable_error","param":null,"code":503,"session_cleared":true}}
 
 final:    data: [DONE]
 
@@ -368,7 +368,7 @@ chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0
 
 chunk:    data: {"id":"chatcmpl-ID","object":"chat.completion.chunk","created":0,"model":"model-faker","choices":[{"index":0,"delta":{"role":"assistant","content":"lo"},"finish_reason":null}],"usage":null}
 
-chunk:    data: {"error":{"message":"the scripted model failed","type":"model_error","code":503,"session_cleared":true}}
+chunk:    data: {"error":{"message":"the scripted model failed","type":"service_unavailable_error","param":null,"code":503,"session_cleared":true}}
 
 final:    data: [DONE]
 

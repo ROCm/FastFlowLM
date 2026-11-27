@@ -46,6 +46,14 @@ struct ModelSpec {
     Rewind rewind;
 };
 
+/// \brief the layout of a session's KV cache
+enum class KvCache {
+    kBf16,
+    /// corelib's own 8-bit layout, about 60 % of BF16's bytes; needs an AIEM
+    /// NPU, NPU direct, and a model corelib lists for it
+    k8Bit,
+};
+
 /// \brief rows in one page of a paged KV cache
 inline constexpr std::uint32_t kPageRows = 4096;
 
@@ -57,9 +65,11 @@ class CorelibModel final : public causal_lm {
 public:
     /// \param weights the file corelib packs the weights from
     /// \param max_length positions this engine may run: 1..spec.context_limit
+    /// \param kv_cache every session's, those a longer context recreates too,
+    ///        so a snapshot restores into a session of its own layout
     CorelibModel(ModelSpec spec, std::filesystem::path weights,
                  std::shared_ptr<corelib::CorelibRuntime> runtime,
-                 std::uint32_t max_length);
+                 std::uint32_t max_length, KvCache kv_cache = KvCache::kBf16);
     ~CorelibModel() override;
 
     buffer<bf16> forward(int id) override;

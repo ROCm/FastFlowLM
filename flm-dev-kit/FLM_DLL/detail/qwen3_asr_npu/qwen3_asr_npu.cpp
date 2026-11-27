@@ -92,9 +92,80 @@ void qwen3_asr_npu::Impl::load_weights(Q4NX &q4nx)
     }
     this->cpu_decoder = std::make_unique<qwen3_asr_cpu::decoder>(utils::path_join(config.model_path, "model.q4nx"));
     this->cpu_kv_length = 0;
+    {
+        // the prompt's projections on the NPU, reading the mixed decode weights in place, unless QWEN3_ASR_CPU_PREFILL=1 (or
+        // the package lacks the kernel)
+        const char* cpu_env = std::getenv("QWEN3_ASR_CPU_PREFILL");
+        const std::string prefill_xclbin = utils::path_join(config.exec_path, "xclbins", config.model_name, "prefill.xclbin");
+        if (cpu_env && std::atoi(cpu_env) != 0)
+            header_print("FLM", "qwen3_asr_npu: prompt prefill on the CPU (QWEN3_ASR_CPU_PREFILL)");
+        else if (!this->desc.mixed)
+            header_print("FLM", "qwen3_asr_npu: no mixed decode weights, prompt prefill on the CPU");
+        else if (!std::filesystem::exists(prefill_xclbin))
+            header_print("FLM", "qwen3_asr_npu: prefill.xclbin not found, prompt prefill on the CPU");
+        else
+        {
+            const auto& l0 = *this->desc.weight_desc[0];
+            qwen3_asr_prefill_npu::layout l;
+            l.D = (int)desc.D;
+            l.DQ = (int)desc.DQ;
+            l.DK = (int)desc.DK;
+            l.I = (int)desc.intermediate_size;
+            l.k = l0.attn_k.offset;
+            l.v = l0.attn_v.offset;
+            l.q = l0.attn_q.offset;
+            l.o = l0.attn_output.offset;
+            l.up = l0.ffn_up.offset;
+            l.down = l0.ffn_down.offset;
+            // the prompt's attention on the NPU too, unless QWEN3_ASR_CPU_ATTENTION=1: in prefill.xclbin's context with the
+            // control-packet switches (r2t2.switches, unless QWEN3_ASR_NO_SWITCH=1), else on attn.xclbin's own context (if the
+            // package has it)
+            const char* cpu_attn_env = std::getenv("QWEN3_ASR_CPU_ATTENTION");
+            const std::string xdir = utils::path_join(config.exec_path, "xclbins", config.model_name);
+            const std::string attn_xclbin = utils::path_join(xdir, "attn.xclbin");
+            npu_app_manager* prefill_mgr = npu->register_xclbin(prefill_xclbin);
+            npu_app_manager* attn_mgr = nullptr;
+            std::unique_ptr<qwen3_asr_launch::switches> sw;
+            if (cpu_attn_env && std::atoi(cpu_attn_env) != 0)
+                header_print("FLM", "qwen3_asr_npu: prompt attention on the CPU (QWEN3_ASR_CPU_ATTENTION)");
+            else if (desc.DK % 128 != 0 || desc.DQ != 2 * desc.DK)
+                header_print("FLM", "qwen3_asr_npu: attention shape not supported by attn.xclbin, prompt attention on the CPU");
+            else
+            {
+                std::string why;
+                sw = qwen3_asr_launch::load(prefill_mgr, utils::path_join(xdir, "r2t2.switches"), why);
+                if (sw)
+                    header_print("FLM", "qwen3_asr_npu: prompt attention in prefill.xclbin's context (control-packet switches)");
+                else if (!std::filesystem::exists(attn_xclbin))
+                    header_print("FLM", "qwen3_asr_npu: attn.xclbin not found, prompt attention on the CPU");
+                else
+                {
+                    header_print("FLM", "qwen3_asr_npu: control-packet switches off (" << why << "), prompt attention on attn.xclbin");
+                    attn_mgr = npu->register_xclbin(attn_xclbin);
+                }
+            }
+            this->prefill_mm = std::make_unique<qwen3_asr_prefill_npu>(prefill_mgr, l, this->proj_weights, attn_mgr, &this->npu_mu, std::move(sw));
+            this->cpu_decoder->set_projections(this->prefill_mm.get());
+        }
+    }
     const std::string audio_path = utils::path_join(config.model_path, "audio_weight.q4nx");
     if (std::filesystem::exists(audio_path))
-        this->audio_encoder = std::make_unique<qwen3_asr_audio_encoder>(audio_path);
+    {
+        // matrix products of the encoder on the NPU unless QWEN3_ASR_CPU_ENCODER=1 (or the package lacks the kernel)
+        const char* cpu_env = std::getenv("QWEN3_ASR_CPU_ENCODER");
+        const std::string gemm_xclbin = utils::path_join(config.exec_path, "xclbins", config.model_name, "audio_gemm.xclbin");
+        if (cpu_env && std::atoi(cpu_env) != 0)
+            header_print("FLM", "qwen3_asr_npu: audio encoder on the CPU (QWEN3_ASR_CPU_ENCODER)");
+        else if (!std::filesystem::exists(gemm_xclbin))
+            header_print("FLM", "qwen3_asr_npu: audio_gemm.xclbin not found, audio encoder on the CPU");
+        else
+            this->audio_gemm = std::make_unique<qwen3_asr_audio_gemm_npu>(npu->register_xclbin(gemm_xclbin), &this->npu_mu);
+        // a host copy of its weights too: the background encode of the next streaming step runs on the CPU, hidden under the NPU
+        // decode (on the NPU it waits for the decode: npu_mu), unless QWEN3_ASR_NPU_STREAM_ENCODE=1
+        const char* stream_env = std::getenv("QWEN3_ASR_NPU_STREAM_ENCODE");
+        const bool host_copy = this->audio_gemm && !(stream_env && std::atoi(stream_env) != 0);
+        this->audio_encoder = std::make_unique<qwen3_asr_audio_encoder>(audio_path, qwen3_asr_audio_config{}, this->audio_gemm.get(), host_copy);
+    }
     this->clear_context();
 }
 
@@ -165,6 +236,7 @@ buffer<bf16> qwen3_asr_npu::Impl::forward(int ids)
             this->prefill_logits.data()[i] = (bf16)cpu_logits[i];
         return this->prefill_logits;
     }
+    std::lock_guard<std::mutex> lock(this->npu_mu);   // the next step's background encode waits between tokens
     // the token's row of the bf16 embedding table, which the CPU decoder maps from model.q4nx (no second copy in memory)
     std::memcpy(this->x.data(), this->cpu_decoder->embed_row(ids), desc.D * sizeof(bf16));
     this->x.sync_to_device();
@@ -192,8 +264,9 @@ buffer<bf16> qwen3_asr_npu::Impl::forward(int ids)
 
 buffer<bf16> qwen3_asr_npu::Impl::prefill(std::vector<int> &ids, void *payload)
 {
-    // The prompt is prefilled on the CPU: for the short prompts of speech recognition (about 100-400 tokens: a system
-    // message, the audio tokens, the text so far) the CPU is faster than the NPU prefill, and it needs no prefill kernels.
+    // The prompt runs through the CPU decoder, whose matrix products go to prefill.xclbin (prefill_mm; the norms, RoPE,
+    // attention and the last token's logits stay on the host). Without that kernel, or with QWEN3_ASR_CPU_PREFILL=1, all
+    // of it runs on the CPU.
     return this->_prefill_on_cpu(ids, static_cast<const qwen3_asr_payload_t *>(payload));
 }
 
@@ -412,7 +485,7 @@ void qwen3_asr_npu::Impl::_start_background(const qwen3_asr_payload_t &payload, 
             prefetch_t r;
             r.frames = frames;
             r.slice_start = next_start;
-            r.bits = this->audio_encoder->encode(slice.data(), frames - next_start, &this->stream_cache.conv);
+            r.bits = this->audio_encoder->encode(slice.data(), frames - next_start, &this->stream_cache.conv, /*host=*/true);
             r.mel_slice = std::move(slice);
             return r;
         });
@@ -466,6 +539,7 @@ buffer<bf16> qwen3_asr_npu::Impl::get_v_cache(int layer_idx, int idx)
 
 buffer<bf16> qwen3_asr_npu::Impl::get_logits(buffer<bf16> &predict)
 {
+    std::lock_guard<std::mutex> lock(this->npu_mu);
     memcpy(this->x.data(), predict.data(), desc.D * sizeof(bf16));
     this->x.sync_to_device();
     this->lm_head_run.start();

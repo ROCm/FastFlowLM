@@ -291,6 +291,9 @@ endif()
 
 
 add_executable(flm ${SOURCES} ${HEADERS})
+if(WIN32)
+    target_link_libraries(flm PRIVATE pdh)
+endif()
 
 if(FLM_ENABLE_CORE)
     include("${CMAKE_SOURCE_DIR}/common/core/core_sources.cmake")
@@ -634,6 +637,7 @@ list(APPEND FLM_ENGINE_LINK_LIBS
     nanbeige_npu
     hunyuan_npu
     hy_mem_npu
+    inkling2_npu
 )
 
 # The d3 decision engine (--decision d3:lite). Linked where its library is vendored; elsewhere

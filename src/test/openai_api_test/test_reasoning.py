@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+from uuid import uuid4
 
 import flm_api
 from flm_api import Api, Skip, case, expect
@@ -87,14 +88,115 @@ def think_off_stream(api: Api) -> None:
         expect(folded.reasoning == "", f"think=false streamed reasoning: {folded.reasoning[:120]!r}")
 
 
+def is_gpt_oss(api: Api) -> bool:
+    family = loaded_family(api)
+    if family is not None:
+        return family == "gpt-oss"
+    return "gpt-oss" in api.model.lower()
+
+
+def is_inkling(api: Api) -> bool:
+    family = loaded_family(api)
+    if family is not None:
+        return family == "inkling-2"
+    return "inkling-2" in api.model.lower()
+
+
+def loaded_models(api: Api) -> list[str]:
+    url = api.url.removesuffix("/v1/chat/completions") + "/api/ps"
+    with urllib.request.urlopen(url, timeout=api.timeout) as reply:
+        return [m.get("model") or m.get("name") or "" for m in json.load(reply).get("models", [])]
+
+
+def effort_body(api: Api, level, *, max_tokens: int = THINK_BUDGET, **fields) -> dict:
+    body = api.body(user(PROMPT), max_tokens=max_tokens, **fields)
+    del body["think"]
+    body["reasoning_effort"] = level
+    return body
+
+
+def expect_effort_400(resp: flm_api.Response, label: str) -> None:
+    expect(resp.status == 400, f"{label}: expected 400, got {resp.status} {resp.error_message()}")
+    err = resp.body.get("error")
+    expect(isinstance(err, dict), f"{label}: expected OpenAI error object, got {resp.body!r}")
+    expect(err.get("type") == "invalid_request_error",
+           f"{label}: expected type='invalid_request_error', got {err!r}")
+    expect(err.get("param") == "reasoning_effort",
+           f"{label}: expected param='reasoning_effort', got {err!r}")
+
+
+def expect_stream_effort_400(s: flm_api.StreamResult, label: str) -> None:
+    expect(s.status == 400, f"{label}: expected 400, got {s.status}")
+    expect(not s.chunks, f"{label}: emitted {len(s.chunks)} chunks before 400")
+    err = s.error.get("error") if isinstance(s.error, dict) else None
+    expect(isinstance(err, dict), f"{label}: expected OpenAI error object, got {s.error!r}")
+    expect(err.get("type") == "invalid_request_error",
+           f"{label}: expected type='invalid_request_error', got {err!r}")
+    expect(err.get("param") == "reasoning_effort",
+           f"{label}: expected param='reasoning_effort', got {err!r}")
+
+
 @case
 def reasoning_effort_none(api: Api) -> None:
-    """reasoning_effort "none" turns thinking off like think=false."""
+    """reasoning_effort "none" turns thinking off like think=false (or 400 on gpt-oss)."""
     body = api.body(user(PROMPT), max_tokens=128, reasoning_effort="none")
     del body["think"]
+    if is_gpt_oss(api):
+        expect_effort_400(api.post(body), "gpt-oss reasoning_effort='none'")
+        return
     msg = flm_api.check_message_contract(api.ok(body))
     if not api.always_thinks:
         expect("reasoning_content" not in msg, "reasoning_effort=none still returned reasoning_content")
+
+
+@case
+def reasoning_effort_levels(api: Api) -> None:
+    """Every OpenAI reasoning_effort level above 'none' enables reasoning on a thinking model."""
+    probe = flm_api.check_message_contract(api.ok(api.body(user(PROMPT), think=True, max_tokens=THINK_BUDGET)))
+    require_reasoning(probe)
+    for level in ("minimal", "low", "medium", "high", "xhigh", "max"):
+        msg = flm_api.check_message_contract(api.ok(effort_body(api, level)))
+        expect(bool(msg.get("reasoning_content")),
+               f"reasoning_effort={level!r} returned no reasoning_content (think=true did)")
+
+
+@case
+def reasoning_effort_invalid_is_400(api: Api) -> None:
+    """An undefined or ill-typed reasoning_effort is 400 naming the field, JSON and stream."""
+    bad_values: list[object] = ["bogus", "", 1, True]
+    if not is_inkling(api):
+        bad_values.append("0.5")
+    for bad in bad_values:
+        expect_effort_400(api.post(effort_body(api, bad, max_tokens=64)),
+                          f"reasoning_effort={bad!r}")
+    for bad in ("bogus", 1):
+        expect_stream_effort_400(api.stream(effort_body(api, bad, max_tokens=64)),
+                                 f"stream reasoning_effort={bad!r}")
+
+
+@case
+def reasoning_effort_error_leaves_no_state(api: Api) -> None:
+    """A refused reasoning_effort changes nothing and never unloads the active model."""
+    default = api.body(user(PROMPT), max_tokens=THINK_BUDGET)
+    del default["think"]
+    before = flm_api.check_message_contract(api.ok(default))
+    loaded_before = loaded_models(api)
+    # Change away from the default on a valid request, then fail, then check default returns.
+    api.ok(effort_body(api, "low"))
+    expect_effort_400(api.post(effort_body(api, "bogus", max_tokens=64)),
+                      "reasoning_effort='bogus' state check")
+    if not is_gpt_oss(api):
+        # Cross-model refusal: gpt-oss + "none" must fail 400 before unloading api.model.
+        cross = effort_body(api, "none", max_tokens=64)
+        cross["model"] = "gpt-oss:20b"
+        resp = api.post(cross)
+        if resp.status != 404:
+            expect_effort_400(resp, "cross-model gpt-oss reasoning_effort='none'")
+            expect(loaded_models(api) == loaded_before,
+                   f"refused cross-model request changed loaded model: {loaded_before!r} -> {loaded_models(api)!r}")
+    after = flm_api.check_message_contract(api.ok(default))
+    expect(bool(before.get("reasoning_content")) == bool(after.get("reasoning_content")),
+           "a request without reasoning_effort did not get the model's default back after a refused level")
 
 
 @case
@@ -240,6 +342,11 @@ def nested_thinking_wrong_type_is_400(api: Api) -> None:
     conflict["think"] = False
     resp = api.post(conflict)
     expect(resp.status == 400 and "think" in resp.error_message(), f"{resp.status} {resp.error_message()}")
+    for level in ("minimal", "xhigh", "max"):
+        effort_conflict = nested_body(api, False, reasoning_effort=level)
+        resp = api.post(effort_conflict)
+        expect(resp.status == 400 and "reasoning_effort" in resp.error_message(),
+               f"enable_thinking=false + reasoning_effort={level!r}: {resp.status} {resp.error_message()}")
     # the stream is refused before any frame, and the next valid request still works
     s = api.stream(nested_body(api, "yes"))
     expect(s.status == 400, f"stream with a bad switch: expected 400, got {s.status}")
@@ -295,6 +402,48 @@ def nested_thinking_ignored_elsewhere(api: Api) -> None:
         body["chat_template_kwargs"] = value
         resp = api.post(body)
         expect(resp.status == 200, f"chat_template_kwargs={value!r}: expected 200, got {resp.status} {resp.error_message()}")
+
+
+@case
+def active_tool_reasoning(api: Api) -> None:
+    """The pinned GPU template takes a supplied note only while answering the same question."""
+    if api.model not in ("qwen3.5-oga-hipep:9b", "qwen3.5:4b"):
+        raise Skip("requires the verified Qwen3.5 GPU package or its NPU negative control")
+    call = {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function",
+            "function": {"name": "read_shelf", "arguments": "{}"}}]}
+    history = [*user("Check the shelf."), call, {"role": "tool", "tool_call_id": "a", "content": "42"}]
+
+    def usage():
+        response = api.post(api.body(history, max_tokens=4))
+        expect(response.status == 200 and "usage" in response.body, f"expected usage: HTTP {response.status}")
+        return response.body["usage"]
+
+    def prompt():
+        return usage()["prompt_tokens"]
+
+    note = "Synthetic inventory note. " * 20
+    count = prompt()
+    call["reasoning_content"] = note
+    marked = prompt()
+    expect(marked > count if api.model == "qwen3.5-oga-hipep:9b" else marked == count,
+           f"active tool call: {count} without reasoning, {marked} with reasoning")
+    stream = api.ok_stream(api.body(history, think=True, max_tokens=4, stream_options={"include_usage": True}))
+    expect(stream.chunks[-1]["usage"]["prompt_tokens"] == marked, "SSE/think changed history rendering")
+    if api.model == "qwen3.5-oga-hipep:9b":
+        # A previous test run may have left either variant in a slot. Give this pair a fresh shared prefix.
+        trial = uuid4().hex + "\n"
+        call["reasoning_content"] = trial + note
+        before = prompt()
+        call["reasoning_content"] = trial + note.replace("note", "list")
+        changed = usage()
+        expect(changed["prompt_tokens"] == before, "the cache control must have the same token length")
+        expect(changed["prompt_tokens_details"]["cached_tokens"] < before, "full cache hit on a different note")
+    del call["reasoning_content"]
+    expect(prompt() == count, "omitting the note did not restore the original prompt")
+    history.extend([{"role": "assistant", "content": "42"}, *user("New question.")])
+    past = prompt()
+    call["reasoning_content"] = note
+    expect(prompt() == past, "previous user turn still includes the note")
 
 
 @case

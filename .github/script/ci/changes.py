@@ -95,7 +95,7 @@ Outputs (printed, and appended to $GITHUB_OUTPUT with --github-output):
              dll, converter, pybind and launchlib, plus the areas that build
              from a changed file of another area, of src/lib/xrt or of
              hrx-integration/, and xclbin for a shipped kernel
-             (src/xclbins/<folder>/<slot>.xclbin), which devkit-xclbins
+             (src/xclbins/<folder>/<slot>), which devkit-xclbins
              rebuilds from its sources to compare (devkit_xclbin_plan.py);
              every area when the changed files are unknown, a changed dev-kit file
              is in none of them, or the dev-kit CI changed. A kernel host
@@ -298,7 +298,7 @@ DEVKIT_CATALOG = re.compile(
 # maps to its slot and compares the two (report only). It selects the xclbin
 # area, but nothing is staged: the product suites test the shipped file, and the
 # rebuild comes from sources this change did not touch.
-SHIPPED_KERNEL = re.compile(r"^src/xclbins/.+/[^/]+\.xclbin$")
+SHIPPED_KERNEL = re.compile(r"^src/xclbins/.+/[^/]+\.(xclbin|switches)$")
 
 # The kernel build image: its Dockerfile, kernel check script and pinned PDIs
 # (docker/aie-build*), its versions (toolchain.lock, which would otherwise be
@@ -621,6 +621,7 @@ ENGINES = {
     ("gemma4_12b",):                         ("gemma4-12b",),
     ("hunyuan",):                            ("hunyuan",),
     ("hy_mem", "hy_memory"):                 ("hy-memory",),
+    ("inkling2",):                           ("inkling-2",),
     ("gpt_oss",):                            ("gpt-oss",),
     ("lfm2",):                               ("lfm2", "lfm2.5-tk"),
     ("lfm3",):                               ("lfm3",),

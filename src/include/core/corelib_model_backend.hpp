@@ -34,8 +34,18 @@ struct BackendSpec {
 };
 
 /// \brief a factory building the core backend `spec` describes
-/// \note Preemption, the context and the package's token ids are checked
-///       before the runtime is acquired or the weights are opened.
+/// \note Preemption, the context, the KV cache and the package's token ids are
+///       checked before the weights are opened.
 flm::backend::BackendFactory Factory(BackendSpec spec);
+
+/// \brief records --kv-cache-bits for every core session of the process
+/// \param bits 8 or 16, or 0 when the flag was absent
+/// \throws std::invalid_argument for any other value
+void SetRequestedKvCacheBits(int bits);
+
+/// \brief the KV cache core sessions take: --kv-cache-bits, else
+///        FLM_KV_CACHE_BITS, else BF16
+/// \throws std::invalid_argument for a value other than 8 or 16
+KvCache ResolveKvCache();
 
 }  // namespace flm::core

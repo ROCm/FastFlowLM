@@ -3,10 +3,12 @@
   Portions of this file consist of AI-generated content.
 -->
 
-# Qwen3-ASR / Confucius4-R2T2 audio encoder (host reference)
+# Qwen3-ASR / Confucius4-R2T2 audio encoder
 
-`qwen3_asr_audio_encoder` computes, on the CPU (AVX-512 + OpenMP), what the HF `Qwen3ASRAudioEncoder` computes, with the
-window mask applied. No NPU/XRT dependency. It is the CPU path of the future NPU encoder and the reference for it.
+`qwen3_asr_audio_encoder` computes what the HF `Qwen3ASRAudioEncoder` computes, with the window mask applied. Given a
+`qwen3_asr_audio_gemm` backend (`qwen3_asr_audio_gemm_npu`: `audio_gemm.xclbin`, built from `FLM_Xclbin/bfp16_gemm`), its matrix
+products run there; without one (`nullptr`) everything runs on the CPU (AVX-512 + OpenMP), which needs no NPU/XRT and is the
+reference for the NPU path.
 
 ```
 mel [frames][128] fp32
@@ -79,13 +81,19 @@ bug (on zh_0048 the reference itself differs from fp32 with min cosine 0.95). Th
 **Task level** (`run/enc_e2e.py`): C++ encoder output fed to the reference decoder: 42 of 43 golden clips give a byte-identical transcript; the one
 difference is only the language label (`English` vs `None`) on a Chinese clip (identical text).
 
-## Seams for the NPU port
+## The NPU path
 
-`conv_front`, `add_pos`, `encoder_layer`, `post` are public and operate on `[rows][cols]` fp32-held-bf16 activations. For the NPU:
-- all matmuls (conv as im2col GEMM: M=800/208/13 x K=4320/4320/7680 x N=480/480/1024; q/k/v/out 1024x1024; fc1 1024->4096, fc2 4096->1024;
-  proj1/2) go through the existing generic MM kernel (weights are already in the audio MM tile layout, K 512 / N 64, and must NOT be un-permuted there);
-- window attention (16 heads x 64, <= 104 tokens, no mask inside a window) needs a window-attention kernel (the omni `window_attention.xclbin` path: not shipped, see
-  FLM_Xclbin/kernel_assignment.md) or stays on the host (it is ~1 % of the FLOPs);
-- LayerNorm, GELU, position add and residuals stay on the host (as in the omni embedder).
+- Products on the NPU (`qwen3_asr_audio_gemm_npu`): conv2/conv3 as im2col GEMMs (K = 4320, N = 480; the packer gathers the im2col rows
+  itself), conv_out (K = 7680), q/k/v fused (N = 3072), out_proj, fc1, fc2, proj1, proj2. All chunks of a call share one conv product per
+  conv (8 chunks per group). The weights are packed once at load (bfp16, 9 B per 8 values) into device buffers; bias is added on
+  the cores, GELU on the host once the parts below are summed.
+- Precision: every product keeps A and W at bf16 precision. A = A_hi + A_lo / 256 with A_hi its bfp16 value: the rest goes as more rows
+  of the same call (the weights are read once for both); W likewise as more output columns. The host adds the parts and rounds to bf16.
+  Plain bfp16 products drift the conv stack on quiet input (syn_quiet_onset fails); NPU vs fp64 relL2 is ~0.0023 with both splits
+  (bf16 floor 0.0017, plain bfp16 0.0092).
+- Host: conv1 (K = 9), LayerNorm (statistics in double: fp32 sums fail syn_quiet_onset), window attention (16 heads x 64, <= 104 tokens,
+  ~1 % of the FLOPs), GELU, position add, residuals.
 - Streaming: a window of 104 tokens never changes once complete (same mel), so completed windows can be cached; the mel global-max clamp is the only
-  thing that changes earlier frames (see plan section 12).
+  thing that changes earlier frames (`conv_cache`; `test/conv_cache_test`).
+
+`make run_npu XCLBIN=<audio_gemm.xclbin>` runs the gate above with the NPU path; all 8 default clips pass (cos >= 0.99963, relL2 <= 0.028).

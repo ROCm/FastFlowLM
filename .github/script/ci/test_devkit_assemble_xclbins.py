@@ -96,6 +96,25 @@ class Assemble(unittest.TestCase):
         self.assertTrue(da.safe_slot("d3.switches"))
         self.assertFalse(da.safe_slot("d3.bin"))
 
+    def test_switches_slot_by_name(self):
+        # A .switches slot takes the artifact's .switches file (not its xclbin), by name when several.
+        self.put("devkit-xclbins-shard-0/xclbins-Sw/base.xclbin", "B")
+        self.put("devkit-xclbins-shard-0/xclbins-Sw/a.switches", "SA")
+        self.put("devkit-xclbins-shard-0/xclbins-Sw/b.switches", "SB")
+        out = self.root / "out"
+        sw = {"models": {"m": {"folder": "F", "kernels": {"base.xclbin": "xclbins-Sw", "b.switches": "xclbins-Sw"}},
+                         "n": {"folder": "G", "kernels": {"base.xclbin": "xclbins-Sw", "c.switches": "xclbins-Sw"}},
+                         "o": {"folder": "H", "kernels": {"dequant.xclbin": "xclbins-Dequant", "x.switches": "xclbins-Dequant"}}}}
+        with contextlib.redirect_stdout(io.StringIO()):
+            r = da.assemble(sw, da.find_artifacts(self.art), out)
+        self.assertEqual(r["complete"], ["m"])
+        self.assertEqual((out / "F/base.xclbin").read_text(), "B")
+        self.assertEqual((out / "F/b.switches").read_text(), "SB")
+        self.assertEqual(r["missing"]["n"], ["c.switches <- xclbins-Sw (ambiguous: 2 .switches files, none named c.switches)"])
+        self.assertEqual(r["missing"]["o"], ["x.switches <- xclbins-Dequant (no .switches)"])
+        self.assertTrue(da.safe_slot("a.switches"))
+        self.assertFalse(da.safe_slot("a.switch"))
+
     def test_duplicate_artifact_is_an_error(self):
         self.put("devkit-xclbins-shard-1/xclbins-Dequant/dequant.xclbin", "D2")
         with self.assertRaises(ValueError):

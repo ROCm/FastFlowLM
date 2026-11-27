@@ -173,6 +173,7 @@ bool Qwen3_ASR::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, s
     }
     if (samples.empty()) {
         header_print("WARNING", "No audio to transcribe: give an audio file (/input \"file.wav\") or an audio message");
+        meta_info.error_message = "No audio to transcribe";
         return false;
     }
     // text next to the audio is context / hot words for the model, unless a system prompt was configured

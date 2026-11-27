@@ -142,6 +142,15 @@
       ],
       "uses": []
     },
+    "inkling2_npu": {
+      "families": [
+        "inkling-2"
+      ],
+      "models": [
+        "inkling-2:mini"
+      ],
+      "uses": []
+    },
     "lfm2_npu": {
       "families": [
         "lfm2",

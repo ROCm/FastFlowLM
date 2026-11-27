@@ -24,9 +24,13 @@ name: Dev-kit Bench comment
 #     commit and head repository; never from the artifact
 #   - the artifact: only bench-summary, at most 64 KB as listed, a zip of
 #     exactly summary.md (no links or other entries), at most 60000 bytes
-#     read; @ is defused so nothing mentions anyone, and the text goes in a
-#     code fence longer than any backtick run in it, inside <details>, so it
-#     cannot close the fence, forge the header or hide a marker
+#     read; it is rendered as Markdown (its tables), inside <details>, after
+#     sanitize() takes out everything that acts: < > & are escaped (no HTML,
+#     so it cannot close the <details>, forge the header or hide a marker),
+#     backslashes and [ ] are escaped (no link or image), every // and
+#     www. and github.com, @ mentions and #123 / GH-123 / .../issues/123
+#     references are broken with a zero-width space, control and bidi
+#     characters are dropped (test_devkit_bench.py BenchComment)
 #   - the comment to update is the newest by github-actions[bot] starting
 #     with the marker; otherwise a new one
 #   - every event field reaches the scripts through env:
@@ -118,19 +122,46 @@ jobs:
           set -euo pipefail
           python3 - <<'EOF'
           import json, os, re
+
+          ZWSP = "\u200b"
+          # Control and bidi characters (no hidden or reordered text).
+          INVISIBLE = re.compile("[\x00-\x08\x0b-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+          LIMIT = 60000
+
+          def sanitize(text):
+              """The bench summary as Markdown that renders its headings,
+              tables, lists and inline code, and nothing that acts: no HTML
+              (so no element, comment or closing tag of this comment's own),
+              no link, image or bare URL, no mention or issue reference."""
+              text = INVISIBLE.sub("", text.replace("\r", ""))
+              # Backslashes first: an input \ must not pair with one added
+              # below and leave a [ live.
+              text = text.replace("\\", "\\\\")
+              text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+              text = text.replace("[", "\\[").replace("]", "\\]")
+              # Every //, not only ://: no URL of any scheme, nor //host.
+              text = text.replace("//", "/" + ZWSP + "/").replace("www.", "www" + ZWSP + ".")
+              text = re.sub(r"(?i)github\.com", "github" + ZWSP + ".com", text)
+              text = text.replace("@", "@" + ZWSP)
+              # Issue and pull request references: #12, GH-12, .../issues/12.
+              text = re.sub(r"#(?=\d)", "#" + ZWSP, text)
+              text = re.sub(r"(?i)\b(GH)-(?=\d)", r"\1-" + ZWSP, text)
+              text = re.sub(r"(?i)/(issues|pulls?|discussions)/(?=\d)", r"/\1/" + ZWSP, text)
+              if len(text) > LIMIT:
+                  text = text[:LIMIT].rsplit("\n", 1)[0] + "\n\n(cut: see the run's bench-summary artifact)"
+              return text
+
+          # --- main (test_devkit_bench.py runs only what is above) ---
           e = os.environ
           raw = open(os.path.join(e["RUNNER_TEMP"], "summary", "summary.md"), "rb").read()
-          text = raw.decode("utf-8", errors="replace").replace("\r", "")
-          # No mentions or team pings: a zero-width space after every @.
-          text = text.replace("@", "@\u200b")
-          fence = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", text)), default=0))
+          text = sanitize(raw.decode("utf-8", errors="replace"))
           run_id = re.sub(r"\D", "", e["RUN_ID"])
           sha = re.sub(r"[^0-9a-f]", "", e["HEAD_SHA"])[:10]
           url = f"https://github.com/{e['GITHUB_REPOSITORY']}/actions/runs/{run_id}"
           body = (f"{e['MARKER']}\n### Dev-kit bench\n\n"
                   f"Results of the dev-kit benches in [Build and Test run {run_id}]({url}) for `{sha}`, as that run reported "
                   f"them (its artifacts hold the per-model reports).\n\n"
-                  f"<details open><summary>Summary</summary>\n\n{fence}text\n{text}\n{fence}\n\n</details>\n")
+                  f"<details open><summary>Summary</summary>\n\n{text}\n\n</details>\n")
           with open(os.path.join(e["RUNNER_TEMP"], "body.json"), "w", encoding="utf-8") as f:
               json.dump({"body": body}, f)
           EOF

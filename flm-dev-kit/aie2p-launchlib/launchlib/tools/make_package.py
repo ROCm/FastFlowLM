@@ -129,6 +129,7 @@ def manifest(name, mlir):
 
 ACQUIRE = re.compile(r"\bacq\s+(#0x[0-9a-f]+|\w+)")
 NEIGHBOUR = {0: (0, -1), 1: (-1, 0), 2: (0, 1), 3: (0, 0)}  # (immediate // 16: south, west, north, own)
+CORE_ROWS = (2, 5)  # aie2p: the rows of core tiles
 
 
 def objdump():
@@ -164,6 +165,10 @@ def census(prj, cores):
             if i >= 64:
                 sys.exit(f"{elf}: acquire of lock {i:#x}: not a lock of the core or a neighbour")
             dc, dr = NEIGHBOUR[i // 16]
+            # the south "neighbour" of a bottom-row core is the memtile, whose locks a core cannot reach: code that
+            # names it never runs on that core (a kernel shared by all rows, the branch chosen by the row)
+            if not (CORE_ROWS[0] <= row + dr <= CORE_ROWS[1] and 0 <= col + dc):
+                continue
             lines.append(f"acquire {col} {row} {col + dc} {row + dr} {i % 16}")
     return lines
 

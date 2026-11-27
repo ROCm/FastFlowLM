@@ -12,7 +12,7 @@ CI build each comes from: `xclbins-<unit, / as _>[_<MODEL_TYPE>]`, a folder of t
 
 | Kernels | Artifacts | Compiler |
 |---|---|---|
-| slot file | CI build (folder in `devkit-xclbins-shard-<i>`) | compiler |
+| slot file (`.xclbin` or `.switches`) | CI build (folder in `devkit-xclbins-shard-<i>`) | compiler |
 
 ## How to Test Your Kernel Code
 
@@ -23,7 +23,7 @@ assemble them per model. To try them on your machine:
 
 1. Download the `devkit-xclbins` artifact from that run (the run's page, or
    `gh run download <run id> -R ROCm/FastFlowLM -n devkit-xclbins -D <dir>`). It is laid out as
-   FastFlowLM's xclbins tree: `<model folder>/<slot>.xclbin`, the folders and slots of the
+   FastFlowLM's xclbins tree: `<model folder>/<slot>` (`.xclbin`, or a `.switches` file), the folders and slots of the
    tables below. A model only some of whose kernels the change rebuilt gets only those.
 2. Copy the model folders you want over the installed ones, keeping the file names:
    - **Linux:** `<install dir>/opt/fastflowlm/share/flm/xclbins/`
@@ -748,13 +748,30 @@ conv1d runs on the host.
 
 #### `r2t2:1.7b` → `Confucius4-R2T2-NPU2`
 
-Decode only: the prompt is prefilled on the host (AVX-512), the audio encoder is host code too. Mixed decode weights
-(`QWEN3_ASR_1_7B_MIX`): Q4_1 for q/k/o/gate/up and the LM head, Q8_0 for v_proj and down_proj (4-bit everywhere breaks this
-fine-tune); the package's `npu_q41.q4nx` holds the Q4_1 copies. `QWEN3_ASR_1_7B` is the all-Q8_0 build (packages without that file).
+The prompt prefill's projections (q/k/v, o, up/gate, down) run on `prefill.xclbin`, a 32-core GEMM that reads the decode
+weights below in place and multiplies them as block float; the host keeps the norms, RoPE and the last token's LM head.
+Prompts of about 384 tokens or more also run their attention on the NPU, the shared prefill attention, inside
+`prefill.xclbin`'s hardware context through `r2t2.switches` (shorter ones, or with `QWEN3_ASR_CPU_ATTENTION=1`, keep it
+on the host). Without `r2t2.switches`, or with `QWEN3_ASR_NO_SWITCH=1`, `attn.xclbin` runs it in its own context from
+about 1024 tokens (switching contexts twice per layer costs more below). Without
+`prefill.xclbin`, or with `QWEN3_ASR_CPU_PREFILL=1`, the prompt is prefilled on the host (AVX-512). The audio
+encoder's matrix products (conv2/3, conv_out, qkv, o, fc1, fc2, proj1/2) run on `audio_gemm.xclbin`, a 32-core block-float
+GEMM for its bf16 weights; the host keeps conv1 (K = 9), LayerNorm and window attention. Without that file, or with
+`QWEN3_ASR_CPU_ENCODER=1`, the encoder runs on the host. Mixed
+decode weights (`QWEN3_ASR_1_7B_MIX`): Q4_1 for q/k/o/gate/up and the LM head, Q8_0 for v_proj and down_proj (4-bit
+everywhere breaks this fine-tune); the package's `npu_q41.q4nx` holds the Q4_1 copies. `QWEN3_ASR_1_7B` is the all-Q8_0
+build (packages without that file).
 
 | Kernels | Artifacts | Compiler |
 |---|---|---|
+| `attn.xclbin` | `xclbins-generic_prefill_attention_attention_DH_128_GQA_1_2` | Peano |
+| `audio_gemm.xclbin` | `xclbins-bfp16_gemm` | Peano |
 | `layer.xclbin` | `xclbins-generic_decoding_layer_QWEN3_ASR_1_7B_MIX` | Peano |
+| `prefill.xclbin` | `xclbins-dequant_mm_mix_bfp16` | Peano |
+| `r2t2.switches` | `xclbins-r2t2_switches` | Peano |
+
+`r2t2.switches` is not a kernel: it packs the aie2p-launchlib control-packet switches between `prefill.xclbin`'s GEMM and
+the attention; see `r2t2_switches/README.md`.
 
 ### Whisper
 
@@ -884,6 +901,28 @@ that model's two vision kernels; no kernel is built for it.
 `d3.switches` is not a kernel: it packs the aie2p-launchlib control-packet switches that let attention (from 512 tokens) and conv1d (from 1,536 rows)
 run in the hardware context of `mm_rtm2_glu.xclbin` (about 0.12 ms per switch instead of 2.2-2.8 ms for a second context); see `d3_switches/README.md`.
 The engine uses it when it is in the folder and `mm_rtm2_glu.xclbin` is the mm kernel; `D3_NO_SWITCH=1` turns it off.
+
+### Inkling
+
+#### `inkling-2:mini` → `Inkling-2-Mini-NPU2`
+
+Thinking Machines Inkling-2-Mini (MoE). Prefill and decode do not load one xclbin per kernel: each
+phase is a set of aie2p-launchlib apps, switched between by control packets, so the slots hold
+`.switches` files (`switches` and `decode_switches` build them, with the xclbin each is made for)
+next to the xclbins. `mm_rtm2_glu.xclbin` and `prefill_attn.xclbin` are the base contexts of
+the prefill matmul and attention apps; `decode.xclbin` the decode overlay. The vision tower
+(`vision_mm.xclbin`, `vision_attn.xclbin`) is the Qwen3-VL-4B one (same 1,024 width, 16 x 64 heads):
+no kernel is built for it.
+
+| Kernels | Artifacts | Compiler |
+|---|---|---|
+| `decode.xclbin` | `xclbins-Inkling2_decode_switches` | Peano |
+| `inkling2.switches` | `xclbins-Inkling2_switches` | Peano |
+| `inkling2_decode.switches` | `xclbins-Inkling2_decode_switches` | Peano |
+| `mm_rtm2_glu.xclbin` | `xclbins-Inkling2_prefill_moe` | Peano |
+| `prefill_attn.xclbin` | `xclbins-Inkling2_prefill_attention` | Peano |
+| `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_4B-VISION-ATTENTION` | Peano |
+| `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_QWEN3_4B-VISION-MM` | Peano |
 
 ### SmolVLA
 

@@ -29,6 +29,7 @@
 */
 
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <fstream>
@@ -420,6 +421,8 @@ public:
     npu_sequence* seq() {
         return this->ctrl_seq.get();
     }
+    ///@brief HRX builds its executables from the stream itself: no ELF, the writer is not used
+    void set_elf_writer(std::function<std::vector<char>(const uint32_t*, size_t)>) {}
 };
 
 class npu_app_manager {
@@ -926,6 +929,8 @@ private:
     std::unique_ptr<xrt::elf> elf;
     std::unique_ptr<xrt::ext::kernel> kernel;
     std::unique_ptr<npu_sequence> ctrl_seq;
+    // optional: the ELF of an instruction stream (words, count) instead of aiebu's
+    std::function<std::vector<char>(const uint32_t*, size_t)> elf_writer;
 
     uint32_t _gen_elf(char** elf_buf, std::pair<uint32_t*, size_t>& instruction_data){
         uint32_t elf_buf_size = aiebu_assembler_get_elf(
@@ -951,7 +956,15 @@ private:
         std::pair<uint32_t*, size_t> data = this->ctrl_seq->dump();
         assert(data.first != nullptr);
         assert(data.second > 0);
-        uint32_t elf_buf_size = this->_gen_elf(&elf_buf, data);
+        std::vector<char> own;
+        uint32_t elf_buf_size = 0;
+        if (this->elf_writer) {
+            own = this->elf_writer(data.first, data.second);
+            elf_buf = own.data();
+            elf_buf_size = (uint32_t)own.size();
+        } else {
+            elf_buf_size = this->_gen_elf(&elf_buf, data);
+        }
         if (this->module_valid){
             this->module.reset();
             this->elf.reset();
@@ -963,7 +976,7 @@ private:
         this->module_valid = true;
         this->module_version = this->ctrl_seq->sequence_version();
 
-        free((void*)elf_buf);
+        if (!this->elf_writer) free((void*)elf_buf);
     }
 
 public:
@@ -1165,6 +1178,11 @@ public:
 
     npu_sequence* seq() {
         return this->ctrl_seq.get();
+    }
+    ///@brief write the ELF of each new instruction stream with `f` instead of aiebu (null: aiebu)
+    void set_elf_writer(std::function<std::vector<char>(const uint32_t*, size_t)> f) {
+        this->elf_writer = std::move(f);
+        this->module_valid = false;
     }
 };
 

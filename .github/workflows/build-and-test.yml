@@ -555,8 +555,9 @@ jobs:
           pattern: devkit-libs-*
           path: ${{ runner.temp }}/devkit-libs
 
+      # An empty plan succeeds without uploading devkit-xclbins.
       - name: Download the dev-kit kernels
-        if: needs.devkit-xclbins.result == 'success'
+        if: needs.devkit-xclbins.result == 'success' && needs.devkit-xclbins.outputs.empty != 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: devkit-xclbins
