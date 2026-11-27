@@ -136,11 +136,15 @@ void initalize_alpha_beta_q_k_v_s(
 
 
 
+    // GDN_ALPHA_MIN (default 0.1): a value near 1 keeps the state alive over the whole
+    // sequence, so the S check also covers long-range accumulation
+    const char* alpha_min_env = std::getenv("GDN_ALPHA_MIN");
+    const float alpha_min = alpha_min_env ? std::atof(alpha_min_env) : 0.1f;
     for(int i = 0; i < num_head*L_size; i++){
 
         float min_val = 0.1f;
-        float max_val = 0.99f;        
-        alpha_list[i] = ((float) rand() / RAND_MAX) * (max_val - min_val) + min_val;
+        float max_val = 0.99f;
+        alpha_list[i] = ((float) rand() / RAND_MAX) * (max_val - alpha_min) + alpha_min;
         beta_list[i] = ((float) rand() / RAND_MAX) * (max_val - min_val) + min_val;
     }
 
@@ -466,8 +470,13 @@ int main(int argc, const char *argv[]) {
 
 
 
-    int Iterations = 1;
-    time_utils::time_with_unit npu_time = {0.0, "us"};    
+    // GDN_ITERS > 1: one warm-up plus GDN_ITERS timed calls. The state is updated in
+    // place and the BO shares memory with the host, so the initial S is restored
+    // from a copy before the checked call.
+    const char* iters_env = std::getenv("GDN_ITERS");
+    int Iterations = iters_env ? std::max(1, std::atoi(iters_env)) : 1;
+    time_utils::time_with_unit npu_time = {0.0, "us"};
+    std::vector<float> S_initial(S_buffer.data(), S_buffer.data() + (size_t)num_head * DV * DK);
 
 
     S_buffer.sync_to_device();
@@ -475,10 +484,24 @@ int main(int argc, const char *argv[]) {
     alpha_beta_buffer.sync_to_device();
     O_buffer.sync_to_device();
 
-    auto start = std::chrono::high_resolution_clock::now();
-    app_0(S_buffer, qkv_buffer,alpha_beta_buffer, O_buffer);
-    auto end = std::chrono::high_resolution_clock::now();
-    npu_time.first +=std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    if (Iterations > 1) {
+        app_0(S_buffer, qkv_buffer,alpha_beta_buffer, O_buffer);
+        for (int it = 0; it < Iterations; it++) {
+            auto start = std::chrono::high_resolution_clock::now();
+            app_0(S_buffer, qkv_buffer,alpha_beta_buffer, O_buffer);
+            auto end = std::chrono::high_resolution_clock::now();
+            npu_time.first +=std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        }
+        memcpy(S_buffer.data(), S_initial.data(), S_initial.size() * sizeof(float));
+        S_buffer.sync_to_device();
+    } else {
+        auto start = std::chrono::high_resolution_clock::now();
+        app_0(S_buffer, qkv_buffer,alpha_beta_buffer, O_buffer);
+        auto end = std::chrono::high_resolution_clock::now();
+        npu_time.first +=std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    }
+    if (Iterations > 1)
+        app_0(S_buffer, qkv_buffer,alpha_beta_buffer, O_buffer);
 
     O_buffer.sync_from_device();
     S_buffer.sync_from_device();

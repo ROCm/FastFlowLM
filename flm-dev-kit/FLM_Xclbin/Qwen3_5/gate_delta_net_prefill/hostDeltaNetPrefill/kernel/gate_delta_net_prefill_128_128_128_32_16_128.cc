@@ -16,6 +16,13 @@
 #include "aie_kernel_utils.h" //TODO: a better method?
 #include "bf16_limb_math.hpp"
 
+#ifndef GDN_CHUNK_MODE
+#define GDN_CHUNK_MODE 0
+#endif
+#if GDN_CHUNK_MODE
+#include "gdn_chunked.h"
+#endif
+
 template<typename T>
 T* determine_ping_pong_buffer(
     T* ping_buffer, T* pong_buffer,
@@ -282,6 +289,17 @@ extern "C" {
 
         // rtp_buffer[0] tell the number_of_head(S) this CT will process
         // rtp_buffer[1] tell the L size per number_of_head(S), L is not padded
+
+#if GDN_CHUNK_MODE
+        gdn_chunk::run<GDN_CHUNK_MODE == 2, CT_L_size, MT_L_size>(
+            S_in_chunk, Q_ping, Q_pong, K_ping, K_pong, V_ping, V_pong, out_ping, out_pong,
+            padded_QKV_size, chunk_idx, ping_pong_flag, rtp_buffer,
+            CT_S_IN_prod_lock_id, CT_S_IN_con_lock_id, CT_Q_prod_lock_id, CT_Q_con_lock_id,
+            CT_K_prod_lock_id, CT_K_con_lock_id, CT_V_prod_lock_id, CT_V_con_lock_id,
+            CT_output_prod_lock_id, CT_output_con_lock_id,
+            (float)inv_sqrt_DH);
+        return;
+#endif
 
         for(int head_idx = 0; head_idx < rtp_buffer[0]; head_idx++){
 
