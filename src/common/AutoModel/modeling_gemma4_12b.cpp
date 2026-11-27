@@ -59,7 +59,7 @@ void Gemma4_12B::load_model(std::string model_path, json model_info, int default
     config.temperature = 1.0;
     config.rep_penalty = 1.0;
     config.freq_penalty = 0.0f;
-    config.pre_penalty = 1.0f;
+    config.pre_penalty = 0.0f;
 
     this->set_sampler(config);
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {

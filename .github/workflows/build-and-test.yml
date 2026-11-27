@@ -350,6 +350,11 @@ jobs:
       - name: Check for internal references
         run: python3 .github/script/ci/check_internal_refs.py
 
+      # Every event: a loader's freq_penalty / pre_penalty default (subtracted,
+      # 0 = neutral) must not be set as if 1.0 were neutral.
+      - name: Check sampler penalty defaults
+        run: python3 .github/script/ci/check_sampler_defaults.py
+
   # Static checks of the dev kit's CI data (flm-dev-kit/FLM_Xclbin/
   # kernel_assignment.json and build_units.json, flm-dev-kit/FLM_DLL/
   # engines.json, the -Bsymbolic-functions link flag, and on a pull request

@@ -73,8 +73,7 @@ A request that sends no sampling fields uses the model's own defaults, which dif
 
 | Models | `presence_penalty` at load |
 |---|---|
-| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `qwen3.8-dflash2:27b`, `minicpm-v-4.7:1b` | 1.5 |
-| `gemma4-it:*`, `gemma4-it-core:*`, `gemma4e-flash:*`, `nemotron3.5-bolt:e4b`, `nemotron3.5-bolt-dflash:e4b`, `nemotron3.5-bolt-dflash-flash:e4b` | 1.0 |
+| `qwen3.5:*`, `qwen3.5-core:*`, `qwen3.5-oga-hipep:*`, `qwen3.6-oga-hipep:*`, `qwen3.6-moe:35b-a3b`, `qwen3.6-moe-core:35b-a3b`, `qwen3.8-mtp:27b`, `qwen3.8-core:27b`, `qwen3.8-dflash2:27b`, `qwen3.8-oga-hipep:27b`, `qwen3.8-flash-next-oga-hipep:125b-a6b`, `minicpm-v-4.7:1b`, `minicpm-ocr:1.0` | 1.5 |
 | every other model | 0 |
 
 Sending `presence_penalty=0` turns the default off for that request.
@@ -109,7 +108,7 @@ The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/
 
 Penalties only look at the **last 64 tokens the model generated**, unless you set `repeat_last_n`:
 
-- **The prompt doesn't count.** That includes the system prompt, the user's messages and earlier assistant turns you send back in `messages`. A word that appears only in the prompt is not penalised. One exception: when the server continues a conversation it still holds in its KV cache, the end of its previous reply can still be in the window. A request that sends [`seed`](#-seed-and-repeatable-output) always starts with an empty window.
+- **The prompt doesn't count.** That includes the system prompt, the user's messages and earlier assistant turns you send back in `messages`. A word that appears only in the prompt is not penalised. Every request starts with an empty window, including one that continues a conversation the server still holds in its KV cache.
 - **The window slides.** Once a token falls more than `repeat_last_n` generated tokens back, `presence_penalty` and `frequency_penalty` stop applying to it. With the default of 64, the penalties in a long reply keep the model from repeating itself within a stretch of about 64 tokens, not across the whole reply.
 
 ### Changing the window size
