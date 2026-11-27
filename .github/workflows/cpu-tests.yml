@@ -16,6 +16,18 @@ permissions:
   contents: read
 
 jobs:
+  model-residency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check shared-memory admission
+        run: |
+          cmake -S src/test/model_residency -B build-residency
+          cmake --build build-residency
+          ctest --test-dir build-residency --output-on-failure
+
   # The d3 System One contract (src/common/decision) against fixtures written by the upstream
   # package: prompt bytes, request/question errors and answer objects. CPU only, no NPU.
   d3-contract:

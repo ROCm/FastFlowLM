@@ -143,6 +143,8 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Pre-resize the image, 0: original size, 1: height = 480, 2: height = 720, 3: height = 1080, 4: height = 1440, 5: height = 2160, 6: height = 2880, 7: height = 3240, 8: height = 4320")
             ("socket,s", po::value<size_t>(&parsed_args.max_socket_connections)->default_value(10),
             "Set the maximum number of socket connections allowed (for serve command)")
+            ("max-loaded-models", po::value<int>(&parsed_args.max_loaded_models)->default_value(1),
+             "Serve: keep one chat model (1), or one per NPU/GPU when memory permits (2)")
             ("q-len,q", po::value<size_t>(&parsed_args.max_npu_queue)->default_value(10),
             "Set number of max npu queue length (for serve command)")
             ("cors", po::value<bool>(&parsed_args.cors)->default_value(1),
@@ -183,6 +185,11 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
                   .positional(pos_desc)
                   .run(), vm);
         po::notify(vm);
+        if (!vm["max-loaded-models"].defaulted() &&
+            (parsed_args.command != "serve" || (parsed_args.max_loaded_models != 1 && parsed_args.max_loaded_models != 2))) {
+            std::cerr << "Error: --max-loaded-models requires serve and a value of 1 or 2\n";
+            return false;
+        }
 
         // -a / -e take a model tag, or the legacy 0 / 1 (off / the default model)
         auto resolve_model_arg = [](const std::string& arg, bool& enabled, std::string& tag) {

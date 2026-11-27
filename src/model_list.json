@@ -663,6 +663,7 @@
                 "tools": true,
                 "supported_platforms": ["aie2p"],
                 "name": "Qwen3.5-4B-NPU2",
+                "residency_peak_mib": {"flm": 10240},
                 "url": "https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2/resolve/flm_q4k_high_precision",
                 "file_url": "https://huggingface.co/api/models/FastFlowLM/Qwen3.5-4B-NPU2/tree/flm_q4k_high_precision",
                 "ms_url": "https://modelscope.cn/models/amd/Qwen3.5-4B-NPU2/resolve/flm_q4k_high_precision",
@@ -2313,6 +2314,7 @@
             "9b": {
                 "tools": true,
                 "name": "Qwen3.5-9B_gpuep_1.0_gpu_128",
+                "residency_peak_mib": {"oga-hipep": 16384},
                 "active_tool_reasoning": true,
                 "positional_tool_results": true,
                 "url": "https://huggingface.co/amd/Qwen3.5-9B_gpuep_1.0_gpu_128/resolve/f3a9b4aeb60a42542cc4fec561e1f1095e427483",

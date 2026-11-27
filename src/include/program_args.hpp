@@ -57,6 +57,7 @@ struct program_args_t {
     std::string host = "127.0.0.1";
     size_t max_socket_connections = 10;
     size_t max_npu_queue = 10;
+    int max_loaded_models = 1;  // serve: at most one chat engine per device
     int port = -1; // default port
     bool cors = true;  // same default as the --cors option
     // --cors-origins: origins allowed besides the local ones (comma-separated; "*" = any)

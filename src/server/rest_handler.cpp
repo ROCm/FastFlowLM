@@ -7,6 +7,7 @@
  *  \version 0.9.24
  */
 #include "rest_handler.hpp"
+#include "model_residency.hpp"
 #include "error_model.hpp"
 #include "http_guard.hpp"
 #include "wstream_buf.hpp"
@@ -42,8 +43,20 @@
 #include <locale>
 #include <random>
 #include "server.hpp"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
+std::uint64_t available_host_mib() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+        return std::min(status.ullAvailPhys, status.ullAvailPageFile) >> 20;
+#endif
+    return 0; // No reliable measurement: switch instead of co-loading.
+}
 // A failure is a value (chat_error) until a route writes it in its protocol's shape.
 // The *Response functions below write the same values as OpenAI's error object.
 
@@ -635,7 +648,7 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
     else {
         this->prefill_chunk_len_arg = -1;
     }
-    this->prefill_chunk_len = this->prefill_chunk_len_arg;
+    max_loaded_models = args.max_loaded_models;
     this->prefix_cache_mb = args.prefix_cache_mb;
     this->prefix_slots = args.prefix_slots;
     this->prefix_min_gain = args.prefix_min_gain;
@@ -682,10 +695,6 @@ RestHandler::RestHandler(model_list& models, ModelDownloader& downloader, progra
             header_print("Error", "Failed to load default model: " + default_model_tag);
         }
     }
-    else {
-        this->current_model_tag = "model-faker";
-    }
-    this->prompt_cache = PromptCache();
 }
 
 ///@brief RestHandler destructor
@@ -694,24 +703,47 @@ RestHandler::~RestHandler() = default;
 
 ///@brief Ensure the model is loaded
 ///@param model_tag the model tag
-bool RestHandler::ensure_model_loaded(const std::string& model_tag,
+std::string RestHandler::current_chat_tag() const {
+    return chat_models[last_chat] ? chat_models[last_chat]->tag : "model-faker";
+}
+
+void RestHandler::evict_chat(std::size_t index) {
+    std::unique_ptr<ChatModel> removed;
+    {
+        std::lock_guard lock(model_info_mutex);
+        removed = std::move(chat_models[index]);
+        if (index == last_chat && chat_models[1 - index]) last_chat = 1 - index;
+    }
+    // Release accelerator resources outside the inventory lock.
+}
+
+RestHandler::ChatModel* RestHandler::ensure_model_loaded(const std::string& model_tag,
                                       const std::string& request_backend, std::string* refusal) {
     if (auto error = generation_model_error(model_tag)) {
         header_print("ERROR", (*error)["error"]["message"].get<std::string>());
-        return false;
+        return nullptr;
     }
 
     // Nothing was chosen, so there is nothing to load; succeed only if a
     // model is in fact loaded.
     if (model_tag == "model-faker") {
-        return auto_chat_engine != nullptr;
+        return chat_models[last_chat].get();
     }
 
     const auto& requested_backend = request_backend.empty() ? backend : request_backend;
     try {
         auto plan = resolve_model_load(supported_models.rectify_model_tag(model_tag), supported_models, requested_backend);
-        if (auto_chat_engine && current_model_tag == plan.tag && loaded_selection.backend == plan.selection.backend &&
-            loaded_selection.provider == plan.selection.provider) return true;
+        auto slot = [&] { return static_cast<std::size_t>(max_loaded_models == 2 &&
+            flm::backend::device_for_backend(plan.selection.backend) == "gpu"); };
+        auto hit = [&]() -> ChatModel* {
+            auto index = slot();
+            auto* existing = chat_models[index].get();
+            if (!existing || existing->tag != plan.tag || existing->selection.backend != plan.selection.backend ||
+                existing->selection.provider != plan.selection.provider) return nullptr;
+            last_chat = index;
+            return existing;
+        };
+        if (auto* existing = hit()) return existing;
 
         auto* device = plan.prepare_device(npu_device_inst, power_mode);
         switch (downloader.is_model_downloaded(plan.tag, false, /*fast_check=*/true)) {
@@ -722,6 +754,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
                 if (!downloader.pull_model(plan.tag, modelscope)) throw std::runtime_error("failed to download " + plan.tag);
                 // The pull can select a different catalog source. Preflight its actual entry.
                 plan = resolve_model_load(plan.tag, supported_models, requested_backend);
+                if (auto* existing = hit()) return existing;
                 device = plan.prepare_device(npu_device_inst, power_mode);
                 break;
             case ModelDownloader::ModelStatus::Incompatible:
@@ -730,43 +763,63 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         const auto path = supported_models.get_load_path(plan.tag);
         const int chunk = prefill_chunk_len_arg != -1 ? prefill_chunk_len_arg : plan.info.at("max_prefill_len").get<int>();
 
-        // From here on the two engines must not overlap in accelerator memory.
-        {
-            std::lock_guard lock(model_info_mutex);
-            current_model_tag = "model-faker";
-            loaded_backend.clear();
+        const auto index = slot(), peer = 1 - index;
+        std::uint64_t peak = 0;
+        if (max_loaded_models == 2 && ctx_length <= plan.info.value("default_context_length", 0) &&
+            prefix_slots == -1 && prefix_cache_mb == -1 && prefill_chunk_len_arg == -1 &&
+            plan.selection.provider == flm::backend::kBuiltinProviderId && plan.info.contains("residency_peak_mib")) {
+            const auto& estimates = plan.info.at("residency_peak_mib");
+            auto it = estimates.find(plan.selection.backend);
+            if (it != estimates.end() && it->is_number_unsigned()) peak = it->get<std::uint64_t>();
         }
-        auto_chat_engine.reset();
-        prompt_cache.reset();
-        auto engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""));
-        engine->set_server_mode(true);
-        engine->configure_parameter("img_pre_resize", img_pre_resize);
-        engine->set_prefix_limits(prefix_cache_mb, prefix_slots, prefix_min_gain);
-        const auto load_started = std::chrono::steady_clock::now();
-        engine->load_model(path, plan.info, ctx_length, preemption, plan.selection.backend);
-        engine->save_request_settings();
-        report_load_time(load_started);
-        prefill_chunk_len = chunk;
-        positional_tool_results = plan.info.value("positional_tool_results", false)
-            && engine->backend_id() == flm::backend::kOgaHipepBackendId;
-        // The history rule is verified for this package, frontend and backend together.
-        active_tool_reasoning = plan.info.value("active_tool_reasoning", false)
-            && dynamic_cast<Qwen3_5VL*>(engine.get()) && engine->backend_id() == flm::backend::kOgaHipepBackendId;
-        {
-            std::lock_guard lock(model_info_mutex);
-            loaded_backend = engine->backend_id();
-            current_model_tag = std::move(plan.tag);
+        // Accelerator admission serializes all chat users, including abort/cleanup. Retire the
+        // same-device engine first; do not reserve space for three engines during replacement.
+        evict_chat(index);
+        if (chat_models[peer] && !flm::residency::can_keep_peer(available_host_mib(), peak, chat_models[peer]->calibrated))
+            evict_chat(peer);
+        auto load = [&] {
+            auto record = std::make_unique<ChatModel>();
+            auto& engine = record->engine;
+            engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""));
+            engine->set_server_mode(true);
+            engine->configure_parameter("img_pre_resize", img_pre_resize);
+            engine->set_prefix_limits(prefix_cache_mb, prefix_slots, prefix_min_gain);
+            const auto start = std::chrono::steady_clock::now();
+            engine->load_model(path, plan.info, ctx_length, preemption, plan.selection.backend);
+            engine->save_request_settings();
+            report_load_time(start);
+            const auto id = engine->backend_id();
+            record->tag = plan.tag;
+            record->selection = plan.selection;
+            record->calibrated = peak != 0 && id == plan.selection.backend;
+            record->prefill_chunk = chunk;
+            record->positional_tool_results = plan.info.value("positional_tool_results", false) && id == flm::backend::kOgaHipepBackendId;
+            record->active_tool_reasoning = plan.info.value("active_tool_reasoning", false)
+                && dynamic_cast<Qwen3_5VL*>(engine.get()) && id == flm::backend::kOgaHipepBackendId;
+            json details = plan.info.at("details");
+            if (!id.empty()) details["backend"] = id;
+            if (auto d = flm::backend::device_for_backend(id); !d.empty()) details["device"] = d;
+            record->ps_entry = {{"name", plan.tag}, {"model", plan.tag}, {"size", plan.info["size"]}, {"details", std::move(details)}};
+            return record;
+        };
+        std::unique_ptr<ChatModel> record;
+        try { record = load(); }
+        catch (const std::bad_alloc&) {
+            if (!chat_models[peer]) throw;
+            evict_chat(peer);
+            record = load();
         }
-        auto_chat_engine = std::move(engine);
-        loaded_selection = std::move(plan.selection);
-        return true;
+        std::lock_guard lock(model_info_mutex);
+        last_chat = index;
+        chat_models[index] = std::move(record);
+        return chat_models[index].get();
     } catch (const flm::backend::NpuUnavailable& e) {
         if (refusal) *refusal = flm::backend::kNoNpuDevice;
         header_print("ERROR", "Failed to load model: " + std::string(e.what()));
     } catch (const std::exception& e) {
         header_print("ERROR", "Failed to load model: " + std::string(e.what()));
     }
-    return false;
+    return nullptr;
 }
 
 // Validate selection before loading can release the current engine. A known
@@ -919,60 +972,60 @@ void RestHandler::handle_systemone(const std::string& raw_body,
 ///@brief Configure chat engine parameters from options and request
 ///@param options the options JSON object
 ///@param request the request JSON object
-void RestHandler::configure_chat_engine_parameters(const json& options, const json& request,
+void RestHandler::configure_chat_engine_parameters(AutoModel& engine, const json& options, const json& request,
                                                    std::optional<bool> nested_think,
                                                    const std::optional<std::string>& reasoning_effort) {
-    auto_chat_engine->restore_request_settings();
+    engine.restore_request_settings();
     if (has_value(request, "temperature")) {
         float temperature = request["temperature"];
-        auto_chat_engine->set_temperature(temperature);
+        engine.set_temperature(temperature);
     }
     if (has_value(request, "top_p")) {
         float top_p = request["top_p"];
-        auto_chat_engine->set_topp(top_p);
+        engine.set_topp(top_p);
     }
     if (has_value(request, "top_k")) {
         int top_k = request["top_k"];
-        auto_chat_engine->set_topk(top_k);
+        engine.set_topk(top_k);
     }
     if (has_value(request, "min_p")) {
         float min_p = request["min_p"];
-        auto_chat_engine->set_minp(min_p);
+        engine.set_minp(min_p);
     }
     if (has_value(request, "presence_penalty")) {
         float presence_penalty = request["presence_penalty"];
-        auto_chat_engine->set_presence_penalty(presence_penalty);
+        engine.set_presence_penalty(presence_penalty);
     }
     if (has_value(request, "frequency_penalty")) {
         float frequency_penalty = request["frequency_penalty"];
-        auto_chat_engine->set_frequency_penalty(frequency_penalty);
+        engine.set_frequency_penalty(frequency_penalty);
     }
     if (has_value(request, "repetition_penalty")) {
         float repetition_penalty = request["repetition_penalty"];
-        auto_chat_engine->set_repetition_penalty(repetition_penalty);
+        engine.set_repetition_penalty(repetition_penalty);
     }
     if (has_value(request, "think")) {
         bool enable_thinking = request["think"];
-        auto_chat_engine->configure_parameter("enable_think", enable_thinking);
+        engine.configure_parameter("enable_think", enable_thinking);
     }
     if (reasoning_effort.has_value()) {
-        auto_chat_engine->configure_parameter("reasoning_effort", *reasoning_effort);
+        engine.configure_parameter("reasoning_effort", *reasoning_effort);
     } else if (has_value(request, "reasoning_effort")) {
         std::string effort = request["reasoning_effort"];
-        auto_chat_engine->configure_parameter("reasoning_effort", effort);
+        engine.configure_parameter("reasoning_effort", effort);
     }
     // chat_template_kwargs.enable_thinking, already checked against the two above
     if (nested_think.has_value()) {
-        auto_chat_engine->configure_parameter("enable_think", *nested_think);
+        engine.configure_parameter("enable_think", *nested_think);
     }
     if (has_value(request, "conversational_mode")) {
         bool conversational_mode = request["conversational_mode"];
-        auto_chat_engine->configure_parameter("conversational_mode", conversational_mode);
+        engine.configure_parameter("conversational_mode", conversational_mode);
     }
 
     if (has_value(request, "image-max-tokens")) {
         int image_max_tokens = request["image-max-tokens"];
-        auto_chat_engine->configure_parameter("image_max_tokens", image_max_tokens);
+        engine.configure_parameter("image_max_tokens", image_max_tokens);
     }
 }
 
@@ -1033,7 +1086,7 @@ void RestHandler::handle_generate(const json& request,
         }
         std::string prompt = request.at("prompt").get<std::string>();
         bool stream = request.value("stream", true);
-        std::string model = request.value("model", current_model_tag);
+        std::string model = request.value("model", current_chat_tag());
         const std::string request_backend = request.value("backend", std::string());
         json options = request.value("options", json::object());
        
@@ -1045,10 +1098,12 @@ void RestHandler::handle_generate(const json& request,
             return;
         }
         std::string refusal;
-        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+        auto* chat = ensure_model_loaded(model, request_backend, &refusal);
+        if (!chat) {
             send_response(OllamaErrorResponse(ModelLoadFailedResponse(model, refusal)));
             return;
         }
+        auto& auto_chat_engine = chat->engine;
         auto load_end_time = time_utils::now();
         // It takes no settings, but must not run with what an earlier chat request set
         auto_chat_engine->restore_request_settings();
@@ -1060,7 +1115,7 @@ void RestHandler::handle_generate(const json& request,
                 request.contains("max_tokens")
                     ? std::optional<int>(request.at("max_tokens").get<int>())
                     : std::nullopt);
-        meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.max_prefill_len = chat->prefill_chunk;
         meta_info.ignore_eos = value_or(request, "ignore_eos", false);
         meta_info.min_tokens = value_or(request, "min_tokens", 0);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
@@ -1076,13 +1131,13 @@ void RestHandler::handle_generate(const json& request,
                 if (!success){
                     json error_response = {{"error", "Max length reached"}};
                     send_response(error_response);
-                    this->auto_chat_engine->clear_context();
+                    auto_chat_engine->clear_context();
                     return;
                 }
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             try {
@@ -1090,15 +1145,15 @@ void RestHandler::handle_generate(const json& request,
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             auto total_end_time = time_utils::now();
-            auto history = this->auto_chat_engine->get_history();
+            auto history = auto_chat_engine->get_history();
             // std::cout << "history: " << history.first << std::endl;
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
             ostream.finalize_generate(meta_info, history.second);
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
         } else {
             // Non-streaming response
             std::stringstream ss;
@@ -1110,13 +1165,13 @@ void RestHandler::handle_generate(const json& request,
                 if (!success){
                     json error_response = {{"error", "Max length reached"}};
                     send_response(error_response);
-                    this->auto_chat_engine->clear_context();
+                    auto_chat_engine->clear_context();
                     return;
                 }
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             try {
@@ -1124,11 +1179,11 @@ void RestHandler::handle_generate(const json& request,
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             std::string response_text = ss.str();
-            auto history = this->auto_chat_engine->get_history();
+            auto history = auto_chat_engine->get_history();
             json response = {
                 {"model", model},
                 {"response", response_text},
@@ -1143,7 +1198,7 @@ void RestHandler::handle_generate(const json& request,
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
             // std::cout << "history: " << history.first << std::endl;
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
             send_response(response);
         }
     } catch (const std::exception& e) {
@@ -1167,7 +1222,7 @@ void RestHandler::handle_chat(const json& request,
         }
         nlohmann::ordered_json messages = request.at("messages");
         bool stream = request.value("stream", false);
-        std::string model = request.value("model", current_model_tag);
+        std::string model = request.value("model", current_chat_tag());
         const std::string request_backend = request.value("backend", std::string());
         json options = request.value("options", json::object());
         int length_limit = options.value("num_predict", 4096);
@@ -1178,13 +1233,15 @@ void RestHandler::handle_chat(const json& request,
             return;
         }
         std::string refusal;
-        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+        auto* chat = ensure_model_loaded(model, request_backend, &refusal);
+        if (!chat) {
             send_response(OllamaErrorResponse(ModelLoadFailedResponse(model, refusal)));
             return;
         }
+        auto& auto_chat_engine = chat->engine;
         auto load_end_time = time_utils::now();
        
-        configure_chat_engine_parameters(options, request);
+        configure_chat_engine_parameters(*auto_chat_engine, options, request);
 
         // messages = normalize_messages(messages);
         
@@ -1196,7 +1253,7 @@ void RestHandler::handle_chat(const json& request,
                     ? std::optional<int>(options.at("num_predict").get<int>())
                     : std::nullopt);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
-        meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.max_prefill_len = chat->prefill_chunk;
         meta_info.ignore_eos = value_or(request, "ignore_eos", false);
         meta_info.min_tokens = value_or(request, "min_tokens", 0);
         header_print("FLM", "Start generating...");
@@ -1210,13 +1267,13 @@ void RestHandler::handle_chat(const json& request,
                 if (!success){
                     json error_response = {{"error", "Max length reached"}};
                     send_response(error_response);
-                    this->auto_chat_engine->clear_context();
+                    auto_chat_engine->clear_context();
                     return;
                 }
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             try {
@@ -1225,17 +1282,17 @@ void RestHandler::handle_chat(const json& request,
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             auto total_end_time = time_utils::now();
             meta_info.total_duration = (uint64_t)time_utils::duration_ns(total_start_time, total_end_time).first;
             
             ostream.finalize_chat(meta_info);
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
             // auto history = this->chat_engine->get_history();
             // std::cout << "history: " << history.first << std::endl;
-            this->auto_chat_engine->clear_context();
+            auto_chat_engine->clear_context();
         } else {
             // Non-streaming response
             uniformed_input.messages = messages;
@@ -1250,7 +1307,7 @@ void RestHandler::handle_chat(const json& request,
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             // A character the generation stopped partway through can never be finished
@@ -1275,12 +1332,12 @@ void RestHandler::handle_chat(const json& request,
                 {"eval_duration", meta_info.decoding_duration},
                 {"done_reason", stop_reason_to_string(meta_info.stop_reason)}
             };
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
             send_response(response);
 
             // auto history = this->chat_engine->get_history();
             // std::cout << "history: " << history.first << std::endl;
-            this->auto_chat_engine->clear_context();
+            auto_chat_engine->clear_context();
         }
     } catch (const std::exception& e) {
         json error_response = ExceptionResponse(e);
@@ -1370,33 +1427,21 @@ void RestHandler::handle_ps(const json& request,
         
         std::string expires_at = expires_ss.str();
         
-        std::string tag;
-        std::string backend_id;
+        json entries = json::array();
         {
             std::lock_guard lock(model_info_mutex);
-            tag = current_model_tag;
-            backend_id = loaded_backend;
-        }
-        auto info = supported_models.get_model_info(tag).second;
-        auto& details = info["details"];
-        if (!backend_id.empty()) {
-            details["backend"] = backend_id;
-            if (const auto device = flm::backend::device_for_backend(backend_id); !device.empty()) {
-                details["device"] = device;
+            for (const auto& record : chat_models) {
+                if (record) entries.push_back(record->ps_entry);
             }
         }
-        json response = {
-            {"models", json::array({
-                {
-                    {"name", tag},
-                    {"model", tag},
-                    {"size", info["size"]},
-                    {"details", details},
-                    {"expires_at", expires_at},
-                }
-            })}
-        };
-        // std::cout << "response: " << response.dump(4) << std::endl;
+        // Keep the historical placeholder for a default single-slot server with no chat model.
+        if (entries.empty() && max_loaded_models == 1) {
+            auto info = supported_models.get_model_info("model-faker").second;
+            entries.push_back({{"name", "model-faker"}, {"model", "model-faker"},
+                               {"size", info["size"]}, {"details", info["details"]}});
+        }
+        for (auto& entry : entries) entry["expires_at"] = expires_at;
+        json response = {{"models", std::move(entries)}};
         send_response(response);
     } catch (const std::exception& e) {
         json error_response = ExceptionResponse(e);
@@ -1534,7 +1579,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             return;
         }
         json current_messages = request.at("messages");
-        std::string model = value_or(request, "model", current_model_tag);
+        std::string model = value_or(request, "model", current_chat_tag());
         const std::string request_backend = value_or(request, "backend", std::string());
         bool stream = value_or(request, "stream", false);
         int length_limit = value_or(request, "max_tokens", value_or(request, "max_completion_tokens", 4096));
@@ -1581,9 +1626,10 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         bool pre_is_gpt_oss = false;
         bool pre_is_hy_memory = false;
         if (model == "model-faker") {
-            pre_is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
-            pre_is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
-            pre_is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
+            auto* current = chat_models[last_chat] ? chat_models[last_chat]->engine.get() : nullptr;
+            pre_is_inkling = dynamic_cast<Inkling2*>(current) != nullptr;
+            pre_is_gpt_oss = dynamic_cast<GPT_OSS*>(current) != nullptr;
+            pre_is_hy_memory = dynamic_cast<HyMemory*>(current) != nullptr;
         } else {
             const auto info = supported_models.get_model_info(supported_models.rectify_model_tag(model)).second;
             const std::string family = info.contains("details") && info["details"].is_object()
@@ -1602,10 +1648,12 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
 
         auto load_start_time = time_utils::now();
         std::string refusal;
-        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+        auto* chat = ensure_model_loaded(model, request_backend, &refusal);
+        if (!chat) {
             sink.on_error(model_load_failed_error(model, refusal));
             return;
         }
+        auto& auto_chat_engine = chat->engine;
         auto load_end_time = time_utils::now();
         if (logprobs_top_n >= 0 && !auto_chat_engine->supports_logprobs()) {
             bad_request("logprobs is not supported by " + model);
@@ -1639,13 +1687,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             }
         }
 
-        configure_chat_engine_parameters(options, request, nested_think, resolved_effort);
+        configure_chat_engine_parameters(*auto_chat_engine, options, request, nested_think, resolved_effort);
         apply_sampling_request(*auto_chat_engine, sampling);
 
         std::vector<size_t> original_indices;
         try {
             current_messages = flm::chat::normalize_messages(current_messages, auto_chat_engine->message_roles(),
-                                                              (positional_tool_results || active_tool_reasoning) ? &original_indices : nullptr);
+                                                              (chat->positional_tool_results || chat->active_tool_reasoning) ? &original_indices : nullptr);
         } catch (const flm::chat::message_error& e) {
             bad_request(e.what());
             return;
@@ -1665,10 +1713,10 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             bad_request("'messages' must contain at least one non-empty message", "messages");
             return;
         }
-        if (active_tool_reasoning) {
+        if (chat->active_tool_reasoning) {
             flm::chat::apply_active_tool_reasoning(current_messages, request.at("messages"), original_indices);
         }
-        if (positional_tool_results) {
+        if (chat->positional_tool_results) {
             if (auto error = flm::chat::order_parallel_tool_results(current_messages, original_indices)) {
                 bad_request(error->message, error->param);
                 return;
@@ -1716,7 +1764,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 meta_info.restore_allowed = true;
             }
             else {
-                can_use_prompt_cache = prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools, cache_info);
+                can_use_prompt_cache = chat->prompt_cache.can_use_cache(current_messages, auto_chat_engine->get_chat_template_type(), tools, cache_info);
             }
             if (engine_manages_cache) {
                 // nothing to clear
@@ -1755,7 +1803,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         uniformed_input.requested_max_new_tokens =
             normalize_requested_max_new_tokens(openai_chat_budget);
         meta_info.load_duration = (uint64_t)time_utils::duration_ns(load_start_time, load_end_time).first;
-        meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.max_prefill_len = chat->prefill_chunk;
         meta_info.ignore_eos = value_or(request, "ignore_eos", false);
         meta_info.min_tokens = value_or(request, "min_tokens", 0);
         meta_info.logprobs_top_n = logprobs_top_n;
@@ -1803,8 +1851,8 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             end.decoding_duration = meta_info.decoding_duration;
             if (generated || stream) {
                 // a turn cancelled before it began reports its usage only on a stream
-                end.context_tokens = this->auto_chat_engine->get_current_context_length();
-                end.context_capacity = this->auto_chat_engine->get_max_length();
+                end.context_tokens = auto_chat_engine->get_current_context_length();
+                end.context_capacity = auto_chat_engine->get_max_length();
             }
             end.prefix_cache = meta_info.prefix_cache.valid ? &meta_info.prefix_cache : nullptr;
             return end;
@@ -1824,27 +1872,27 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                         meta_info.stop_reason = CANCEL_DETECTED;
                         header_print("❌ ", "Prefill Cancelled!");
                         sink.on_end(turn_end(ostream.finish(), false));
-                        this->auto_chat_engine->clear_context();
-                        this->prompt_cache.reset();
+                        auto_chat_engine->clear_context();
+                        chat->prompt_cache.reset();
                         return;
                     }
 
                     sink.on_error(prefill_failed_error(meta_info));
-                    this->auto_chat_engine->clear_context();
-                    this->prompt_cache.reset();
+                    auto_chat_engine->clear_context();
+                    chat->prompt_cache.reset();
                     return;
                 }
             } catch (const ModelRequestError& error) {
                 sink.on_error(model_error(error));
                 if (error.session_cleared()) {
-                    this->auto_chat_engine->clear_context();
-                    this->prompt_cache.reset();
+                    auto_chat_engine->clear_context();
+                    chat->prompt_cache.reset();
                 }
                 return;
             } catch (const std::exception& e) {
                 sink.on_error(engine_exception_error(e));
-                this->auto_chat_engine->clear_context();
-                this->prompt_cache.reset();
+                auto_chat_engine->clear_context();
+                chat->prompt_cache.reset();
                 return;
             }
             chat_turn_start start;
@@ -1865,17 +1913,17 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token->cancelled(); });
             } catch (const ModelRequestError& error) {
                 sink.on_error(model_error(error));
-                if (error.session_cleared()) this->prompt_cache.reset();
+                if (error.session_cleared()) chat->prompt_cache.reset();
                 return;
             } catch (const std::exception& e) {
                 sink.on_error(engine_exception_error(e));
-                this->auto_chat_engine->clear_context();
-                this->prompt_cache.reset();
+                auto_chat_engine->clear_context();
+                chat->prompt_cache.reset();
                 return;
             }
             if (meta_info.stop_reason == CANCEL_DETECTED) {
                 header_print("❌ ", "Generation Cancelled!");
-                this->prompt_cache.reset();
+                chat->prompt_cache.reset();
             }
 
             try {
@@ -1884,7 +1932,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
                 sink.on_error(engine_exception_error(e));
             }
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
         }
         else {
             sink.on_begin({model, false});
@@ -1905,26 +1953,26 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                         header_print("❌ ", "Prefill Cancelled!");
                         const chat_msg no_message;  // end.message points at it
                         sink.on_end(turn_end(no_message, false));
-                        this->auto_chat_engine->clear_context();
-                        this->prompt_cache.reset();
+                        auto_chat_engine->clear_context();
+                        chat->prompt_cache.reset();
                         return;
                     }
                     sink.on_error(prefill_failed_error(meta_info));
-                    this->auto_chat_engine->clear_context();
-                    this->prompt_cache.reset();
+                    auto_chat_engine->clear_context();
+                    chat->prompt_cache.reset();
                     return;
                 }
             } catch (const ModelRequestError& error) {
                 sink.on_error(model_error(error));
                 if (error.session_cleared()) {
-                    this->auto_chat_engine->clear_context();
-                    this->prompt_cache.reset();
+                    auto_chat_engine->clear_context();
+                    chat->prompt_cache.reset();
                 }
                 return;
             } catch (const std::exception& e) {
                 sink.on_error(engine_exception_error(e));
-                this->auto_chat_engine->clear_context();
-                this->prompt_cache.reset();
+                auto_chat_engine->clear_context();
+                chat->prompt_cache.reset();
                 return;
             }
             chat_turn_start start;
@@ -1941,14 +1989,14 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             } catch (const ModelRequestError& error) {
                 sink.on_error(model_error(error));
                 if (error.session_cleared()) {
-                    this->auto_chat_engine->clear_context();
-                    this->prompt_cache.reset();
+                    auto_chat_engine->clear_context();
+                    chat->prompt_cache.reset();
                 }
                 return;
             } catch (const std::exception& e) {
                 sink.on_error(engine_exception_error(e));
-                this->auto_chat_engine->clear_context();
-                this->prompt_cache.reset();
+                auto_chat_engine->clear_context();
+                chat->prompt_cache.reset();
                 return;
             }
             // A character the generation stopped partway through can never be finished
@@ -1960,9 +2008,9 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             const chat_turn_end end = turn_end(message, true);
             if (meta_info.stop_reason == CANCEL_DETECTED) {
                 header_print("❌ ", "Generation Cancelled!");
-                this->prompt_cache.reset();
+                chat->prompt_cache.reset();
             }
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
             sink.on_end(end);
         }
 
@@ -2008,14 +2056,17 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         // A model that transcribes by itself (r2t2) answers when it is the one asked for; any other model name is served by
         // the Whisper sidecar (--asr 1), as before.
         Qwen3_ASR* self_asr = nullptr;
+        int asr_chunk = chat_models[last_chat] ? chat_models[last_chat]->prefill_chunk : prefill_chunk_len_arg;
         // --asr r2t2:...: the sidecar answers every transcription, so the chat model stays loaded
         if (this->asr_sidecar_engine) {
             self_asr = dynamic_cast<Qwen3_ASR*>(this->asr_sidecar_engine.get());
         } else if (!model.empty() && supported_models.is_model_supported(supported_models.rectify_model_tag(model))) {
             auto [asr_tag, asr_info] = this->supported_models.get_model_info(model);
             if (asr_info.contains("details") && asr_info["details"].value("family", "") == "r2t2") {
-                if (!ensure_model_loaded(model)) throw std::runtime_error("failed to load " + model);
-                self_asr = dynamic_cast<Qwen3_ASR*>(this->auto_chat_engine.get());
+                auto* chat = ensure_model_loaded(model);
+                if (!chat) throw std::runtime_error("failed to load " + model);
+                self_asr = dynamic_cast<Qwen3_ASR*>(chat->engine.get());
+                asr_chunk = chat->prefill_chunk;
             }
         }
         std::string audio_context;
@@ -2030,7 +2081,7 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
                 // Append-only text as the audio is processed chunk by chunk (OpenAI transcription events): the model's streaming mode on a whole file
                 header_print("FLM", "Transforming audio to text, streaming (" << model << ")...");
                 chat_meta_info_t asr_meta;
-                asr_meta.max_prefill_len = this->prefill_chunk_len;
+                asr_meta.max_prefill_len = asr_chunk;
                 cancellation_token->reset();
                 auto sse = [&send_streaming_response](const json& event, bool final) { send_streaming_response(json("data: " + event.dump() + "\n\n"), final); };
                 const int chunk_ms = form_int("chunk_size_ms", 1000);
@@ -2051,7 +2102,7 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
             if (self_asr) {
                 header_print("FLM", "Transforming audio to text (" << model << ")...");
                 chat_meta_info_t asr_meta;
-                asr_meta.max_prefill_len = this->prefill_chunk_len;
+                asr_meta.max_prefill_len = asr_chunk;
                 transcript_log << "Audio content: " << std::flush;
                 audio_context = self_asr->transcribe(asr_meta, audio_raw, language, prompt, request.value("max_tokens", 8192), transcript_log,
                                                      language_name, duration, [&] { return cancellation_token->cancelled(); });
@@ -2149,7 +2200,7 @@ void RestHandler::handle_openai_completion(const json& request,
             return;
         }
         std::string prompt = request.at("prompt");
-        std::string model = value_or(request, "model", current_model_tag);
+        std::string model = value_or(request, "model", current_chat_tag());
         const std::string request_backend = value_or(request, "backend", std::string());
         bool stream = value_or(request, "stream", false);
         json options = value_or(request, "options", json::object());
@@ -2169,19 +2220,21 @@ void RestHandler::handle_openai_completion(const json& request,
         int length_limit = value_or(request, "max_tokens", 4096);
 
         std::string refusal;
-        if (!ensure_model_loaded(model, request_backend, &refusal)) {
+        auto* chat = ensure_model_loaded(model, request_backend, &refusal);
+        if (!chat) {
             send_response(ModelLoadFailedResponse(model, refusal));
             return;
         }
+        auto& auto_chat_engine = chat->engine;
         // This shares the engine with /v1/chat/completions and replaces the
         // conversation in it, so the chat cache no longer describes it.
-        this->prompt_cache.reset();
+        chat->prompt_cache.reset();
 
-        configure_chat_engine_parameters(options, request);
+        configure_chat_engine_parameters(*auto_chat_engine, options, request);
         apply_sampling_request(*auto_chat_engine, sampling);
 
         chat_meta_info_t meta_info;
-        meta_info.max_prefill_len = this->prefill_chunk_len;
+        meta_info.max_prefill_len = chat->prefill_chunk;
         meta_info.ignore_eos = value_or(request, "ignore_eos", false);
         meta_info.min_tokens = value_or(request, "min_tokens", 0);
         lm_uniform_input_t uniformed_input;
@@ -2224,16 +2277,16 @@ void RestHandler::handle_openai_completion(const json& request,
                         meta_info.stop_reason = CANCEL_DETECTED;
                         header_print("❌ ", "Prefill Cancelled!");
                         ostream.finalize(meta_info);
-                        this->auto_chat_engine->clear_context();
+                        auto_chat_engine->clear_context();
                         return;
                     }
                     send_stream_error(PrefillFailedResponse(meta_info));
-                    this->auto_chat_engine->clear_context();
+                    auto_chat_engine->clear_context();
                     return;
                 }
             } catch (const std::exception& e) {
                 send_stream_error(EngineExceptionResponse(e));
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             try {
@@ -2243,7 +2296,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 return;
             } catch (const std::exception& e) {
                 send_stream_error(EngineExceptionResponse(e));
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             try {
@@ -2252,9 +2305,9 @@ void RestHandler::handle_openai_completion(const json& request,
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
                 send_stream_error(EngineExceptionResponse(e));
             }
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
 
-            this->auto_chat_engine->clear_context();
+            auto_chat_engine->clear_context();
         }
         else {
             std::stringstream ss;
@@ -2267,17 +2320,17 @@ void RestHandler::handle_openai_completion(const json& request,
                     if (meta_info.stop_reason == CANCEL_DETECTED || (cancellation_token && cancellation_token->cancelled())) {
                         header_print("❌ ", "Prefill Cancelled!");
                         send_response(json());
-                        this->auto_chat_engine->clear_context();
+                        auto_chat_engine->clear_context();
                         return;
                     }
                     send_response(PrefillFailedResponse(meta_info));
-                    this->auto_chat_engine->clear_context();
+                    auto_chat_engine->clear_context();
                     return;
                 }
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             try {
@@ -2285,11 +2338,11 @@ void RestHandler::handle_openai_completion(const json& request,
             } catch (const std::exception& e) {
                 json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
-                this->auto_chat_engine->clear_context();
+                auto_chat_engine->clear_context();
                 return;
             }
             std::string response_text = ss.str();
-            auto history = this->auto_chat_engine->get_history();
+            auto history = auto_chat_engine->get_history();
 
             json response = {
                 {"id", "fastflowlm-chat-completion"},
@@ -2312,7 +2365,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 }}
             };
             if (meta_info.prefix_cache.valid) response["usage"]["flm_prefix_cache"] = prefix_cache_usage_json(meta_info.prefix_cache);
-            log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
+            log_request_summary(meta_info, auto_chat_engine->get_current_context_length(), auto_chat_engine->get_max_length());
             send_response(response);
         }
     }
