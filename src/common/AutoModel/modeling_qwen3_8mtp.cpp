@@ -61,7 +61,7 @@ void Qwen3_8MTP::load_model(std::string model_path, json model_info, int default
     config.min_p = 0.0;
     config.temperature = 0.7;
     config.rep_penalty = 1.0;
-    config.pre_penalty = 1.5f;
+    config.pre_penalty = 1.5f;  // Qwen model card: presence_penalty 1.5 (subtracted, 0 = neutral)
 
     this->set_sampler(config);
 

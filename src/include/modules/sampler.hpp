@@ -16,8 +16,13 @@
 /// \param temperature the temperature
 /// \param top_k the top k
 /// \param top_p the top p
-/// \param rep_penalty the rep penalty
-/// \param freq_penalty the freq penalty
+/// \param rep_penalty lowers the logit of a token seen in the last repeat_last_n (a positive
+///        logit is divided by it, a negative one multiplied); 1.0 is neutral
+/// \param freq_penalty subtracted once per occurrence in that window; 0 is neutral
+/// \param pre_penalty subtracted once from every token in that window; 0 is neutral
+/// \note freq_penalty and pre_penalty are not on the dev kit's scale (there 1.0 is neutral); a
+///       non-zero loader default needs a same-line comment giving its source
+///       (.github/script/ci/check_sampler_defaults.py)
 typedef struct sampler_config_{
     int top_k = 40;
     float top_p = 0.9f;

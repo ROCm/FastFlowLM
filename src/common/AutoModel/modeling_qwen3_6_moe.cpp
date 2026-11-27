@@ -37,7 +37,7 @@ void Qwen3_6_MOE::load_model(std::string model_path, json model_info, int defaul
     config.temperature = 0.7;
     config.rep_penalty = 1.0;
     config.freq_penalty = 0.0;
-    config.pre_penalty = 1.5f;
+    config.pre_penalty = 1.5f;  // Qwen model card: presence_penalty 1.5 (subtracted, 0 = neutral)
 
     this->set_sampler(config);
     for (size_t i = 0; i < PROFILER_TYPE_NUM; i++) {
