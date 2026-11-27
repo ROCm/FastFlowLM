@@ -9,6 +9,33 @@ parent: Local Server (Server Mode)
 
 This page explains the key concepts behind **Local LLM Servers**, including FastFlowLM (FLM) Server and others.  
 
+## Keeping two chat models loaded
+
+With `flm serve --max-loaded-models 2`, explicitly name the NPU or GPU chat
+model in each request. The server can retain one model per device. It still
+runs one request at a time. `GET /api/ps` shows what is currently loaded;
+`GET /v1/models` is the catalog, not the resident set.
+
+On Windows the reference pair is `qwen3.5:4b` (NPU) and `qwen3.5-oga-hipep:9b`
+(GPU), using their default cache and prefill settings and at most the package's
+default context length. An uncalibrated package, a larger context, explicit
+cache/prefill overrides, an unknown memory reading or insufficient shared host
+memory makes the server switch one model at a time instead. A new model on the
+same device replaces its predecessor. Eviction releases only the engine and its
+in-memory conversation state: a later request cold-loads an installed, compatible
+package without downloading it. There is no idle timeout or SSD snapshot.
+
+The Windows check uses the smaller of available physical memory and available
+commit. On a 64 GB Ryzen AI Max+ 395, the standalone default-context loads
+reduced available memory by about 5.6 GiB (NPU) and 9.3 GiB (GPU). The 10 and
+16 GiB incoming estimates include room for future conversation slots; the check
+also leaves 4 GiB for the resident's slots and 2 GiB for the host. These are
+estimates, not allocator guarantees. Without a supported host-memory reading
+(including on Linux), the server logs the fallback and switches one model at a
+time. If that cold load fails after memory was freed, the evicted model remains
+installed, not resident. An unrelated failure during an admitted two-model load
+does not cause the server to discard the peer or retry.
+
 ---
 
 ## 🔌 What is a Local Server?

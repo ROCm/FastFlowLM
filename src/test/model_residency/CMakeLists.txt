@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22)
+project(model_residency LANGUAGES CXX)
+add_executable(test_model_residency test_model_residency.cpp)
+target_compile_features(test_model_residency PRIVATE cxx_std_20)
+target_include_directories(test_model_residency PRIVATE ../../include)
+enable_testing()
+add_test(NAME test_model_residency COMMAND test_model_residency)

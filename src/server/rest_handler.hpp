@@ -7,6 +7,7 @@
  *  \version 0.9.24
  */
 #pragma once
+#include <array>
 #include <optional>
 #include <mutex>
 
@@ -127,13 +128,26 @@ public:
         std::shared_ptr<CancellationToken> cancellation_token = nullptr);
 
 private:
-    bool ensure_model_loaded(const std::string& model_tag,
+    struct ChatModel {
+        flm::frontend::FrontendPtr engine;
+        flm::backend::BackendSelection selection;
+        std::string tag;
+        json ps_entry;
+        int prefill_chunk = -1;
+        bool positional_tool_results = false;
+        bool active_tool_reasoning = false;
+        bool calibrated = false;
+        PromptCache prompt_cache;
+    };
+    ChatModel* ensure_model_loaded(const std::string& model_tag,
                              const std::string& request_backend = "", std::string* refusal = nullptr);
+    std::string current_chat_tag() const;
+    void evict_chat(std::size_t index);
     std::optional<json> generation_model_error(const std::string& model_tag);
     void ensure_asr_model_loaded(const std::string& model_tag);
     void ensure_embed_model_loaded(const std::string& model_tag);
     void ensure_decision_model_loaded(const std::string& model_tag);
-    void configure_chat_engine_parameters(const json& options, const json& request,
+    void configure_chat_engine_parameters(AutoModel& engine, const json& options, const json& request,
                                           std::optional<bool> nested_think = std::nullopt,
                                           const std::optional<std::string>& reasoning_effort = std::nullopt);
     /// \brief Run one chat turn, whatever protocol asked for it, and report it to the sink
@@ -143,7 +157,9 @@ private:
 
     flm_rt::device* npu_device_inst;
     std::string power_mode;
-    flm::frontend::FrontendPtr auto_chat_engine;
+    std::array<std::unique_ptr<ChatModel>, 2> chat_models;
+    std::size_t last_chat = 0;
+    int max_loaded_models = 1;
     std::unique_ptr<AutoDecisionModel> decision_engine;
 #ifndef FASTFLOWLM_LINUX_LIMITED_MODELS
     std::unique_ptr<Whisper> whisper_engine;
@@ -151,6 +167,7 @@ private:
     /// \brief the --asr model when it is an r2t2 (Qwen3-ASR) one: a second engine beside the chat model, used only for transcription
     flm::frontend::FrontendPtr asr_sidecar_engine;
     std::string asr_sidecar_tag;
+    int asr_sidecar_prefill_chunk = -1;
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
     std::string current_embedding_tag;
     std::mutex embedding_mutex;
@@ -158,13 +175,9 @@ private:
     model_list& supported_models;
     ModelDownloader& downloader;
     std::mutex model_info_mutex;
-    std::string current_model_tag = "model-faker";
-    std::string loaded_backend;
     std::string default_model_tag;
     bool modelscope;
     bool asr;
-    /// \brief the prefill chunk length of the loaded model
-    int prefill_chunk_len;
     /// \brief the --prefill-chunk-len value, -1 when each model's own is used
     int prefill_chunk_len_arg;
     /// \brief what one request may carry in raw RGB8 frames (--max-raw-frames, --max-raw-mb)
@@ -181,8 +194,4 @@ private:
     bool preemption;
     /// \brief the --backend value, empty when the flag was not given
     std::string backend;
-    flm::backend::BackendSelection loaded_selection;
-    bool positional_tool_results = false;
-    bool active_tool_reasoning = false;
-    PromptCache prompt_cache;
 };

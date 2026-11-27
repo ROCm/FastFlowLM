@@ -205,6 +205,11 @@ Launch FastFlowLM as a local REST API server (also supports the OpenAI API):
 flm serve llama3.2:1b
 ```
 
+`--max-loaded-models 1` (the default) keeps one chat model. To keep an NPU model
+and a GPU model loaded between serial requests, start with
+`flm serve qwen3.5:4b --max-loaded-models 2`, then request `qwen3.5-oga-hipep:9b`.
+See [server residency](server/basics.md#keeping-two-chat-models-loaded) for memory limits.
+
 ---
 
 ### 🔌 Show Server Port 
