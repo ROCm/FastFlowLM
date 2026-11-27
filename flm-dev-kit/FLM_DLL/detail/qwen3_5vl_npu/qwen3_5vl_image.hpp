@@ -126,6 +126,17 @@ class Qwen3_5VLImageEncoder{
         buffer<bf16> merger_fc1_output_fc2_input;
         buffer<bf16> merger_fc2_output;
 
+        // Host path: weights are synced once at load, sequences and activation bos are kept while the padded lengths
+        // repeat, position tables while the grids repeat, and only the rows the host touches are synced.
+        // QWEN35_VIS_HOST_V1=1 (and HRX, which syncs whole buffers) keeps the per-encode setup.
+        bool host_v1 = false;
+        int cached_seq_len_padded = -1;
+        int cached_merger_seq_len_padded = -1;
+        std::vector<std::vector<int32_t>> cached_grid_thw;
+        std::vector<bf16> cached_pos_embeds;
+        std::vector<float> cached_cos_emb;
+        std::vector<float> cached_sin_emb;
+
         inline int round_up_to_multiple (int x, int multiple)
         {
             return ((x + multiple - 1) / multiple) * multiple;

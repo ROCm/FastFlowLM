@@ -105,6 +105,11 @@ Qwen3_5VLImageEncoder::Qwen3_5VLImageEncoder(LM_Config config, npu_xclbin_manage
     o_proj_weight.resize(QWEN3_5_VISION_NUM_LAYERS);
     mlp_fc1_weight.resize(QWEN3_5_VISION_NUM_LAYERS);
     mlp_fc2_weight.resize(QWEN3_5_VISION_NUM_LAYERS);
+#if defined(FLM_USE_HRX)
+    host_v1 = true;
+#else
+    host_v1 = std::getenv("QWEN35_VIS_HOST_V1") != nullptr;
+#endif
 }
 void Qwen3_5VLImageEncoder::init_weights(SafeTensors &q4nx){
     // std::cout << "Loading Qwen3VL Image Encoder weights from " << this->config.get<std::string>("vision_model_weight", "") << " ..." <<std::endl;
@@ -212,6 +217,8 @@ void Qwen3_5VLImageEncoder::init_weights(SafeTensors &q4nx){
         "model.visual.merger.linear_fc2.weight",
         sizeof(bf16) * Padded_QWEN3_5_VISION_OUT_HIDDEN_SIZE
     );
+    this->merger_fc1_weight.sync_to_device();
+    this->merger_fc2_weight.sync_to_device();
 }
 
 std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payload_ptr)
@@ -228,8 +235,8 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     std::vector<std::vector<bf16>> final_res;
 
     std::vector<std::vector<int32_t>> image_grid_thw;
-    std::vector<float> cos_emb;
-    std::vector<float> sin_emb;
+    std::vector<float>& cos_emb = cached_cos_emb;
+    std::vector<float>& sin_emb = cached_sin_emb;
     int seq_len = 0;
     int seq_len_of_last_image = 0;
     for(auto img: image_payload->images ){
@@ -253,10 +260,22 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     hidden_state.resize((size_t)seq_len_padded * Padded_QWEN3_5_VISION_HIDDEN_SIZE);
     memset(hidden_state.data(), 0, hidden_state.size() * sizeof(bf16)); // clear the buffer to avoid reading uninitialized data in case of partial tiles
 
+    // the mm sequences and the activation bos depend on the padded lengths only, the attention sequence and the
+    // position tables on the grids
+    const bool same_pad = !host_v1 && seq_len_padded == cached_seq_len_padded && merger_seq_len_padded == cached_merger_seq_len_padded;
+    const bool same_grid = same_pad && image_grid_thw == cached_grid_thw;
+    if (!host_v1) {
+        cached_seq_len_padded = seq_len_padded;
+        cached_merger_seq_len_padded = merger_seq_len_padded;
+        cached_grid_thw = image_grid_thw;
+    }
+
+    auto time_start_seq_gen = std::chrono::high_resolution_clock::now();
     {
         bool ADD_BIAS= true;
 
         // pre-generate the mm runtime sequence
+        if (!same_pad) {
         generate_mm_sequence<bf16, bf16>(*this->qkv_projection_app.seq(),
                 seq_len_padded, Padded_QWEN3_5_VISION_HIDDEN_SIZE,    3*Padded_QWEN3_5_VISION_HIDDEN_SIZE,
                 MM_tile_M,MM_tile_K,MM_tile_N,
@@ -326,7 +345,9 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
                 ADD_BIAS, 0,
                 false,0
         );
+        }
 
+        if (!same_grid)
         gen_mha_vision_attention(
             this->flash_attention_app.seq(),
             image_grid_thw,
@@ -344,8 +365,30 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
             this
         );
     }
+    auto time_end_seq_gen = std::chrono::high_resolution_clock::now();
+    #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
+        std::cout << "Sequence generation time: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_end_seq_gen - time_start_seq_gen).count() << " ms" << std::endl;
+    #endif
 
-    {
+    if (same_pad) {
+        // the npu writes every padded row from the zero padded rows of the inputs, the host only rows < seq_len:
+        // zeroing the padded rows gives the state of fresh bos
+        auto zero_rows = [](buffer<bf16>& b, size_t from_row, size_t rows, size_t width) {
+            if (rows <= from_row) return;
+            memset(b.data() + from_row * width, 0, (rows - from_row) * width * sizeof(bf16));
+            b.sync_range_to_device_exact(from_row * width * sizeof(bf16), (rows - from_row) * width * sizeof(bf16));
+        };
+        const size_t H = Padded_QWEN3_5_VISION_HIDDEN_SIZE;
+        zero_rows(mm_qkv_input, seq_len, seq_len_padded, H);
+        zero_rows(mm_qkv_output_mha_input, seq_len, seq_len_padded, 3 * H);
+        zero_rows(mha_qkv_output_mm_o_input, seq_len, seq_len_padded, H);
+        zero_rows(mm_o_output_fc1_proj_input, seq_len, seq_len_padded, H);
+        zero_rows(mm_fc1_output_fc2_input, seq_len, seq_len_padded, Padded_QWEN3_5_VISION_MLP_INTERMEDIATE_SIZE);
+        zero_rows(mm_fc2_output, seq_len, seq_len_padded, H);
+        zero_rows(merger_fc1_input, merger_seq_len, merger_seq_len_padded, Padded_QWEN3_5_MERGER_HIDDEN_SIZE);
+        zero_rows(merger_fc1_output_fc2_input, merger_seq_len, merger_seq_len_padded, Padded_QWEN3_5_MERGER_HIDDEN_SIZE);
+        zero_rows(merger_fc2_output, merger_seq_len, merger_seq_len_padded, Padded_QWEN3_5_VISION_OUT_HIDDEN_SIZE);
+    } else {
         // initialize the remainig buffer
         mm_qkv_input = qkv_projection_app.create_bo_buffer<bf16>((size_t)seq_len_padded * Padded_QWEN3_5_VISION_HIDDEN_SIZE);
         mm_qkv_output_mha_input = qkv_projection_app.create_bo_buffer<bf16>((size_t)seq_len_padded*Padded_QWEN3_5_VISION_HIDDEN_SIZE*3);
@@ -372,6 +415,10 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         memset(mha_qkv_output_mm_o_input.data(), 0, mha_qkv_output_mm_o_input.size() * sizeof(bf16));
         mha_qkv_output_mm_o_input.sync_to_device();
     }
+    auto time_end_bo_setup = std::chrono::high_resolution_clock::now();
+    #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
+        std::cout << "Buffer setup time: " << std::chrono::duration_cast<std::chrono::milliseconds>(time_end_bo_setup - time_end_seq_gen).count() << " ms" << std::endl;
+    #endif
 
     DEBUG_BLOCK(
         1,
@@ -415,13 +462,15 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     #endif
 
     auto time_start_pos_emb = std::chrono::high_resolution_clock::now();
-    std::vector<bf16>  pos_embeds =  fast_pos_embed_interpolate(
+    if (!same_grid)
+    cached_pos_embeds =  fast_pos_embed_interpolate(
         image_grid_thw,
         pos_embed_weight.data(),
         std::sqrt(QWEN3_5_VISION_NUM_POSITION_EMBEDDINGS),
         QWEN3_5_VISION_EMBED_DIM,
         this->parent_npu_ptr->QWEN3_5_SPATIAL_MERGE_SIZE
     );
+    std::vector<bf16>& pos_embeds = cached_pos_embeds;
     auto time_end_pos_emb = std::chrono::high_resolution_clock::now();
     #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
         auto duration_pos_emb = std::chrono::duration_cast<std::chrono::milliseconds>(time_end_pos_emb - time_start_pos_emb).count();
@@ -483,7 +532,9 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     #endif
 
     auto time_Start_rotary_pos_emb = std::chrono::high_resolution_clock::now();
-    std::vector<float> rotary_pos_emb = rot_pos_emb_float(
+    std::vector<float> rotary_pos_emb;
+    if (!same_grid)
+    rotary_pos_emb = rot_pos_emb_float(
         image_grid_thw,
         this->parent_npu_ptr->QWEN3_5_SPATIAL_MERGE_SIZE,           // spatial_merge_size = 2
         QWEN3_5_VISION_HEAD_DIM / 2           // rot_dim = 64 / 2 = 32
@@ -495,6 +546,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     #endif
 
     auto time_start_cos_sine_pose_emb = std::chrono::high_resolution_clock::now();
+    if (!same_grid)
     cos_sine_pose_emb(rotary_pos_emb, cos_emb, sin_emb, QWEN3_5_VISION_HEAD_DIM);
     auto time_end_cos_sine_pose_emb = std::chrono::high_resolution_clock::now();
     #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
@@ -530,15 +582,21 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         );
 
     #endif
+    // the host path adds the residuals in place
+    if (host_v1) {
     residual_buffer.resize(hidden_state.size());
     // set residual buffer to 0
     memset(residual_buffer.data(), 0, sizeof(bf16)* residual_buffer.size());
+    }
     DEBUG_BLOCK(1,
     header_print_r("DEBUG", "Before all layers, hidden states");
     utils::print_matrix(hidden_state, Padded_QWEN3_5_VISION_HIDDEN_SIZE, 8, 10);
     )
 
     constexpr bool DEBUG_NO_REGRESSION_ERROR = false;
+    // times the row width: the bytes of the rows < seq_len, the only rows the host reads or writes
+    const size_t valid_bytes = (size_t)seq_len * sizeof(bf16);
+    const size_t H = Padded_QWEN3_5_VISION_HIDDEN_SIZE;
 
     for(int layer_idx = 0; layer_idx < QWEN3_5_VISION_NUM_LAYERS; layer_idx++){
 
@@ -563,6 +621,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
 
     #endif
 
+        if (host_v1)
         memcpy(residual_buffer.data(), hidden_state.data(), sizeof(bf16)* seq_len* Padded_QWEN3_5_VISION_HIDDEN_SIZE);
 
         // first, do the norm_1 output
@@ -602,10 +661,15 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         #endif
 
         auto time_start_qkv_projection = std::chrono::high_resolution_clock::now();
-        mm_qkv_input.sync_to_device();
-        attn_qkv_weight[layer_idx].sync_to_device();
+        if (host_v1) {
+            mm_qkv_input.sync_to_device();
+            attn_qkv_weight[layer_idx].sync_to_device();
+        } else {
+            mm_qkv_input.sync_range_to_device_exact(0, valid_bytes * H);
+        }
         qkv_projection_app( mm_qkv_input,  attn_qkv_weight[layer_idx], mm_qkv_output_mha_input   );
-        mm_qkv_output_mha_input.sync_from_device();
+        if (host_v1) mm_qkv_output_mha_input.sync_from_device();
+        else mm_qkv_output_mha_input.sync_range_from_device_exact(0, valid_bytes * 3 * H);
         DEBUG_BLOCK(1,
         if (layer_idx == 0) {
             header_print_r("DEBUG", "After QKV projection, before adding bias, hidden states");
@@ -716,8 +780,13 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
 
         // now mha
         auto time_start_mha = std::chrono::high_resolution_clock::now();
-        mm_qkv_output_mha_input.sync_to_device();
-        mha_qkv_output_mm_o_input.sync_to_device();
+        // the host never touches the attention output: the host path leaves it on the device
+        if (host_v1) {
+            mm_qkv_output_mha_input.sync_to_device();
+            mha_qkv_output_mm_o_input.sync_to_device();
+        } else {
+            mm_qkv_output_mha_input.sync_range_to_device_exact(0, valid_bytes * 3 * H);
+        }
 #if !defined(FLM_USE_HRX)
         if (vll.ready) {
             // one submission: mm -> attention -> mm
@@ -730,7 +799,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         {
             flash_attention_app(mha_qkv_output_mm_o_input, mm_qkv_output_mha_input);
         }
-        mha_qkv_output_mm_o_input.sync_from_device();
+        if (host_v1 || DEBUG_LEVEL >= 1) mha_qkv_output_mm_o_input.sync_from_device();
 
         DEBUG_BLOCK(1,
         if (layer_idx == 0) {
@@ -764,10 +833,13 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
 
         // now the o projection
         auto time_start_o_projection = std::chrono::high_resolution_clock::now();
-        mha_qkv_output_mm_o_input.sync_to_device();
-        o_proj_weight[layer_idx].sync_to_device();
+        if (host_v1) {
+            mha_qkv_output_mm_o_input.sync_to_device();
+            o_proj_weight[layer_idx].sync_to_device();
+        }
         o_projection_app( mha_qkv_output_mm_o_input,  o_proj_weight[layer_idx], mm_o_output_fc1_proj_input   );
-        mm_o_output_fc1_proj_input.sync_from_device();
+        if (host_v1) mm_o_output_fc1_proj_input.sync_from_device();
+        else mm_o_output_fc1_proj_input.sync_range_from_device_exact(0, valid_bytes * H);
 
         DEBUG_BLOCK(1,
         if (layer_idx == 0) {
@@ -816,7 +888,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         auto time_start_residual_add_1 = std::chrono::high_resolution_clock::now();
         simd_add(
             mm_o_output_fc1_proj_input.data(),
-            residual_buffer.data(),
+            host_v1 ? residual_buffer.data() : hidden_state.data(),
             hidden_state.data(),
             (size_t)seq_len * Padded_QWEN3_5_VISION_HIDDEN_SIZE
         );
@@ -825,6 +897,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
             auto duration_residual_add_1 = std::chrono::duration_cast<std::chrono::milliseconds>(time_end_residual_add_1 - time_start_residual_add_1).count();
             std::cout << "Residual add 1 time for layer " << layer_idx << ": " << duration_residual_add_1 << " ms" << std::endl;
         #endif
+        if (host_v1)
         memcpy(
             residual_buffer.data(),
             hidden_state.data(),
@@ -851,9 +924,13 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
 
         // now to fc1
         auto time_start_fc1 = std::chrono::high_resolution_clock::now();
-        mm_o_output_fc1_proj_input.sync_to_device();
-        mlp_fc1_weight[layer_idx].sync_to_device();
-        mlp_fc2_weight[layer_idx].sync_to_device();
+        if (host_v1) {
+            mm_o_output_fc1_proj_input.sync_to_device();
+            mlp_fc1_weight[layer_idx].sync_to_device();
+            mlp_fc2_weight[layer_idx].sync_to_device();
+        } else {
+            mm_o_output_fc1_proj_input.sync_range_to_device_exact(0, valid_bytes * H);
+        }
         mlp_fc1_app( mm_o_output_fc1_proj_input,  mlp_fc1_weight[layer_idx],   mm_fc1_output_fc2_input );
         // mm_fc1_output_fc2_input.sync_from_device();
         auto time_end_fc1 = std::chrono::high_resolution_clock::now();
@@ -896,7 +973,8 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         // now do the fc2
         auto time_start_mlp_fc2 = std::chrono::high_resolution_clock::now();
         mlp_fc2_app( mm_fc1_output_fc2_input,  mlp_fc2_weight[layer_idx],   mm_fc2_output );
-        mm_fc2_output.sync_from_device();
+        if (host_v1) mm_fc2_output.sync_from_device();
+        else mm_fc2_output.sync_range_from_device_exact(0, valid_bytes * H);
 
         DEBUG_BLOCK(1,
         if (layer_idx == 0) {
@@ -938,7 +1016,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         auto time_start_mlp_residual_add = std::chrono::high_resolution_clock::now();
         simd_add(
             mm_fc2_output.data(),
-            residual_buffer.data(),
+            host_v1 ? residual_buffer.data() : hidden_state.data(),
             hidden_state.data(),
             (size_t)seq_len * Padded_QWEN3_5_VISION_HIDDEN_SIZE
         );
@@ -992,16 +1070,25 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         );
     }
 
-    merger_fc1_input.sync_to_device();
-    merger_fc1_weight.sync_to_device();
-    // merger_fc1_output_fc2_input.sync_to_device();
-    merger_fc2_weight.sync_to_device();
+    auto time_start_merger = std::chrono::high_resolution_clock::now();
+    if (host_v1) {
+        merger_fc1_input.sync_to_device();
+        merger_fc1_weight.sync_to_device();
+        // merger_fc1_output_fc2_input.sync_to_device();
+        merger_fc2_weight.sync_to_device();
+    } else {
+        merger_fc1_input.sync_range_to_device_exact(0, (size_t)merger_seq_len * Padded_QWEN3_5_MERGER_HIDDEN_SIZE * sizeof(bf16));
+    }
     merger_fc1_app( merger_fc1_input,  merger_fc1_weight,   merger_fc1_output_fc2_input );
 
     //fc2
 
     merger_fc2_app( merger_fc1_output_fc2_input,  merger_fc2_weight,   merger_fc2_output );
-    merger_fc2_output.sync_from_device();
+    if (host_v1) merger_fc2_output.sync_from_device();
+    else merger_fc2_output.sync_range_from_device_exact(0, (size_t)merger_seq_len * Padded_QWEN3_5_VISION_OUT_HIDDEN_SIZE * sizeof(bf16));
+    #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
+        std::cout << "Merger time: " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - time_start_merger).count() << " ms" << std::endl;
+    #endif
 
     memcpy(final_deepstack_hidden_vector.data(), merger_fc2_output.data(), sizeof(bf16) *merger_seq_len * Padded_QWEN3_5_VISION_OUT_HIDDEN_SIZE);
     final_res.push_back(final_deepstack_hidden_vector);
