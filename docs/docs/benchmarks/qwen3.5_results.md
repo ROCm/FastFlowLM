@@ -11,6 +11,7 @@ This section reports the performance of Qwen 3.5 on NPU with FastFlowLM (FLM).
 
 > **Note:** 
 > - Results are based on FastFlowLM v0.9.38.  
+> - Qwen3.5-4B prefill and image input are faster from v1.0.15: see [Test System 2](#test-system-2-qwen35-4b-from-v1015) below.  
 > - Under FLM's default NPU power mode (Performance)    
 > - Newer versions may deliver improved performance.
 > - Fine-tuned models show performance comparable to their base models.   
@@ -73,3 +74,33 @@ Prefill time-to-first-token (TTFT) for Qwen3.5-4B on NPU (FastFlowLM) with diffe
 | Qwen3.5-9B  | XDNA2 |           16.2 |             47.3 |
 
 > This test uses a short prompt: “Describe this image.”
+
+---
+
+### **Test System 2: Qwen3.5-4B from v1.0.15**
+
+AMD Ryzen™ AI MAX+ PRO 395 (Strix Halo) with 128 GB DRAM, Linux, FLM's default NPU power mode (Performance). Before is the build just before these changes (same as v1.0.14 for this model); both columns were measured on this machine, the same day, in the same way.
+
+From v1.0.15, Qwen3.5-4B runs its prefill matrix multiplications on the bfp16 NPU kernel (up/gate and GLU in one dispatch), the gated delta rule in chunks, and the short convolution, delta rule and attention inside the matrix-multiplication hardware context (control-packet switches instead of context switches). The vision tower runs its attention and patch embedding the same way.
+
+**Prefill Speed (TPS, with different prompt lengths)**
+
+| **Qwen3.5-4B** | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
+|----------------|--------:|--------:|--------:|--------:|---------:|---------:|
+| Before (v1.0.14) | 540.39 | 595.43 | 629.93 | 635.57 | 621.47 | 568.45 |
+| v1.0.15 | 1135.99 | 1132.43 | 1137.72 | 1100.0 | 1026.51 | 873.52 |
+| Speed-up | 2.10× | 1.90× | 1.81× | 1.73× | 1.65× | 1.54× |
+
+A 1k-token prompt now answers in 0.88 s instead of 1.82 s.
+
+**Prefill TTFT with Image Input (Seconds)**
+
+| **Qwen3.5-4B** | 720p (1280×720) | 1080p (1920×1080) | 2K (2560×1440) | 4K (3840×2160) |
+|----------------|----------------:|------------------:|---------------:|---------------:|
+| Before (v1.0.14) | 3.3 | 6.9 | 12.7 | 37.0 |
+| v1.0.15 | 2.1 | 4.8 | 9.6 | 30.7 |
+| Speed-up | 1.55× | 1.43× | 1.33× | 1.21× |
+
+> - Prefill: `flm bench qwen3.5:4b -c 32768`, mean of 3 runs.
+> - Images: one photo cropped to 16:9 and scaled to each resolution (JPEG), the prompt “Describe this image.”, `flm serve -r 0` (no pre-resize), prefix cache off; streamed time to the first token, median of 5 runs after a warm-up.
+> - The answers do not change beyond quantization noise (top-100 KL divergence against the previous build: mean 0.007).
