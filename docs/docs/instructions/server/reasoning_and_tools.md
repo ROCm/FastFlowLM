@@ -256,6 +256,10 @@ client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"thi
 client.chat.completions.create(model="gpt-oss:20b", messages=msgs, reasoning_effort="low")
 ```
 
+On `/v1/chat/completions`, you can also send an OpenRouter-style `{"reasoning":{"effort":"high"}}`. It means the same as `{"reasoning_effort":"high"}` for this model. `{"reasoning":{"enabled":true}}` requests `medium`; `false` requests `none`. If you also specify an effort, `enabled` checks whether that level is on or off; it does not replace it. Two explicit efforts must match exactly. With an active `reasoning` object, `think` and `chat_template_kwargs.enable_thinking` must agree with the requested level.
+
+Omit `reasoning` or send `null` or `{}` to keep the existing controls and defaults. The nested `effort` accepts only the seven standard labels below. A non-null `reasoning.max_tokens` or `reasoning.exclude` (even `false`), an unknown member, or a conflict returns HTTP 400 with the field in `error.param`, before streaming starts. This is request compatibility only: the reply still puts reasoning in `reasoning_content`.
+
 On `/v1/chat/completions`, `reasoning_effort` accepts the seven OpenAI levels (`null` or absent leaves the model's default); Hy-Memory also takes its own `no_think` and Inkling-2 a numeric level. Any other string or non-string value is rejected with HTTP 400 (`"param": "reasoning_effort"`) before the engine is touched (streaming requests too):
 
 | `reasoning_effort` | On/off thinking models (Qwen3, Qwen3.5, Gemma4, MiniCPM, LFM3, …) | `gpt-oss` | `hy-memory` | `inkling-2` |

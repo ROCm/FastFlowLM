@@ -66,6 +66,10 @@ bool chat_reasoning_effort_from_openai(const nlohmann::ordered_json& request,
                                        std::optional<std::string>& canonical_effort,
                                        std::string& error, bool allow_no_think = false);
 
+/// \brief Translate a Chat Completions reasoning object in place before grammar/model validation.
+/// \param param offending field on failure, otherwise the original spelling for model refusals
+bool normalize_chat_reasoning(nlohmann::ordered_json& request, std::string& param, std::string& error);
+
 /// \brief The thinking switch in the Qwen spelling, `chat_template_kwargs.enable_thinking`
 /// \param request the chat completion request body
 /// \param override_value set to the nested boolean, empty when the request does not carry one

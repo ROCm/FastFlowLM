@@ -1249,7 +1249,7 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             if (!req.body().empty()) {
                 request_json = json::parse(req.body());
             }
-            rest_handler->handle_openai_chat_completion(request_json, send_response, send_streaming_response, cancellation_token);
+            rest_handler->handle_openai_chat_completion(std::move(request_json), send_response, send_streaming_response, cancellation_token);
         });
     
     server->register_handler("POST", "/v1/responses",

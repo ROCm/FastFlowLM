@@ -1463,12 +1463,17 @@ void RestHandler::handle_create(const json& request,
 ///@param request the request
 ///@param send_response the send response
 ///@param send_streaming_response the send streaming response
-void RestHandler::handle_openai_chat_completion(const json& request,
+void RestHandler::handle_openai_chat_completion(json request,
                                                std::function<void(const json&)> send_response,
                                                StreamResponseCallback send_streaming_response,
                                                std::shared_ptr<CancellationToken> cancellation_token) {
     openai_chat_sink sink(send_response, send_streaming_response, stream_include_usage(request));
-    run_chat_turn(request, sink, cancellation_token);
+    std::string effort_param, error;
+    if (!normalize_chat_reasoning(request, effort_param, error)) {
+        sink.on_error({400, "invalid_request_error", error, effort_param, std::nullopt});
+        return;
+    }
+    run_chat_turn(request, sink, cancellation_token, effort_param);
 }
 
 /// \brief Validate and resolve `reasoning_effort` for a Chat Completions request.
@@ -1523,7 +1528,7 @@ void RestHandler::handle_openai_responses(const json& request,
 ///@param sink receives the turn: its start, its deltas when streamed, its end, or an error
 ///@param cancellation_token set when the client goes away
 void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
-                                std::shared_ptr<CancellationToken> cancellation_token) {
+                                std::shared_ptr<CancellationToken> cancellation_token, const std::string& effort_param) {
     auto bad_request = [&sink](const std::string& message, const std::string& param = std::string()) {
         sink.on_error({400, "invalid_request_error", message, param, std::nullopt});
     };
@@ -1596,7 +1601,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         std::string effort_error;
         if (!resolve_chat_reasoning_effort(request, pre_is_inkling, pre_is_gpt_oss, pre_is_hy_memory, resolved_effort,
                                            effort_error)) {
-            bad_request(effort_error, "reasoning_effort");
+            bad_request(effort_error, effort_param);
             return;
         }
 
@@ -1622,7 +1627,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         const bool is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
         if (!resolve_chat_reasoning_effort(request, is_inkling, is_gpt_oss, is_hy_memory, resolved_effort,
                                            effort_error)) {
-            bad_request(effort_error, "reasoning_effort");
+            bad_request(effort_error, effort_param);
             return;
         }
 

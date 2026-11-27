@@ -102,7 +102,7 @@ public:
                       std::function<void(const json&)> send_response,
                       StreamResponseCallback send_streaming_response);
 
-    void handle_openai_chat_completion(const json& request,
+    void handle_openai_chat_completion(json request,
                                       std::function<void(const json&)> send_response,
                                       StreamResponseCallback send_streaming_response,
                                       std::shared_ptr<CancellationToken> cancellation_token = nullptr);
@@ -138,7 +138,7 @@ private:
                                           const std::optional<std::string>& reasoning_effort = std::nullopt);
     /// \brief Run one chat turn, whatever protocol asked for it, and report it to the sink
     void run_chat_turn(const json& request, chat_sink& sink,
-                       std::shared_ptr<CancellationToken> cancellation_token);
+                       std::shared_ptr<CancellationToken> cancellation_token, const std::string& effort_param = "reasoning_effort");
 
 
     flm_rt::device* npu_device_inst;

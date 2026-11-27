@@ -46,6 +46,63 @@ std::optional<std::string> canonical_reasoning_effort(const std::string& level) 
 
 } // namespace
 
+bool normalize_chat_reasoning(json& request, std::string& param, std::string& error) {
+    param = "reasoning_effort";
+    const auto& reasoning = field(request, "reasoning");
+    if (reasoning.is_null()) return true;
+    auto reject = [&](std::string path, std::string message) {
+        param = std::move(path);
+        error = std::move(message);
+        return false;
+    };
+    if (!reasoning.is_object()) return reject("reasoning", "reasoning must be an object");
+    for (const auto& [key, value] : reasoning.items()) {
+        if (key == "effort" || key == "enabled") continue;
+        if ((key == "max_tokens" || key == "exclude") && value.is_null()) continue;
+        return reject("reasoning." + key, "unsupported reasoning option: " + key);
+    }
+    const auto& effort = field(reasoning, "effort");
+    const auto& enabled = field(reasoning, "enabled");
+    if (effort.is_null() && enabled.is_null()) return true;
+    auto standard = [](const json& v) {
+        return v.is_string() && canonical_reasoning_effort(v.get_ref<const std::string&>()).has_value();
+    };
+    if (!effort.is_null() && !standard(effort))
+        return reject("reasoning.effort", "expected a standard reasoning effort level");
+    if (!enabled.is_null() && !enabled.is_boolean())
+        return reject("reasoning.enabled", "reasoning.enabled must be a boolean");
+    const auto& native = field(request, "reasoning_effort");
+    if (!native.is_null() && !standard(native))
+        return reject("reasoning_effort", "reasoning_effort must be a standard level when combined with reasoning");
+    if (!effort.is_null() && !native.is_null() && effort != native)
+        return reject("reasoning.effort", "reasoning.effort contradicts reasoning_effort");
+
+    // Keep the raw label: Inkling distinguishes levels that other models map to "high".
+    const std::string level = !effort.is_null() ? effort.get<std::string>() :
+                              !native.is_null() ? native.get<std::string>() :
+                              enabled.get<bool>() ? "medium" : "none";
+    const bool on = level != "none";
+    param = effort.is_null() ? "reasoning.enabled" : "reasoning.effort";
+    if (!enabled.is_null() && enabled != on)
+        return reject("reasoning.enabled", "reasoning.enabled contradicts the explicit effort level");
+    auto agrees = [&](const json& value, const char* name) {
+        if (value.is_null()) return true;
+        if (!value.is_boolean()) return reject(name, std::string(name) + " must be a boolean");
+        if (value != on) {
+            error = param + " contradicts " + name;
+            return false;
+        }
+        return true;
+    };
+    if (!agrees(field(request, "think"), "think")) return false;
+    const auto& kwargs = field(request, "chat_template_kwargs");
+    if (!kwargs.is_null() && !kwargs.is_object())
+        return reject("chat_template_kwargs", "chat_template_kwargs must be an object");
+    if (!agrees(field(kwargs, "enable_thinking"), "chat_template_kwargs.enable_thinking")) return false;
+    if (native.is_null()) request["reasoning_effort"] = level;
+    return true;
+}
+
 bool chat_reasoning_effort_from_openai(const json& request, std::optional<std::string>& canonical_effort,
                                        std::string& error, bool allow_no_think) {
     canonical_effort.reset();

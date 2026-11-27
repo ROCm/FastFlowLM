@@ -552,6 +552,53 @@ void test_no_tools_after_tool_turns() {
     CHECK(chat_make_constraint(QWEN_XML, plain_request, vocab, never) == nullptr);
 }
 
+void test_openrouter_reasoning() {
+    auto check = [](json req, const char* level, const char* path, bool valid = true) {
+        const auto before = req;
+        std::string param, error;
+        CHECK(normalize_chat_reasoning(req, param, error) == valid);
+        CHECK_EQ(param, path);
+        if (valid && level) {
+            CHECK(req.value("reasoning_effort", std::string()) == level);
+            const json tools = json::array();
+            chat_constraint_request constraint;
+            CHECK(chat_constraint_request_from_openai(req, tools, constraint, error));
+            CHECK(constraint.allow_reasoning == (std::string(level) != "none"));
+        } else {
+            CHECK(req == before);
+        }
+        CHECK(valid == error.empty());
+    };
+    for (const char* level : {"none", "minimal", "low", "medium", "high", "xhigh", "max"}) {
+        check({{"reasoning", {{"effort", level}}}}, level, "reasoning.effort");
+        check({{"reasoning", {{"effort", level}}}, {"reasoning_effort", level}}, level, "reasoning.effort");
+    }
+    check({{"reasoning", {{"enabled", true}}}}, "medium", "reasoning.enabled");
+    check({{"reasoning", {{"enabled", false}}}}, "none", "reasoning.enabled");
+    check({{"reasoning", {{"enabled", true}}}, {"reasoning_effort", "high"}}, "high", "reasoning.enabled");
+    check({{"reasoning", {{"effort", "low"}, {"enabled", true}}}, {"think", true}}, "low", "reasoning.effort");
+    for (auto no_op : {json(nullptr), json::object(), json{{"effort", nullptr}, {"enabled", nullptr},
+                                                            {"max_tokens", nullptr}, {"exclude", nullptr}}}) {
+        check({{"reasoning", no_op}, {"reasoning_effort", "no_think"}}, nullptr, "reasoning_effort");
+    }
+    check({{"reasoning_effort", "0.5"}}, nullptr, "reasoning_effort");
+    check({{"reasoning", false}}, nullptr, "reasoning", false);
+    for (auto bad : {json("0.5"), json("no_think"), json("HIGH"), json(3)}) {
+        check({{"reasoning", {{"effort", bad}}}}, nullptr, "reasoning.effort", false);
+    }
+    check({{"reasoning", {{"effort", "xhigh"}}}, {"reasoning_effort", "max"}}, nullptr, "reasoning.effort", false);
+    check({{"reasoning", {{"enabled", true}}}, {"reasoning_effort", "0.5"}}, nullptr, "reasoning_effort", false);
+    check({{"reasoning", {{"effort", "none"}, {"enabled", true}}}}, nullptr, "reasoning.enabled", false);
+    check({{"reasoning", {{"enabled", "false"}}}}, nullptr, "reasoning.enabled", false);
+    check({{"reasoning", {{"exclude", false}}}}, nullptr, "reasoning.exclude", false);
+    check({{"reasoning", {{"max_tokens", 16}}}}, nullptr, "reasoning.max_tokens", false);
+    check({{"reasoning", {{"summary", nullptr}}}}, nullptr, "reasoning.summary", false);
+    check({{"reasoning", {{"enabled", true}}}, {"think", false}}, nullptr, "reasoning.enabled", false);
+    check({{"reasoning", {{"effort", "none"}}}, {"chat_template_kwargs", {{"enable_thinking", true}}}},
+          nullptr, "reasoning.effort", false);
+    check({{"reasoning", {{"enabled", true}}}, {"think", 1}}, nullptr, "think", false);
+}
+
 void test_reasoning_effort_levels() {
     std::printf("reasoning_effort parses the seven OpenAI levels and rejects anything else\n");
     auto parse = [](const json& request, std::optional<std::string>& out, std::string& error) {
@@ -1320,6 +1367,7 @@ int main() {
     test_continued_call();
     test_no_tools_after_tool_turns();
     test_reasoning_effort_levels();
+    test_openrouter_reasoning();
     test_model_reasoning_effort_levels();
     test_thinking_switch_in_chat_template_kwargs();
     test_gemma4_nullable_types();
