@@ -321,10 +321,16 @@ buffer<bf16> qwen3_5vl_npu::Impl::_prefill_with_mm(std::vector<int>& ids, void* 
     tensor_2d<bf16> hidden_states_2d(hidden_states, desc.D);
 
     std::vector<std::vector<bf16>> image_embedding;
+#ifdef QWEN35_DECODE_PROF
+    auto vp0 = DP_NOW();
+#endif
 
     if(is_vlm && payload != nullptr){
         image_embedding = this->qwen3_5vl_image_encoder->encode(payload);
     }
+#ifdef QWEN35_DECODE_PROF
+    auto vp1 = DP_NOW();
+#endif
 
     bf16 * vision_token_ptr = (payload != nullptr)? image_embedding[0].data() : nullptr;
     std::vector<bool> vision_mask(L_in);
@@ -352,6 +358,9 @@ buffer<bf16> qwen3_5vl_npu::Impl::_prefill_with_mm(std::vector<int>& ids, void* 
     );
 #endif
 
+#ifdef QWEN35_DECODE_PROF
+    auto vp2 = DP_NOW();
+#endif
     time_utils::time_point start = time_utils::now();
     for (int layer_idx = 0; layer_idx < desc.num_hidden_layers; layer_idx++) {
         auto ret = pctx->forward(layer_idx, hidden_states, L_in, proj_weights[layer_idx], rms_weights[layer_idx], rope_rms_weights[layer_idx], kv_caches[layer_idx], input_idx, alpha_proj_cpu[layer_idx], beta_proj_cpu[layer_idx], this->current_context_length);
@@ -369,8 +378,16 @@ buffer<bf16> qwen3_5vl_npu::Impl::_prefill_with_mm(std::vector<int>& ids, void* 
 
     buffer<bf16> predict = hidden_states_2d[L_in - 1];
     this->lm_head_weights.sync_to_device();
+#ifdef QWEN35_DECODE_PROF
+    auto vp3 = DP_NOW();
+#endif
     get_logits(predict);
     this->set_context_length(this->current_context_length + L_in, input_idx[L_in * 3 - 1] + 1);
+#ifdef QWEN35_DECODE_PROF
+    printf("PREFPROF L %d encode %.0f embed %.0f layers %.0f lm_head %.0f total %.0f us\n", L_in, DP_US(vp0, vp1),
+           DP_US(vp1, vp2), DP_US(vp2, vp3), DP_US(vp3, DP_NOW()), DP_US(vp0, DP_NOW()));
+    fflush(stdout);
+#endif
 
     return logits_valid;
 }
