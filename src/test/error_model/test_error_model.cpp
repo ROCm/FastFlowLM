@@ -242,6 +242,30 @@ void test_stream_and_utf8() {
     CHECK(parsed_oll["error"].is_string());
 }
 
+void test_stream_abort() {
+    std::printf("ending a stream that failed after it started\n");
+    const ErrorValue err{500, "server_error", "engine fault"};
+
+    // OpenAI: one error event, then [DONE].
+    const auto oai = stream_abort_frames(Protocol::OpenAI, err);
+    CHECK(oai.has_value());
+    if (oai) {
+        CHECK(*oai == stream_error_frame(Protocol::OpenAI, err) + "data: [DONE]\n\n");
+    }
+
+    // Ollama: one NDJSON line {"error": "<message>"} and nothing after it, as Ollama ends a failed stream.
+    const auto oll = stream_abort_frames(Protocol::Ollama, err);
+    CHECK(oll.has_value());
+    if (oll) {
+        CHECK(!oll->empty() && oll->back() == '\n' && oll->find('\n') == oll->size() - 1);
+        const ojson line = ojson::parse(*oll);
+        CHECK(line.size() == 1 && line["error"] == "engine fault");
+    }
+
+    // System One does not stream: the connection is dropped.
+    CHECK(!stream_abort_frames(Protocol::SystemOne, err).has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -250,6 +274,7 @@ int main() {
     test_extract_error();
     test_exceptions_and_prefill();
     test_stream_and_utf8();
+    test_stream_abort();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;
