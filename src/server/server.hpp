@@ -30,6 +30,7 @@
 #include "model_downloader.hpp"
 #include "multipart.hpp"
 #include "http_guard.hpp"
+#include "error_model.hpp"
 #include <queue>
 #include <functional>
 
@@ -119,6 +120,10 @@ public:
     std::size_t capacity() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return capacity_;
+    }
+    std::pair<bool, std::size_t> status(const std::atomic<bool>& in_use) const {
+        std::lock_guard<std::mutex> lock(mutex_);  // same snapshot as admit / complete_current
+        return {in_use.load(), tasks_.size()};
     }
 private:
     mutable std::mutex mutex_;
@@ -235,6 +240,7 @@ public:
     bool cancel_request(const std::string& request_id);
     
     // Statistics
+    auto accelerator_status() const { return npu_request_coordinator_.status(g_npu_in_use); }
     size_t get_active_connections() const { return active_connections_.load(); }
     size_t get_active_requests() const { 
         std::lock_guard<std::mutex> lock(active_requests_mutex_);
@@ -284,9 +290,13 @@ public:
     ~HttpSession();
     void start(bool cors);
     void write_streaming_response(const json& data, bool is_final);
+    void abort_open_stream(flm::error_model::Protocol proto, const flm::error_model::ErrorValue& err);
     void close_connection();
     void write_response_from_callback();
     void set_cancellation_token(std::shared_ptr<CancellationToken> token);
+    bool is_streaming() const noexcept { return is_streaming_.load(); }
+    bool stream_finished() const noexcept { return stream_finished_.load(); }
+    bool try_begin_response() noexcept { return !is_streaming_.load() && !response_started_.exchange(true); }
 private:
     void read_request(bool cors);
     void handle_request(bool cors);
@@ -307,7 +317,11 @@ private:
     ///@brief server
     WebServer& server_;
     ///@brief is streaming
-    bool is_streaming_;
+    std::atomic<bool> is_streaming_{false};
+    ///@brief whether streaming has already terminated (0-length chunk sent or write failed)
+    std::atomic<bool> stream_finished_{false};
+    ///@brief whether a non-streaming response has already been claimed for writing
+    std::atomic<bool> response_started_{false};
     ///@brief stream buffer
     std::shared_ptr<streaming_buf> stream_buf_;
     std::shared_ptr<CancellationToken> cancellation_token_;

@@ -117,8 +117,8 @@ struct chat_meta_info_t {
 	/// \brief Why insert() returned false, for the reply to the client; empty when it did not say
 	/// \note A cancelled prefill leaves it empty: stop_reason (CANCEL_DETECTED) tells that case.
 	std::string error_message;
-	/// \brief HTTP status that goes with error_message: 400 when the request is at fault, 500 otherwise
-	int error_code = 400;
+	/// \brief HTTP status that goes with error_message: 0 when unspecified (400 if error_message is set, 500 if empty), else explicit 4xx/5xx
+	int error_code = 0;
 
 	chat_meta_info_t() : max_prefill_len(0), prompt_tokens(0), cached_prompt_tokens(0), generated_tokens(0), total_duration(0), load_duration(0), prefill_duration(0), decoding_duration(0), stop_reason(EOT_DETECTED), restore_allowed(false) {}
 };
@@ -160,14 +160,22 @@ using json = nlohmann::ordered_json;
 class ModelRequestError final : public std::runtime_error {
 public:
 	/// \param type the OpenAI error type: "model_error", or "invalid_request_error" when the request itself is at fault
-	ModelRequestError(int http_code, bool session_cleared, std::string message, std::string type = "model_error");
-	int http_code() const noexcept;
-	bool session_cleared() const noexcept;
-	const std::string& type() const noexcept;
+	ModelRequestError(int http_code, bool session_cleared, std::string message,
+	                  std::string type = "model_error", std::string param = {})
+	    : std::runtime_error(std::move(message)),
+	      http_code_(http_code),
+	      session_cleared_(session_cleared),
+	      type_(std::move(type)),
+	      param_(std::move(param)) {}
+	int http_code() const noexcept { return http_code_; }
+	bool session_cleared() const noexcept { return session_cleared_; }
+	const std::string& type() const noexcept { return type_; }
+	const std::string& param() const noexcept { return param_; }
 private:
 	int http_code_;
 	bool session_cleared_;
 	std::string type_;
+	std::string param_;
 };
 
 class AutoModel {

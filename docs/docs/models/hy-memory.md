@@ -39,6 +39,6 @@ flm serve hy-memory:30b-a3b
 }
 ```
 
-The chat template reads `reasoning_effort` (`no_think`, `low` or `high`; default `no_think`). Images and audio are ignored: the model is text only.
+The chat template reads `reasoning_effort` (`no_think`, `low` or `high`; default `no_think`). A request may send `no_think` or any of the seven OpenAI levels: `none` is `no_think`, `minimal` and `low` are `low`, `medium`, `high`, `xhigh` and `max` are `high` (see [reasoning and tools](../instructions/server/reasoning_and_tools.md)). Images and audio are ignored: the model is text only.
 
 ⚠️ The prompt is prefilled at about 200 tokens/s, so a full 16k-token prompt takes over a minute to its first token. Keep memory-writer prompts short, or reuse a long shared system prompt through the prefix cache.

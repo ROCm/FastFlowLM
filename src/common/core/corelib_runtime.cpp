@@ -1,6 +1,9 @@
 #include "core/corelib_runtime.hpp"
 
+#include <cstdlib>
+#include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace flm::corelib {
@@ -29,8 +32,8 @@ bool shutdown_execution_lock_held = false;
 #endif
 }
 
-CorelibRuntime::CorelibRuntime(std::shared_ptr<CorelibApi> api)
-    : api_(std::move(api)) {}
+CorelibRuntime::CorelibRuntime(std::shared_ptr<CorelibApi> api, bool npu_direct)
+    : api_(std::move(api)), npu_direct_(npu_direct) {}
 
 CorelibRuntime::~CorelibRuntime() {
 #if defined(FLM_CORELIB_TESTING)
@@ -55,7 +58,22 @@ std::shared_ptr<CorelibRuntime> CorelibRuntime::CreateReady(
         throw std::runtime_error(std::string("corelib has no usable NPU (") +
                                  (name ? name : "none") + ")");
     }
-    return std::shared_ptr<CorelibRuntime>(new CorelibRuntime(std::move(api)));
+    // AIEM's default is a corelib built with --npu-direct. Without it, or under
+    // RYZENAI_CORELIB_NPU_DIRECT=0, the models still run, on DD's kernels alone.
+    // has_feature answers for the build alone: corelib reads the variable as
+    // each stream is created, and runs none there under "0".
+    const bool built = functions.has_feature(ryzenai_corelib_feature_npu_direct);
+    const char* setting = std::getenv("RYZENAI_CORELIB_NPU_DIRECT");
+    const bool disabled = setting && std::string_view(setting) == "0";
+    if (!built || disabled) {
+        std::cerr << "[FLM]  WARNING: corelib runs without NPU direct ("
+                  << (built ? "RYZENAI_CORELIB_NPU_DIRECT=0"
+                            : "a library built without build.py --npu-direct")
+                  << "): attention runs on DD's kernels, slower on long prompts"
+                  << std::endl;
+    }
+    return std::shared_ptr<CorelibRuntime>(
+        new CorelibRuntime(std::move(api), built && !disabled));
 }
 
 std::shared_ptr<CorelibRuntime> CorelibRuntime::GetOrCreate(
@@ -132,6 +150,10 @@ std::unique_lock<std::mutex> CorelibRuntime::AcquireExecution() {
 
 const std::shared_ptr<CorelibApi>& CorelibRuntime::api() const noexcept {
     return api_;
+}
+
+bool CorelibRuntime::npu_direct() const noexcept {
+    return npu_direct_;
 }
 
 const std::filesystem::path& CorelibRuntime::loaded_library_path() const noexcept {

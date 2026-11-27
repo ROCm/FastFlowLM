@@ -46,6 +46,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm check llama3.2:1b" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --ctx-len 8192" << std::endl;
     std::cout << "\tflm run phi4-mini-it:4b --backend flm_npu" << std::endl;
+    std::cout << "\tflm serve qwen3.6-moe-core:35b-a3b --kv-cache-bits 8" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --prefill-chunk-len 8192" << std::endl;
     std::cout << "\tflm serve qwen3.5:2b --prefix-slots 16 --prefix-cache-mb 4096" << std::endl;
     std::cout << "\tflm serve qwen3.5:2b --prefix-min-gain 256" << std::endl;
@@ -55,6 +56,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm serve llama3.2:1b --cors 0" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --cors-origins \"http://nas:3000\"" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --asr whisper-v3:turbo" << std::endl;
+    std::cout << "\tflm serve --model-dir C:\\models\\Qwen3.8-27B --family qwen3.5 --ctx-len 32768" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --embed embed-gemma:300m" << std::endl;
     std::cout << "\tflm serve -a whisper-v3:turbo" << std::endl;
     std::cout << "\tflm serve -e embed-gemma:300m" << std::endl;
@@ -93,6 +95,8 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Set the server address (for serve command)")
             ("port,p", po::value<int>(&parsed_args.port)->default_value(-1), 
              "Set the server port number (for serve command)")
+            ("dry-run", po::bool_switch(&parsed_args.dry_run),
+             "Preview pull offline; bytes exclude retries, protocol overhead and peak disk usage")
             ("force", po::bool_switch(&parsed_args.force_redownload),
              "Force re-download even if model exists (for pull command)")
             ("modelscope", po::value<bool>(&parsed_args.modelscope)->default_value(false)->implicit_value(true),
@@ -107,10 +111,17 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Set context length")
             ("backend", po::value<std::string>(&parsed_args.backend)->default_value(""),
              "Execution backend to run the model on (default: the model's own). Overrides FLM_BACKEND")
+            ("kv-cache-bits", po::value<int>(&parsed_args.kv_cache_bits)->default_value(0),
+             "Core backend KV cache: 8 (8-bit, AIE4 with NPU direct) or 16 (BF16); 0: FLM_KV_CACHE_BITS, else 16")
             ("model-extension",
              po::value<std::vector<std::string>>(
                  &parsed_args.model_extensions)->composing(),
              "Load a model-extension manifest (repeatable)")
+            ("model-dir", po::value<std::string>(&parsed_args.model_dir)->default_value(""),
+             "Run the model package in this folder instead of a catalog model; needs --family and no model tag "
+             "(for run and serve). The folder is read in place: nothing is downloaded, verified or deleted")
+            ("family", po::value<std::string>(&parsed_args.family)->default_value(""),
+             "With --model-dir: the model family that runs the package, e.g. qwen3.5")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),
@@ -187,11 +198,23 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
         resolve_model_arg(asr_arg, parsed_args.asr, parsed_args.asr_tag);
         resolve_model_arg(embed_arg, parsed_args.embed, parsed_args.embed_tag);
 
+        if (parsed_args.kv_cache_bits != 0 && parsed_args.kv_cache_bits != 8 &&
+            parsed_args.kv_cache_bits != 16) {
+            std::cerr << "Error: --kv-cache-bits is " << parsed_args.kv_cache_bits
+                      << "; the KV cache bits are 8 or 16" << std::endl;
+            return false;
+        }
+
         // Help has highest priority
         if (vm.count("help")) {
             print_help(general);
             parsed_args.command = "help";
             return true;
+        }
+
+        if (parsed_args.dry_run && (parsed_args.command != "pull" || vm.count("version"))) {
+            std::cerr << "Error: --dry-run is only supported with pull" << std::endl;
+            return false;
         }
 
         if (vm.count("version")) {
@@ -263,6 +286,23 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
             parsed_args.model_tag = vm["model_tag"].as<std::string>();
         }
 
+        // --model-dir names the model, so it replaces the tag instead of adding to it
+        if (!parsed_args.model_dir.empty() || !parsed_args.family.empty()) {
+            if (parsed_args.command != "serve" && parsed_args.command != "run") {
+                std::cerr << "Error: --model-dir and --family are only supported with the run and serve commands!" << std::endl;
+                return false;
+            }
+            if (parsed_args.model_dir.empty() || parsed_args.family.empty()) {
+                std::cerr << "Error: --model-dir and --family go together: "
+                             "flm " << parsed_args.command << " --model-dir <folder> --family <family>" << std::endl;
+                return false;
+            }
+            if (vm.count("model_tag")) {
+                std::cerr << "Error: --model-dir replaces the model tag; give one or the other, not both" << std::endl;
+                return false;
+            }
+        }
+
 
         // if (vm.count("modelscope")) {
         //     parsed_args.modelscope = vm["modelscope"].as<bool>();
@@ -284,7 +324,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
 
         // Validate command-specific requirements
         if (parsed_args.command == "run" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check") {
-            if (parsed_args.model_tag.empty()) {
+            if (parsed_args.model_tag.empty() || (parsed_args.dry_run && !vm.count("model_tag"))) {
                 std::cerr << "Error: Model tag is required for command '" << parsed_args.command << "'" << std::endl;
                 return false;
             }

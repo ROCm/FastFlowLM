@@ -52,12 +52,14 @@ public:
     bool configure_parameter(std::string parameter_name, const std::any& value) override {
         if (parameter_name == "reasoning_effort") {
             try {
-                this->reasoning_effort = std::any_cast<std::string>(value);
-                if (this->reasoning_effort == "high" || this->reasoning_effort == "medium" || this->reasoning_effort == "low")
+                const std::string effort = std::any_cast<std::string>(value);
+                if (effort == "high" || effort == "medium" || effort == "low") {
+                    this->reasoning_effort = effort;
                     this->extra_context["reasoning_effort"] = this->reasoning_effort;
-                else
-                    header_print("WARNING", "Reasoning effort must be 'low', 'medium' or 'high'!");
-                return true;
+                    return true;
+                }
+                header_print("WARNING", "Reasoning effort must be 'low', 'medium' or 'high'!");
+                return false;
             }
             catch (const std::bad_any_cast&) {
                 return false;

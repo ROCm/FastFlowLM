@@ -7,6 +7,7 @@
 ///       the Chat Completions response is changed on purpose. No NPU needed.
 #include "chat_core.hpp"
 #include "protocol_openai_chat.hpp"
+#include "protocol_responses.hpp"
 
 #include <cstdio>
 #include <fstream>
@@ -396,9 +397,293 @@ int main(int argc, char* argv[]) {
         }
         failures += check("model error that kept the conversation",
                           openai_error_json({503, "model_error", "busy", "", false}).dump(),
-                          R"({"error":{"message":"busy","type":"model_error","code":503,"session_cleared":false}})");
+                          R"({"error":{"message":"busy","type":"service_unavailable_error","param":null,"code":503,"session_cleared":false}})");
+        {
+            // Invalid UTF-8 bytes in streamed delta must replace cleanly instead of throwing type_error(316).
+            std::string raw_delta_out;
+            openai_chat_sink sink([](const json&) {},
+                                  [&](const json& d, bool) { raw_delta_out += d.get<std::string>(); }, false);
+            sink.on_begin({"m", true});
+            sink.on_start({});
+            chat_msg_delta bad_utf8;
+            bad_utf8.content = std::string("ok\xFF");
+            sink.on_delta(bad_utf8);
+            if (raw_delta_out.find("ok\xEF\xBF\xBD") == std::string::npos) {
+                std::printf("  FAIL invalid UTF-8 delta replacement: %s\n", raw_delta_out.c_str());
+                failures++;
+            }
+        }
         failures += error_routing();
         failures += flush_hook();
+
+        // Feed the same ordered text and tool fragments to the streaming sink, then
+        // compare the terminal object with the one-shot output (IDs vary per request).
+        {
+            json request = {{"model","m"},{"stream",true}}, final;
+            std::vector<json> frames;
+            int last_count = 0;
+            auto stream = [&](const json& raw, bool last) {
+                const auto wire = raw.get<std::string>();
+                const auto start = wire.find("\ndata: ");
+                if (start == std::string::npos) throw std::runtime_error("missing SSE data");
+                auto e = json::parse(wire.substr(start + 7));
+                if (wire.substr(0, start) != "event: " + e.at("type").get<std::string>() ||
+                    e.at("sequence_number") != frames.size()) throw std::runtime_error("bad SSE envelope");
+                frames.push_back(std::move(e));
+                if (last) ++last_count;
+            };
+            chat_msg m;
+            m.reasoning = "why"; m.content = "answer"; m.tool_calls = {{"call_A","read","{\"x\":1}"}};
+            chat_turn_end end; end.message = &m; end.finish = chat_finish::TOOL_CALLS;
+            flm::responses::sink streamed(request, [&](const json& j) { final = j; }, stream);
+            auto generate = [&](flm::responses::sink& target) {
+                target.on_begin({"m",true}); target.on_start({});
+                chat_msg_delta d; d.reasoning = m.reasoning; target.on_delta(d);
+                d = {}; d.content = m.content; target.on_delta(d);
+                d = {}; d.tool_index = 0; d.tool_id = "call_A"; d.tool_name = "read"; d.tool_arguments = "{\"x\":";
+                target.on_delta(d);
+                d = {}; d.tool_index = 0; d.tool_arguments = "1}"; target.on_delta(d);
+                d = {}; d.content = "after call"; target.on_delta(d);
+                target.on_end(end);
+            };
+            generate(streamed); streamed.on_error({}); // no second terminal frame
+            auto items = frames.back().at("response").at("output");
+            failures += check("responses terminal", frames.back()["type"].dump(), "\"response.completed\"");
+            failures += check("one final frame", std::to_string(last_count), "1");
+            // Reasoning, text and a call in the order the model wrote them; each item is
+            // closed only at the end, so a call cannot run before the turn is known to finish.
+            std::string types;
+            for (const auto& frame : frames) types += frame.at("type").get<std::string>().substr(9) + " ";
+            failures += check("responses event order", types,
+                "created in_progress "
+                "output_item.added reasoning_summary_part.added reasoning_summary_text.delta "
+                "output_item.added content_part.added output_text.delta "
+                "output_item.added function_call_arguments.delta function_call_arguments.delta "
+                "output_item.added content_part.added output_text.delta "
+                "reasoning_summary_text.done reasoning_summary_part.done output_item.done "
+                "output_text.done content_part.done output_item.done "
+                "function_call_arguments.done output_item.done "
+                "output_text.done content_part.done output_item.done completed ");
+            auto first = [&](const std::string& type, size_t skip = 0) {
+                for (const auto& frame : frames)
+                    if (frame["type"] == "response." + type && skip-- == 0) return frame;
+                throw std::runtime_error("no " + type + " event");
+            };
+            auto keys = [](const json& j) {
+                std::string out;
+                for (auto it = j.begin(); it != j.end(); ++it) out += it.key() + ",";
+                return out;
+            };
+            auto without_id = [](json item) { item.erase("id"); return item; };
+            failures += check("reasoning delta shape", keys(first("reasoning_summary_text.delta")),
+                              "item_id,output_index,summary_index,delta,type,sequence_number,");
+            failures += check("reasoning part", first("reasoning_summary_part.added").at("part").dump(),
+                              R"({"type":"summary_text","text":""})");
+            failures += check("reasoning item", without_id(first("output_item.done").at("item")).dump(),
+                              R"({"type":"reasoning","summary":[{"type":"summary_text","text":"why"}],"status":"completed"})");
+            failures += check("text delta shape", keys(first("output_text.delta")),
+                              "item_id,output_index,content_index,delta,logprobs,type,sequence_number,");
+            failures += check("text part", first("content_part.done").at("part").dump(),
+                              R"({"type":"output_text","text":"answer","annotations":[]})");
+            failures += check("call added", without_id(first("output_item.added", 2).at("item")).dump(),
+                              R"({"type":"function_call","name":"read","call_id":"call_A","arguments":"","status":"in_progress"})");
+            failures += check("call delta shape", keys(first("function_call_arguments.delta")),
+                              "item_id,output_index,delta,type,sequence_number,");
+            const auto call_done = first("function_call_arguments.done");
+            failures += check("call done shape", keys(call_done) + call_done.at("arguments").get<std::string>(),
+                              "item_id,output_index,name,arguments,type,sequence_number,{\"x\":1}");
+            failures += check("call item", without_id(first("output_item.done", 2).at("item")).dump(),
+                              R"({"type":"function_call","name":"read","call_id":"call_A","arguments":"{\"x\":1}","status":"completed"})");
+            failures += check("terminal usage shape", keys(frames.back().at("response").at("usage")),
+                              "input_tokens,output_tokens,total_tokens,input_tokens_details,output_tokens_details,");
+            std::string arguments;
+            for (const auto& frame : frames) {
+                if (frame["type"] == "response.function_call_arguments.delta") {
+                    const auto i = frame.at("output_index").get<size_t>();
+                    failures += check("stable tool item",frame.at("item_id").dump(),items.at(i)["id"].dump());
+                    arguments += frame.at("delta").get<std::string>();
+                }
+            }
+            failures += check("reconstructed arguments", arguments, m.tool_calls[0].arguments);
+            json nonstream = {{"model","m"}};
+            flm::responses::sink one(nonstream, [&](const json& j) { final = j; }, stream);
+            generate(one);
+            failures += check("text after call", items.back().at("content")[0].at("text").dump(), "\"after call\"");
+            for (auto& it : items) it.erase("id");
+            for (auto& it : final.at("output")) it.erase("id");
+            failures += check("stream/one-shot item parity", items.dump(), final.at("output").dump());
+            for (const bool error : {false, true}) {
+                frames.clear(); last_count = 0;
+                flm::responses::sink partial(request, [&](const json& j) { final = j; }, stream);
+                partial.on_begin({"m",true}); partial.on_start({});
+                chat_msg_delta d; d.content = "partial"; partial.on_delta(d);
+                d = {}; d.tool_index = 0; d.tool_name = "read"; d.tool_id = "call_A";
+                d.tool_arguments = "{\"x\":"; partial.on_delta(d);
+                if (error) partial.on_error({503,"model_error","busy","",true});
+                else { end.finish = chat_finish::LENGTH; partial.on_end(end); }
+                partial.on_error({});
+                failures += check("only one terminal after error/limit", std::to_string(last_count), "1");
+                for (const auto& e : frames)
+                    if (e["type"] == "response.function_call_arguments.done" ||
+                        (e["type"] == "response.output_item.done" && e["item"]["type"] == "function_call"))
+                        throw std::runtime_error("partial function call advertised as done");
+                failures += check("incomplete/failed terminal", frames.back()["type"].get<std::string>(),
+                                  error ? "response.failed" : "response.incomplete");
+                failures += check("partial item",frames.back()["response"]["output"][0]["status"].dump(),"\"incomplete\"");
+            }
+            frames.clear();
+            flm::responses::sink cancelled(request, [&](const json& j) { final = j; }, stream);
+            cancelled.on_begin({"m",true}); end.finish = chat_finish::CANCEL; end.generated = false;
+            cancelled.on_end(end);
+            failures += check("cancel start clean", frames[0]["response"]["error"].dump(), "null");
+            failures += check("cancel start no usage", frames[0]["response"]["usage"].dump(), "null");
+            failures += check("cancel terminal", frames.back()["type"].dump(), "\"response.failed\"");
+        }
+
+        const auto simple = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":"hello","reasoning":{"effort":"low"},"max_output_tokens":42,
+            "text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}
+        })"));
+        failures += check("string input", simple.at("messages").dump(), R"([{"role":"user","content":"hello"}])");
+        failures += check("effort", simple.at("reasoning_effort").dump(), "\"low\"");
+        failures += check("output budget", simple.at("max_completion_tokens").dump(), "42");
+        failures += check("response schema", simple.at("response_format").at("json_schema").dump(),
+                          R"({"name":"answer","schema":{"type":"object"}})");
+        const auto defaults = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":"x","store":null,"temperature":null,"parallel_tool_calls":null,
+            "top_p":null,"max_output_tokens":null,"reasoning":{"effort":null}
+        })"));
+        failures += check("nullable generation controls", defaults.dump(),
+                          R"({"model":"m","stream":true,"messages":[{"role":"user","content":"x"}]})");
+        // null is unset for every optional field, and so is the default of a field FLM cannot
+        // honor; fields clients send by default (include, metadata, ...) are ignored.
+        const auto unset = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":[{"type":null,"role":"user","content":"x"}],"stream":null,"instructions":null,
+            "text":null,"tools":null,"tool_choice":null,"reasoning":null,"previous_response_id":null,
+            "conversation":null,"background":false,"truncation":"disabled","top_logprobs":0,
+            "max_tool_calls":null,"prompt":null,"include":["reasoning.encrypted_content"],"metadata":{},
+            "service_tier":"auto","prompt_cache_key":"k","user":"u","stream_options":null
+        })"));
+        failures += check("null means unset", unset.dump(),
+                          R"({"model":"m","stream":true,"messages":[{"role":"user","content":"x"}]})");
+        const auto unset_parts = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":"x","text":{"format":null,"verbosity":"low"},
+            "tools":[{"type":"function","name":"read","parameters":null}]
+        })"));
+        failures += check("null format and parameters", unset_parts.contains("response_format") ? "format" :
+                          unset_parts.at("tools")[0].at("function").dump(), R"({"name":"read","parameters":null})");
+        {
+            const auto request = json::parse(R"({"model":"m","input":"x","tools":null,"tool_choice":null,
+                "parallel_tool_calls":null})");
+            json out;
+            flm::responses::sink sink(request, [&](const json& j) { out = j; }, [](const json&, bool) {});
+            chat_msg m; chat_turn_end end; end.message = &m;
+            sink.on_begin({"m",true}); sink.on_start({}); sink.on_end(end);
+            failures += check("null echoes the defaults", out.at("tools").dump() + out.at("tool_choice").dump() +
+                              out.at("parallel_tool_calls").dump(), "[]\"auto\"true");
+        }
+        // A field that would change the answer is refused, naming it, before anything streams.
+        for (const auto& [field, value] : std::vector<std::pair<std::string, json>>{
+                 {"previous_response_id", "resp_1"}, {"conversation", "conv_1"}, {"background", true},
+                 {"truncation", "auto"}, {"top_logprobs", 2}, {"max_tool_calls", 1},
+                 {"prompt", json{{"id", "pmpt_1"}}}}) {
+            const json request = {{"model","m"},{"input","x"},{"stream",true},{field,value}};
+            json sent;
+            int frames_sent = 0;
+            flm::responses::sink sink(request, [&](const json& j) { sent = j; },
+                                      [&](const json&, bool) { ++frames_sent; });
+            try {
+                flm::responses::to_chat_request(request);
+            } catch (const flm::responses::request_error& e) { // as handle_openai_responses does
+                sink.on_error({400, "invalid_request_error", e.what(), e.param, std::nullopt});
+            }
+            const auto err = flm::error_model::extract_error(sent);
+            failures += check("refused " + field, err ? std::to_string(err->status) + " " + err->type + " " +
+                              err->param + " " + std::to_string(frames_sent) : "accepted",
+                              "400 invalid_request_error " + field + " 0");
+        }
+
+        // A byte-fallback token can leave invalid UTF-8 in text or arguments: the stream and the
+        // one-shot object (written by the server with dump_json) stay valid JSON, with U+FFFD instead.
+        for (const bool streamed : {true, false}) {
+            const std::string bad = "ok \xff\xfe";
+            const json request = {{"model","m"},{"stream",streamed}};
+            std::string wire;
+            json one;
+            flm::responses::sink sink(request, [&](const json& j) { one = j; },
+                                      [&](const json& raw, bool) { wire += raw.get<std::string>(); });
+            chat_msg m; chat_turn_end end; end.message = &m; end.finish = chat_finish::TOOL_CALLS;
+            sink.on_begin({"m",true}); sink.on_start({});
+            chat_msg_delta d; d.reasoning = bad; sink.on_delta(d);
+            d = {}; d.content = bad; sink.on_delta(d);
+            d = {}; d.tool_index = 0; d.tool_id = "call_A"; d.tool_name = "read";
+            d.tool_arguments = "{\"x\":\"" + bad + "\"}"; sink.on_delta(d);
+            sink.on_end(end);
+            json terminal;
+            if (streamed) {
+                size_t count = 0;
+                for (size_t pos = 0; pos < wire.size(); ++count) {
+                    const auto data = wire.find("\ndata: ", pos), next = wire.find("\n\n", pos);
+                    if (data == std::string::npos || next == std::string::npos) throw std::runtime_error("bad SSE frame");
+                    auto e = json::parse(wire.substr(data + 7, next - data - 7));
+                    if (e.contains("response")) terminal = std::move(e["response"]);
+                    pos = next + 2;
+                }
+                failures += check("utf-8 stream frames", std::to_string(count), "19");
+            } else {
+                bool threw = false;
+                try { (void)one.dump(); } catch (const json::type_error&) { threw = true; }
+                failures += check("plain dump would throw", threw ? "throws" : "no throw", "throws");
+                terminal = json::parse(flm::error_model::dump_json(one));
+            }
+            const auto& output = terminal.at("output");
+            failures += check(std::string("utf-8 replaced, stream=") + (streamed ? "1" : "0"),
+                              output.at(0).at("summary")[0].at("text").get<std::string>() + "|" +
+                              output.at(1).at("content")[0].at("text").get<std::string>() + "|" +
+                              output.at(2).at("arguments").get<std::string>() + "|" + terminal.at("status").get<std::string>(),
+                              "ok \xEF\xBF\xBD\xEF\xBF\xBD|ok \xEF\xBF\xBD\xEF\xBF\xBD|{\"x\":\"ok \xEF\xBF\xBD\xEF\xBF\xBD\"}|completed");
+        }
+        const auto replay = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"why"}]},
+            {"role":"assistant","content":[{"type":"input_text","text":"answer"}]},
+            {"role":"user","content":"next"}]})")).at("messages");
+        failures += check("explicit assistant history", replay[0].dump(),
+                          R"({"role":"assistant","content":"answer","reasoning_content":"why"})");
+        const auto turns = flm::responses::to_chat_request(json::parse(R"({
+            "model":"m","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"r1"}]},
+            {"role":"assistant","content":"first"},{"type":"reasoning","summary":[{"type":"summary_text","text":"r2"}]},
+            {"role":"assistant","content":"second"}]})")).at("messages");
+        failures += check("distinct reasoning turns", turns[0].at("reasoning_content").dump() +
+                          turns[1].at("reasoning_content").dump(), "\"r1\"\"r2\"");
+
+        // Function result IDs, not the order of the results, bind them to calls.
+        const auto history = json::parse(R"({
+            "model":"m", "instructions":"Be brief.", "input":[
+                {"role":"user","content":"Both places?"},
+                {"type":"function_call","name":"weather","call_id":"call_A","arguments":"{\"city\":\"Paris\"}"},
+                {"type":"reasoning","summary":[]},
+                {"type":"function_call","name":"weather","call_id":"call_B","arguments":"{\"city\":\"Rome\"}"},
+                {"type":"function_call_output","call_id":"call_B","output":"rain"},
+                {"type":"function_call_output","call_id":"call_A","output":"sun"}
+            ]})");
+        const auto messages = flm::responses::to_chat_request(history).at("messages");
+        failures += check("instructions", messages.at(0).at("content").get<std::string>(), "Be brief.");
+        failures += check("user input", messages.at(1).at("content").get<std::string>(), "Both places?");
+        std::vector<std::string> calls, results;
+        for (const auto& message : messages) {
+            if (message.contains("tool_calls")) {
+                for (const auto& call : message.at("tool_calls"))
+                    calls.push_back(call.at("id").get<std::string>() + ":" +
+                                    call.at("function").at("arguments").get<std::string>());
+            }
+            if (message.at("role") == "tool")
+                results.push_back(message.at("tool_call_id").get<std::string>() + ":" +
+                                  message.at("content").get<std::string>());
+        }
+        failures += check("parallel calls", json(calls).dump(),
+                          json::array({"call_A:{\"city\":\"Paris\"}", "call_B:{\"city\":\"Rome\"}"}).dump());
+        failures += check("reversed tool outputs", json(results).dump(),
+                          json::array({"call_A:sun", "call_B:rain"}).dump());
     } catch (const std::exception& e) {
         std::printf("  FAIL: %s\n", e.what());
         failures++;

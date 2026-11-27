@@ -49,6 +49,9 @@ public:
     // Download model files if not present
     bool pull_model(const std::string& model_tag, bool use_modelscope = false, bool force_redownload = false);
     
+    // Describe what a pull would fetch, without network requests or cache changes.
+    std::string preview_pull(const std::string& model_tag, bool use_modelscope = false, bool force_redownload = false);
+
     // Get list of missing files for a model
     std::vector<std::string> get_missing_files(const std::string& model_tag);
     
@@ -92,7 +95,7 @@ private:
         const std::string& model_tag, bool modelscope=0, bool force_redownload=false);
 
     // Settle which source a pull of an entry with a preferred one uses
-    void choose_pull_source(const std::string& model_tag, bool use_modelscope, bool force_redownload);
+    void choose_pull_source(const std::string& model_tag, bool use_modelscope, bool force_redownload, bool offline = false);
 
     // bool check_model_compatibility(const std::string& model_tag);
     ModelStatus check_model_compatibility(const std::string& model_tag, bool sub_process_mode=0);

@@ -104,6 +104,38 @@ Set a custom port at launch:
 > ⚠️ `--port` (`-p`) only affects the **current run**; it won’t change the default port.
 
 
+## Read GPU and NPU load
+
+`GET /v1/flm/devices` is an FLM-specific, read-only snapshot. For example:
+
+```shell
+curl http://localhost:52625/v1/flm/devices
+```
+
+`devices` contains a `gpu` and an `npu` entry. Each has `device`, `name` (the adapter's driver description as
+Windows reports it), `utilization_percent`
+(the busiest physical engine across **all** processes), `own_utilization_percent` (the busiest engine
+for this FLM process), and `memory_shared_bytes` and `memory_dedicated_bytes` in use across the adapter.
+For example, GPU utilization of 70% with own utilization of 0% means another application is using the GPU.
+The busiest engines can differ: subtracting the two percentages does not measure other applications' load.
+`system_memory_available_bytes` is available physical RAM, not free VRAM or a guarantee that a model fits.
+
+The first query starts sampling in the background. Poll every 1–5 seconds for live updates; sampling
+pauses after six seconds without a query. After a long idle period, query again a second or two later.
+`sampled_at` is the UTC hardware sample time. A query returns immediately;
+unavailable or expired (>3 s) readings are `null`. Rates need two samples; memory may already be available
+while rates are `null`. Hardware readings require Windows and a supported driver. If the target adapter
+cannot be identified unambiguously, FLM leaves its counters `null` and the server log says why, once. If an engine row is invalid, the
+whole-device maximum is unknown; a valid maximum for this process can still be reported independently.
+
+`server.accelerator_busy` and `server.queued_requests` describe this server **at query time**, including on
+other operating systems. The waiting count excludes the active request. FLM has one shared admission queue;
+polling does not take a place in it.
+
+> 🔒 Like every FLM route, this endpoint has no authentication: anyone who can reach the server can see whether
+> it is busy, how many requests are waiting, and the adapter names and load. The Origin and Host checks below
+> apply. Keep the server on `127.0.0.1` (the default) or restrict access at your proxy if that matters to you.
+
 ## Set Request Queue in Server Mode
 
 Since v0.9.10, FLM adds a request queue in server mode to prevent overload under high traffic.  

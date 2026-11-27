@@ -135,7 +135,7 @@ void Qwen3_5_Omni::load_model(std::string model_path, json model_info, int defau
     config.min_p = 0.0;
     config.temperature = 0.7;
     config.rep_penalty = 1.0;
-    config.freq_penalty = 1.0;
+    config.freq_penalty = 0.0f;
     config.pre_penalty = 1.5f;
     this->set_sampler(config);
 
