@@ -546,12 +546,14 @@
         "QWEN3_5_0_8B",
         "QWEN3_5_2B",
         "QWEN3_5_4B",
+        "QWEN3_5_4B_Q4K",
         "QWEN3_5_9B"
       ],
       "artifacts": [
         "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_0_8B",
         "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_2B",
         "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_4B",
+        "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_4B_Q4K",
         "xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_9B"
       ]
     },

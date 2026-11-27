@@ -263,6 +263,7 @@ columns on each of the two DDR channels.
 | `GateDeltaNet_prefill.xclbin` | `xclbins-Qwen3_5_gate_delta_net_prefill_hostDeltaNetPrefill` | Peano |
 | `layer.xclbin` | `xclbins-Qwen3_5_qwen3_5_decoding_QWEN3_5_4B` | Peano |
 | `lm_head.xclbin` | `xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_4B` | Peano |
+| `lm_head_q4k.xclbin` | `xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_4B_Q4K` | Peano |
 | `mm.xclbin` | `xclbins-dequant_mm_512x512x512` | Peano |
 | `mm_rtm2_glu.xclbin` | `xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512` | Peano |
 | `qwen3_5.switches` | `xclbins-Qwen3_5_prefill_switches` | Peano |
