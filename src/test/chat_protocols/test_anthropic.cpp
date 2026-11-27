@@ -33,6 +33,9 @@ int test_anthropic() {
     bad=input; bad["thinking"]["budget_tokens"]=1024.5; rejected(bad,"thinking.budget_tokens");
     bad=input; bad["max_tokens"]=1024; rejected(bad,"thinking.budget_tokens");
     bad=input; bad["tools"][0]["name"]=""; rejected(bad,"tools[0].name");
+    bad=input; auto img=bad["messages"][0]["content"][0];
+    bad["messages"][0]["content"]=json::array({json{{"type","text"},{"text","before"}},img});
+    rejected(bad,"messages[0].content[1]");
     auto nullable=input;
     for (const char* key : {"temperature","top_p","system","tool_choice","stream","thinking"}) nullable[key]=nullptr;
     check(convert(nullable).thinking_budget==0 && !convert(nullable).chat.contains("tool_choice"),"optional nulls are absent");

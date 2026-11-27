@@ -194,6 +194,9 @@ public:
         std::error_code ec;
         std::filesystem::remove(path_, ec);
     }
+    std::shared_ptr<decode_constraint> constraint(const chat_constraint_request& req) {
+        return engine_->make(spec_, req);
+    }
 
     /// \brief Whether the request's grammar takes the text, without reporting
     bool takes(const chat_constraint_request& request, const std::string& text) {
@@ -229,6 +232,13 @@ chat_constraint_request tools_request(chat_tool_choice choice = chat_tool_choice
 void test_qwen_xml_grammar_takes_template_calls() {
     std::printf("qwen_xml grammar takes every call the template renders\n");
     grammar_fixture grammar;
+    auto forced_request=tools_request(chat_tool_choice::REQUIRED);
+    forced_request.allow_reasoning=true;
+    auto constrained=grammar.constraint(forced_request);
+    constrained->start("");
+    CHECK(!constrained->failed());
+    constrained->accept_forced('!'); // neither a reasoning nor a required tool opener
+    CHECK(constrained->failed());
     const std::vector<std::pair<const char*, json>> calls = {
         {"no arguments", json::array({call("ping", json::object())})},
         {"no parameters schema", json::array({call("now", json::object())})},

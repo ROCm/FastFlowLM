@@ -1,5 +1,6 @@
 """Anthropic Messages acceptance and route-specific errors."""
 import flm_api
+import os
 from flm_api import Api, case, expect
 from test_http_safety import call, cors_mode
 
@@ -17,6 +18,7 @@ def messages_errors(api: Api):
         ("stop_sequences", {"stop_sequences": ["STOP"]}),
         ("tools[0].type", {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}),
         ("messages[0].content[0]", {"messages": [{"role":"user","content":[{"type":"document"}]}]}),
+        ("messages[1].role", {"messages": [{"role":"user","content":"Hello"},{"role":"assistant","content":"Pre"}]}),
     ]:
         reply = post(api, stream=True, **changes)
         expect(reply.status == 400 and reply.body.get("type") == "error" and
@@ -29,6 +31,27 @@ def messages_text(api: Api):
     reply = post(api)
     expect(reply.status == 200 and reply.body["type"] == "message" and
            reply.body["role"] == "assistant" and reply.body["content"], str(reply.body))
+
+
+@case
+def messages_manual_budget(api: Api):
+    """Slow NPU fixture: both requests must use the same prompt and total output limit."""
+    if os.environ.get("FLM_TEST_MESSAGES_BUDGET") != "1":
+        raise flm_api.Skip("set FLM_TEST_MESSAGES_BUDGET=1 on the Qwen3-4B FLM NPU backend")
+    prompt = ("Find the last three digits of 7^777. Work through the modular arithmetic carefully and "
+              "independently verify it with a second method in your reasoning. In your final answer, "
+              "output ONLY the three digits, no explanation or working.")
+    def run(n):
+        reply = post(api, max_tokens=4096, temperature=0, messages=[{"role":"user","content":prompt}],
+                     thinking={"type":"enabled","budget_tokens":n})
+        expect(reply.status==200, f"budget {n} returned {reply.status}")
+        blocks=reply.body["content"]
+        reason="".join(b["thinking"] for b in blocks if b["type"]=="thinking")
+        answer="".join(b["text"] for b in blocks if b["type"]=="text")
+        expect(reason and answer and reply.body["usage"]["output_tokens"]>n, "did not return both stages")
+        return reason
+    low,high=run(1024),run(1536)
+    expect(high.startswith(low) and len(high)>len(low), "the numeric budget did not change the reasoning boundary")
 
 
 @case

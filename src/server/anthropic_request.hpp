@@ -85,6 +85,7 @@ inline json prompt_fields(const json& req, std::string& first_image) {
         }
         if (!c.is_array() || c.empty()) throw request_error(at+".content","expected text or nonempty blocks");
         json parts = json::array(), calls = json::array();
+        bool user_text_seen = false;
         std::string reasoning, answer;
         if (role == "assistant" && !pending.empty()) throw request_error(at,"missing tool results");
         for (size_t j = 0; j < c.size(); ++j) {
@@ -116,8 +117,12 @@ inline json prompt_fields(const json& req, std::string& first_image) {
                 if (!pending.empty()) throw request_error(p,"text cannot precede outstanding tool results or follow a tool call");
                 const auto value = text(b,"text",p);
                 if (role == "assistant") answer += value;
-                else parts.push_back({{"type","text"},{"text",value}});
+                else {
+                    user_text_seen |= !value.empty();
+                    parts.push_back({{"type","text"},{"text",value}});
+                }
             } else if (type == "image" && role == "user") {
+                if (user_text_seen) throw request_error(p,"the local prompt accepts images before the turn's text only");
                 if (first_image.empty()) first_image = p;
                 keys(b,p,{"type","source","cache_control"});
                 if (!pending.empty()) throw request_error(p,"expected tool results first");
@@ -172,6 +177,9 @@ inline generation_request convert(const json& req) {
                  "temperature","top_p","top_k","stop_sequences","metadata","service_tier","cache_control"});
     generation_request out;
     out.chat = prompt_fields(req, out.first_image);
+    if (req.at("messages").back().at("role")=="assistant")
+        throw request_error(at_index("messages",req.at("messages").size()-1)+".role",
+                            "final assistant prefill is not supported");
     auto& c = out.chat;
     c["model"] = text(req,"model","");
     if (c["model"]=="") throw request_error("model","expected a model name");

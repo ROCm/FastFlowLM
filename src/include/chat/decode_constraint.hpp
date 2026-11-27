@@ -37,6 +37,10 @@ public:
 
     /// \brief Undo the last n accepted tokens
     virtual void rollback(int /*n*/) {}
+
+    /// A rejected forced token may desynchronize a stateful grammar. Some
+    /// callers must abort instead of allowing unconstrained generation.
+    virtual bool failed() const { return false; }
 };
 
 /// \brief Bans a fixed set of tokens, e.g. the tool call opener for tool_choice=none

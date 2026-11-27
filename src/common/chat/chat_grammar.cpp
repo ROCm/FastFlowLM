@@ -1057,6 +1057,7 @@ public:
             history_.resize(history_.size() > static_cast<size_t>(n) ? history_.size() - n : 0);
         }
     }
+    bool failed() const override { return failed_; }
 
 private:
     static constexpr int MAX_ROLLBACK = 8;
