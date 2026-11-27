@@ -436,6 +436,44 @@ class model_list {
             return this->rectify_model_tag(entry->at("base_model").get<std::string>());
         }
 
+        /// \brief the folders of the shipped NPU models of one family
+        /// \param family details.family
+        /// \return the entries' "name" (the folder the weights and the xclbins are
+        ///         filed under), each once, local models left out
+        /// \note The NPU kernels are looked up under that name, so a model folder
+        ///       of another name borrows the kernels of one of these.
+        std::vector<std::string> npu_folders_of_family(const std::string& family) const {
+            std::vector<std::string> folders;
+            for (const auto& [model_type, subset] : this->config.at("models").items()) {
+                for (const auto& [size, info] : subset.items()) {
+                    if (info.value("local", false)) continue;
+                    if (info.value(flm::backend::kBackendKey, std::string()) != flm::backend::kFlmBackendId) continue;
+                    if (info.value("details", nlohmann::json::object()).value("family", std::string()) != family) continue;
+                    const std::string name = info.value("name", std::string());
+                    if (!name.empty() && std::find(folders.begin(), folders.end(), name) == folders.end()) {
+                        folders.push_back(name);
+                    }
+                }
+            }
+            return folders;
+        }
+
+        /// \brief name the xclbins folder an NPU model runs on
+        /// \param tag the tag of a model added with add_local_model
+        /// \param folder the folder under xclbins; the model's "xclbin_folder"
+        /// \throws std::runtime_error if the tag is not a local model
+        void set_local_xclbin_folder(const std::string& tag, const std::string& folder) {
+            const std::string rectified = this->rectify_model_tag(tag);
+            const auto colon = rectified.find(':');
+            auto& models = this->config["models"];
+            if (colon == std::string::npos || !models.contains(rectified.substr(0, colon)) ||
+                !models[rectified.substr(0, colon)].contains(rectified.substr(colon + 1)) ||
+                !models[rectified.substr(0, colon)][rectified.substr(colon + 1)].value("local", false)) {
+                throw std::runtime_error("not a local model: " + tag);
+            }
+            models[rectified.substr(0, colon)][rectified.substr(colon + 1)]["xclbin_folder"] = folder;
+        }
+
         /// \brief the tags that name this tag as their base
         /// \param tag the tag of the base model
         std::vector<std::string> get_dependants(const std::string& tag) const {

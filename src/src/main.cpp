@@ -19,6 +19,7 @@
 #include "utils/utils.hpp"
 #include "utils/npu_platform.hpp"
 #include "program_args.hpp"
+#include "AutoModel/local_model_npu.hpp"
 #include "minja/chat-template.hpp"
 #include <cstring>
 #include <iostream>
@@ -729,6 +730,19 @@ static int run_flm(int argc, char* argv[]) {
 
     const bool starts_model = parsed_args.command == "run" || parsed_args.command == "serve" ||
                               parsed_args.command == "bench";
+
+    // An NPU folder runs on the kernels filed under xclbins/<model name>; pick that folder.
+    if (!parsed_args.model_dir.empty()) {
+        try {
+            const std::string note = flm::catalog::select_npu_kernels(
+                availble_models, parsed_args.model_tag, parsed_args.family, parsed_args.xclbin_folder,
+                std::filesystem::path(utils::find_xclbin_path()) / "xclbins");
+            if (!note.empty()) header_print("FLM", note);
+        } catch (const std::exception& error) {
+            header_print("ERROR", "--model-dir: " << error.what());
+            return 1;
+        }
+    }
 
     // Set process priority to high for better performance
 #ifdef _WIN32

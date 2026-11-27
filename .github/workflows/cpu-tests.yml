@@ -291,6 +291,22 @@ jobs:
           cmake --build build-log-privacy -j"$(nproc)"
           ctest --test-dir build-log-privacy --output-on-failure
 
+  # Local NPU model folders (--model-dir/--family): the catalog entry built from an NPU package folder, the kernels
+  # folder it runs on, the refusal messages, and model_list taking the entry. CPU only; the real-package check is
+  # opt-in by env.
+  local-model-npu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the local NPU model test
+        run: |
+          cmake -S src/test/local_model_npu -B build-local-model-npu -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-local-model-npu -j"$(nproc)"
+          ctest --test-dir build-local-model-npu --output-on-failure
+
   # PrefixSlotCache (src/common/prefix_slot_cache.cpp) against a fake engine: which snapshot a prompt resumes from,
   # eviction, and that a snapshot is only reused for the same images (content hashes). CPU only.
   prefix-slot-cache:
