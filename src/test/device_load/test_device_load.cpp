@@ -5,6 +5,7 @@
 #include <array>
 #include <iostream>
 #include <limits>
+#include <string_view>
 
 int main() {
     using namespace device_load;
@@ -13,6 +14,13 @@ int main() {
         single_adapter(std::array{Candidate{true, 1}, Candidate{true, 1}}) ||
         single_adapter(std::array{Candidate{true, 2}}) || single_adapter(std::array{Candidate{true, 0}}) ||
         single_adapter(std::array{Candidate{false, 1}})) return 1;
+    // A system that does not report PhysicalAdapterCount still has one adapter to read.
+    if (single_adapter(std::array{Candidate{false, 1}, Candidate{true, std::nullopt}}) != 1 ||
+        single_adapter(std::array{Candidate{true, std::nullopt}, Candidate{true, 1}})) return 1;
+    const auto reason = [](auto candidates) { return std::string_view(no_adapter_reason(candidates)); };
+    if (reason(std::array{Candidate{false, 1}}) != "no hardware adapter" ||
+        reason(std::array{Candidate{true, 1}, Candidate{true, 1}}) != "several hardware adapters" ||
+        reason(std::array{Candidate{true, 2}}) != "a linked adapter with several physical nodes") return 1;
     if (parse_adapter(L"luid_0x00000000_0xD80BB6BE_phys_0") != gpu ||
         parse_adapter(L"luid_0x00000000_0xD80BB6BE_phys_0suffix") ||
         parse_adapter(L"luid_0x100000000_0xD80BB6BE_phys_0")) return 1;
@@ -32,6 +40,7 @@ int main() {
     if (external != 100 || idle != 0 || usage.get({0, 1234, 0}).total) return 1;
     usage.add(L"pid_7_luid_0x0_0xd80bb6be_phys_1_eng_0_engtype_Copy", 0, false);
     if (usage.get({0, gpu.low, 1}).own || usage.get(gpu).total != 70) return 1;
+    if (!usage.linked(gpu) || usage.linked({1, gpu.low, 0})) return 1;
     // A counter set with no valid value for this adapter does not prove the observer was idle.
     usage.add(L"pid_8_luid_0x0_0x1234_phys_0_eng_0_engtype_Copy", 0, false);
     if (usage.get({0, 0x1234, 0}).own) return 1;

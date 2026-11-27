@@ -16,13 +16,18 @@ namespace device_load {
 struct AdapterId {
     std::uint32_t high, low, physical;
     auto operator<=>(const AdapterId&) const = default;
+    bool same_luid(const AdapterId& o) const { return high == o.high && low == o.low; }
 };
 
 std::optional<AdapterId> parse_adapter(std::wstring_view instance);
 
-struct Candidate { bool hardware; unsigned nodes; };
-/// Index only when exactly one hardware adapter of this kind exists and has one physical node.
+/// nodes is PhysicalAdapterCount, or nullopt where the OS or driver does not report it.
+struct Candidate { bool hardware; std::optional<unsigned> nodes; };
+/// Index only when exactly one hardware adapter of this kind exists and it does not report more than
+/// one physical node. An unreported count is accepted; EngineUsage::linked then catches a second node.
 std::optional<std::size_t> single_adapter(std::span<const Candidate> candidates);
+/// Why single_adapter found nothing, for the log.
+const char* no_adapter_reason(std::span<const Candidate> candidates);
 
 struct Usage { std::optional<double> total, own; };
 
@@ -31,6 +36,8 @@ public:
     explicit EngineUsage(std::uint32_t pid) : pid_(pid) {}
     void add(std::wstring_view instance, double value, bool valid);
     Usage get(AdapterId adapter) const;
+    /// Rows exist for another physical node of the same adapter, i.e. a linked adapter.
+    bool linked(AdapterId adapter) const;
 private:
     struct Sum { double total = 0, own = 0; bool valid = true, own_valid = true, measured = false; };
     std::uint32_t pid_;

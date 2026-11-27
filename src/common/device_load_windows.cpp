@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
@@ -29,7 +30,12 @@ using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
 constexpr auto max_age = 3s;
 
-struct Identity { std::optional<AdapterId> id; std::optional<std::string> name; };
+struct Identity {
+    std::optional<AdapterId> id;
+    std::optional<std::string> name;
+    bool nodes_known = false; // PhysicalAdapterCount was reported (and is 1)
+    const char* missing = "DXCore adapter query failed"; // logged when id is empty
+};
 
 #if __has_include(<dxcore.h>)
 using Microsoft::WRL::ComPtr;
@@ -58,18 +64,20 @@ public:
             bool hardware = false;
             if (FAILED(list->GetAdapter(i, adapter.GetAddressOf())) ||
                 FAILED(adapter->GetProperty(Property::IsHardware, &hardware))) return {};
-            unsigned nodes = 0;
-            constexpr auto physical_count = static_cast<Property>(15); // PhysicalAdapterCount
+            std::optional<unsigned> nodes; // unknown on systems without PhysicalAdapterCount
+            constexpr auto physical_count = static_cast<Property>(15);
             if (hardware && adapter->IsPropertySupported(physical_count) &&
-                FAILED(adapter->GetProperty(physical_count, &nodes))) return {};
+                FAILED(adapter->GetProperty(physical_count, &nodes.emplace()))) return {};
             candidates.push_back({hardware, nodes});
         }
+        candidate.missing = no_adapter_reason(candidates);
         if (const auto index = single_adapter(candidates)) {
             ComPtr<IDXCoreAdapter> adapter;
             LUID luid{};
             if (FAILED(list->GetAdapter(static_cast<unsigned>(*index), adapter.GetAddressOf())) ||
                 FAILED(adapter->GetProperty(Property::InstanceLuid, &luid))) return {};
             candidate.id = AdapterId{static_cast<uint32_t>(luid.HighPart), luid.LowPart, 0};
+            candidate.nodes_known = candidates[*index].nodes.has_value();
             size_t size = 0;
             if (SUCCEEDED(adapter->GetPropertySize(Property::DriverDescription, &size)) && size && size <= 4096) {
                 std::vector<char> name(size + 1);
@@ -98,7 +106,12 @@ public:
     }
 };
 #else
-struct Inventory { std::pair<Identity, Identity> read() const { return {}; } };
+struct Inventory {
+    std::pair<Identity, Identity> read() const {
+        Identity none; none.missing = "built without DXCore";
+        return {none, none};
+    }
+};
 #endif
 
 // The wildcard set can change between sizing the array and reading it. Retry with a new size.
@@ -127,8 +140,20 @@ class Provider {
     PDH_HQUERY query_{};
     std::array<PDH_HCOUNTER, 3> counters_{};
     std::optional<Clock::time_point> previous_;
-    bool reported_missing_ = false;
+    Clock::time_point retry_at_{};
+    Clock::duration backoff_ = 2s;
+    bool reported_missing_ = false, reported_pdh_ = false;
     Inventory inventory_;
+    // Counters that fail to open or collect (no WDDM counters, disabled PDH) are retried 2 s, 4 s, ... 60 s apart.
+    void back_off(Clock::time_point now, const char* call, PDH_STATUS rc) {
+        if (!reported_pdh_) {
+            std::fprintf(stderr, "FLM device telemetry: %s failed (0x%08lX); utilization and adapter memory are null "
+                                 "until it succeeds.\n", call, static_cast<unsigned long>(rc));
+            reported_pdh_ = true;
+        }
+        retry_at_ = now + backoff_;
+        backoff_ = std::min<Clock::duration>(backoff_ * 2, 60s);
+    }
 public:
     ~Provider() {
         if (query_) PdhCloseQuery(query_);
@@ -145,38 +170,55 @@ public:
         const auto [gpu, npu] = inventory_.read();
         s.gpu.name = gpu.name; s.npu.name = npu.name;
         if ((!gpu.id || !npu.id) && !reported_missing_) {
-            std::fprintf(stderr, "FLM device telemetry: no unambiguous %s adapter; unavailable readings are null.\n",
-                         !gpu.id && !npu.id ? "GPU or NPU" : !gpu.id ? "GPU" : "NPU");
+            for (const auto& [kind, identity] : {std::pair{"GPU", &gpu}, std::pair{"NPU", &npu}})
+                if (!identity->id)
+                    std::fprintf(stderr, "FLM device telemetry: %s readings are null: %s.\n", kind, identity->missing);
             reported_missing_ = true;
         }
         if (!gpu.id && !npu.id) return s;
-        if (!query_ && PdhOpenQueryW(nullptr, 0, &query_) != ERROR_SUCCESS) return s;
+        const auto now = Clock::now();
+        if (now < retry_at_) return s;
+        if (!query_) {
+            if (const auto rc = PdhOpenQueryW(nullptr, 0, &query_); rc != ERROR_SUCCESS) {
+                query_ = nullptr;
+                back_off(now, "PdhOpenQuery", rc);
+                return s;
+            }
+        }
         constexpr const wchar_t* paths[] = {LR"(\GPU Engine(*)\Utilization Percentage)",
             LR"(\GPU Adapter Memory(*)\Shared Usage)", LR"(\GPU Adapter Memory(*)\Dedicated Usage)"};
         for (size_t i = 0; i < counters_.size(); ++i)
             if (!counters_[i]) PdhAddEnglishCounterW(query_, paths[i], 0, &counters_[i]);
-        const auto now = Clock::now();
-        if (PdhCollectQueryData(query_) != ERROR_SUCCESS) {
+        if (const auto rc = PdhCollectQueryData(query_); rc != ERROR_SUCCESS) {
             PdhCloseQuery(query_); query_ = nullptr; counters_ = {}; previous_.reset();
+            back_off(now, "PdhCollectQueryData", rc);
             return s;
         }
+        backoff_ = 2s;
         if (previous_ && now - *previous_ <= max_age) {
             EngineUsage usage(GetCurrentProcessId());
             rows(counters_[0], PDH_FMT_DOUBLE, [&](auto name, const auto& v, bool valid) {
                 usage.add(name, valid ? v.doubleValue : 0, valid);
             });
-            if (gpu.id) s.gpu.usage = usage.get(*gpu.id);
-            if (npu.id) s.npu.usage = usage.get(*npu.id);
+            // Without a reported node count, a second node's rows reveal a linked adapter: report nothing.
+            if (gpu.id && (gpu.nodes_known || !usage.linked(*gpu.id))) s.gpu.usage = usage.get(*gpu.id);
+            if (npu.id && (npu.nodes_known || !usage.linked(*npu.id))) s.npu.usage = usage.get(*npu.id);
         }
         previous_ = now;
+        bool gpu_linked = false, npu_linked = false; // as above: one node's memory would mislead
         for (size_t i = 1; i <= 2; ++i) {
             rows(counters_[i], PDH_FMT_LARGE, [&](auto name, const auto& v, bool valid) {
                 const auto id = parse_adapter(name);
-                if (!id || !valid || v.largeValue < 0) return;
+                if (!id) return;
+                if (gpu.id && !gpu.nodes_known && id->same_luid(*gpu.id) && id != gpu.id) gpu_linked = true;
+                if (npu.id && !npu.nodes_known && id->same_luid(*npu.id) && id != npu.id) npu_linked = true;
+                if (!valid || v.largeValue < 0) return;
                 auto* d = id == gpu.id ? &s.gpu : id == npu.id ? &s.npu : nullptr;
                 if (d) (i == 1 ? d->shared : d->dedicated) = static_cast<uint64_t>(v.largeValue);
             });
         }
+        for (auto [linked, d] : {std::pair{gpu_linked, &s.gpu}, std::pair{npu_linked, &s.npu}})
+            if (linked) { d->shared.reset(); d->dedicated.reset(); }
         return s;
     }
 };
