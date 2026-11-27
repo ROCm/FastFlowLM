@@ -733,8 +733,7 @@ RestHandler::ChatModel* RestHandler::ensure_model_loaded(const std::string& mode
     const auto& requested_backend = request_backend.empty() ? backend : request_backend;
     try {
         auto plan = resolve_model_load(supported_models.rectify_model_tag(model_tag), supported_models, requested_backend);
-        auto slot = [&] { return static_cast<std::size_t>(max_loaded_models == 2 &&
-            flm::backend::device_for_backend(plan.selection.backend) == "gpu"); };
+        auto slot = [&] { return flm::residency::slot_for(max_loaded_models, flm::backend::device_for_backend(plan.selection.backend)); };
         auto hit = [&]() -> ChatModel* {
             auto index = slot();
             auto* existing = chat_models[index].get();
@@ -764,51 +763,63 @@ RestHandler::ChatModel* RestHandler::ensure_model_loaded(const std::string& mode
         const int chunk = prefill_chunk_len_arg != -1 ? prefill_chunk_len_arg : plan.info.at("max_prefill_len").get<int>();
 
         const auto index = slot(), peer = 1 - index;
+        auto& registry = flm::frontend::FrontendRegistry::instance();
+        auto provider = plan.info.value("frontend_provider", std::string());
         std::uint64_t peak = 0;
-        if (max_loaded_models == 2 && ctx_length <= plan.info.value("default_context_length", 0) &&
-            prefix_slots == -1 && prefix_cache_mb == -1 && prefill_chunk_len_arg == -1 &&
-            plan.selection.provider == flm::backend::kBuiltinProviderId && plan.info.contains("residency_peak_mib")) {
-            const auto& estimates = plan.info.at("residency_peak_mib");
-            auto it = estimates.find(plan.selection.backend);
-            if (it != estimates.end() && it->is_number_unsigned()) peak = it->get<std::uint64_t>();
+        if (max_loaded_models == 2) {
+            provider = registry.generation_provider(plan.family, provider);
+            if (provider == flm::backend::kBuiltinProviderId && plan.selection.provider == flm::backend::kBuiltinProviderId &&
+                !flm::backend::device_for_backend(plan.selection.backend).empty() &&
+                ctx_length <= plan.info.value("default_context_length", 0) && prefix_slots == -1 &&
+                prefix_cache_mb == -1 && prefix_min_gain == -1 && prefill_chunk_len_arg == -1) {
+                const auto estimates = plan.info.find("residency_peak_mib");
+                if (estimates != plan.info.end() && estimates->is_object()) {
+                    const auto it = estimates->find(plan.selection.backend);
+                    if (it != estimates->end() && it->is_number_unsigned()) peak = it->get<std::uint64_t>();
+                }
+            }
         }
-        // Accelerator admission serializes all chat users, including abort/cleanup. Retire the
-        // same-device engine first; do not reserve space for three engines during replacement.
+        // Parse catalog fields before any eviction. Publish nothing until the engine is ready.
+        auto record = std::make_unique<ChatModel>();
+        record->tag = plan.tag;
+        record->selection = plan.selection;
+        record->prefill_chunk = chunk;
+        record->positional_tool_results = plan.info.value("positional_tool_results", false);
+        record->active_tool_reasoning = plan.info.value("active_tool_reasoning", false);
+        record->ps_entry = {{"name", plan.tag}, {"model", plan.tag}, {"size", plan.info["size"]}, {"details", plan.info.at("details")}};
+
+        // All accelerator turns are serialized. Release the target first, then sample:
+        // replacing a model must not require enough memory for three engines.
         evict_chat(index);
-        if (chat_models[peer] && !flm::residency::can_keep_peer(available_host_mib(), peak, chat_models[peer]->calibrated))
-            evict_chat(peer);
+        if (chat_models[peer]) {
+            const auto available = available_host_mib();
+            if (const auto* reason = flm::residency::fallback_reason(available, peak, chat_models[peer]->calibrated)) {
+                header_print("INFO", "Unloading idle " << chat_models[peer]->tag << ": " << reason);
+                evict_chat(peer);
+            }
+        }
         auto load = [&] {
-            auto record = std::make_unique<ChatModel>();
-            auto& engine = record->engine;
-            engine = flm::frontend::FrontendRegistry::instance().create(plan.family, device, plan.info.value("frontend_provider", ""));
+            auto engine = registry.create(plan.family, device, provider);
             engine->set_server_mode(true);
             engine->configure_parameter("img_pre_resize", img_pre_resize);
             engine->set_prefix_limits(prefix_cache_mb, prefix_slots, prefix_min_gain);
             const auto start = std::chrono::steady_clock::now();
             engine->load_model(path, plan.info, ctx_length, preemption, plan.selection.backend);
-            engine->save_request_settings();
             report_load_time(start);
-            const auto id = engine->backend_id();
-            record->tag = plan.tag;
-            record->selection = plan.selection;
-            record->calibrated = peak != 0 && id == plan.selection.backend;
-            record->prefill_chunk = chunk;
-            record->positional_tool_results = plan.info.value("positional_tool_results", false) && id == flm::backend::kOgaHipepBackendId;
-            record->active_tool_reasoning = plan.info.value("active_tool_reasoning", false)
-                && dynamic_cast<Qwen3_5VL*>(engine.get()) && id == flm::backend::kOgaHipepBackendId;
-            json details = plan.info.at("details");
-            if (!id.empty()) details["backend"] = id;
-            if (auto d = flm::backend::device_for_backend(id); !d.empty()) details["device"] = d;
-            record->ps_entry = {{"name", plan.tag}, {"model", plan.tag}, {"size", plan.info["size"]}, {"details", std::move(details)}};
-            return record;
+            return engine;
         };
-        std::unique_ptr<ChatModel> record;
-        try { record = load(); }
-        catch (const std::bad_alloc&) {
-            if (!chat_models[peer]) throw;
+        record->engine = flm::residency::load_with_peer_retry(load, !!chat_models[peer], [&] {
+            header_print("INFO", "Unloading idle " << chat_models[peer]->tag << ": allocation failed; retrying once");
             evict_chat(peer);
-            record = load();
-        }
+        });
+        record->engine->save_request_settings();
+        const auto id = record->engine->backend_id();
+        record->calibrated = peak && id == plan.selection.backend;
+        record->positional_tool_results = record->positional_tool_results && id == flm::backend::kOgaHipepBackendId;
+        record->active_tool_reasoning = record->active_tool_reasoning && id == flm::backend::kOgaHipepBackendId && dynamic_cast<Qwen3_5VL*>(record->engine.get());
+        auto& details = record->ps_entry["details"];
+        if (!id.empty()) details["backend"] = id;
+        if (auto d = flm::backend::device_for_backend(id); !d.empty()) details["device"] = d;
         std::lock_guard lock(model_info_mutex);
         last_chat = index;
         chat_models[index] = std::move(record);
@@ -865,6 +876,8 @@ void RestHandler::ensure_asr_model_loaded(const std::string& model_tag) {
             engine->save_request_settings();
             this->asr_sidecar_engine = std::move(engine);
             this->asr_sidecar_tag = tag;
+            if (max_loaded_models == 2)
+                asr_sidecar_prefill_chunk = prefill_chunk_len_arg != -1 ? prefill_chunk_len_arg : info.at("max_prefill_len").get<int>();
         }
         catch (const std::exception& e) {
             header_print("ERROR", "Failed to load ASR model: " + std::string(e.what()));
@@ -2060,6 +2073,7 @@ void RestHandler::handle_openai_audio_transcriptions(const json& request,
         // --asr r2t2:...: the sidecar answers every transcription, so the chat model stays loaded
         if (this->asr_sidecar_engine) {
             self_asr = dynamic_cast<Qwen3_ASR*>(this->asr_sidecar_engine.get());
+            if (max_loaded_models == 2) asr_chunk = asr_sidecar_prefill_chunk;
         } else if (!model.empty() && supported_models.is_model_supported(supported_models.rectify_model_tag(model))) {
             auto [asr_tag, asr_info] = this->supported_models.get_model_info(model);
             if (asr_info.contains("details") && asr_info["details"].value("family", "") == "r2t2") {

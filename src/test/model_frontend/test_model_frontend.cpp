@@ -183,6 +183,8 @@ private:
 void test_frontend_provider_selection() {
     FrontendRegistry registry;
     registry.register_frontend("shared", [](void*) { return MarkerFrontend(1); }, "first");
+    TEST_REQUIRE(registry.generation_provider("shared", "") == "first");
+    RequireThrows([&] { registry.generation_provider("shared", "missing"); });
     TEST_REQUIRE(Marker(registry.create("shared", nullptr)) == 1);
     registry.register_frontend("shared", [](void*) { return MarkerFrontend(2); }, "second");
     RequireContains(RequireThrows([&] { registry.create("shared", nullptr); }), "Ambiguous");

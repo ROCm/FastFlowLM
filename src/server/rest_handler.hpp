@@ -167,6 +167,7 @@ private:
     /// \brief the --asr model when it is an r2t2 (Qwen3-ASR) one: a second engine beside the chat model, used only for transcription
     flm::frontend::FrontendPtr asr_sidecar_engine;
     std::string asr_sidecar_tag;
+    int asr_sidecar_prefill_chunk = -1;
     std::unique_ptr<AutoEmbeddingModel> auto_embedding_engine;
     std::string current_embedding_tag;
     std::mutex embedding_mutex;

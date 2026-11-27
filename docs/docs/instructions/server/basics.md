@@ -27,6 +27,17 @@ package without downloading it. There is no idle timeout or SSD snapshot.
 
 ---
 
+The Windows check uses the smaller of available physical memory and available
+commit. On a 64 GB Ryzen AI Max+ 395, the standalone default-context loads
+reduced available memory by about 5.6 GiB (NPU) and 9.3 GiB (GPU). The 10 and
+16 GiB incoming estimates include room for future conversation slots; the check
+also leaves 4 GiB for the resident's slots and 2 GiB for the host. These are
+estimates, not allocator guarantees. Without a supported host-memory reading
+(including on Linux), the server logs the fallback and switches one model at a
+time. If that cold load fails after memory was freed, the evicted model remains
+installed, not resident. An unrelated failure during an admitted two-model load
+does not cause the server to discard the peer or retry.
+
 ## 🔌 What is a Local Server?
 
 The word “server” can be confusing. It can mean:

@@ -61,6 +61,8 @@ public:
         std::string provider = "builtin");
 
     bool has(const std::string& family) const;
+    /// Resolve a generation provider without constructing a frontend or allocating on a device.
+    std::string generation_provider(const std::string& family, const std::string& provider) const;
     std::unique_ptr<AutoEmbeddingModel> create_embedding(
         const std::string& family, void* device,
         const std::string& provider = "") const;

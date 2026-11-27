@@ -426,6 +426,13 @@ bool FrontendRegistry::has(const std::string& family) const {
     return first != factories_.end() && first->first.family == family;
 }
 
+std::string FrontendRegistry::generation_provider(const std::string& family, const std::string& provider) const {
+    std::lock_guard lock(mutex_);
+    const auto entry = SelectFrontend(factories_, family, provider);
+    if (!entry->second.generation) throw std::runtime_error("Model family '" + family + "' provider does not support generation");
+    return entry->first.provider;
+}
+
 std::unique_ptr<AutoEmbeddingModel> FrontendRegistry::create_embedding(
     const std::string& family, void* device, const std::string& provider) const {
     EmbeddingFactory factory;

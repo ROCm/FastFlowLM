@@ -485,56 +485,20 @@ void TestTheServerGateRejectsNamesThatUsedToBeSubstituted() {
 }
 
 void TestTheServerGatesAnUnknownModelNameBeforeItResolvesIt() {
-    // Structural, for the reason given above: ensure_model_loaded cannot be
-    // linked into this binary. What it pins is that the gate exists inside
-    // that function, that it is the TOLERANT form tested above, and that it
-    // runs BEFORE resolve_model_load -- a gate placed after the resolution would
-    // be decoration.
     const auto source = ReadSource(FLM_REST_HANDLER_SOURCE);
-    // BOUNDED TO THE FUNCTION BODY ON PURPOSE. Searching from the signature
-    // to the end of the file would have found handle_openai_completion's own
-    // is_model_supported at :1468 and reported green over a function with no
-    // gate at all -- which is exactly what the first cut of this test did.
-    const auto body = FunctionBody(
-        source, "bool RestHandler::ensure_model_loaded(");
-    const auto gate = body.find("is_model_supported(");
-    const auto rectify = body.find("rectify_model_tag(");
+    const auto body = FunctionBody(source, "RestHandler::ensure_model_loaded(");
+    const auto gate = body.find("generation_model_error(model_tag)");
+    const auto refusal = body.find("return nullptr;", gate);
     const auto resolve = body.find("resolve_model_load(");
-    TEST_REQUIRE(gate != std::string::npos);
-    TEST_REQUIRE(rectify != std::string::npos);
-    TEST_REQUIRE(resolve != std::string::npos);
-    TEST_REQUIRE(gate < resolve);
-    TEST_REQUIRE(rectify < resolve);
+    TEST_REQUIRE(gate < refusal && refusal < resolve && resolve != std::string::npos);
 }
 
 void TestTheServerGateRefusesTheUnsupportedNameAndNotTheSupportedOne() {
-    // THE POLARITY, WHICH THE TEST ABOVE CANNOT SEE. Everything it checks --
-    // that the three calls are present and in the right order -- stays true
-    // when the `!` is deleted from the condition. That single character
-    // inverts the gate so `flm serve` refuses EVERY model it supports, a
-    // total denial of service strictly worse than the bug C-2 closed, and
-    // review-R4.md measured the result: 44 PASS / 0 FAIL. A structural check
-    // that reads as behavioural is the shape this project keeps finding.
-    //
-    // Three assertions, because polarity is three facts and not one: the
-    // predicate is NEGATED; the negation guards a REFUSAL; and the refusal
-    // happens BEFORE the resolution rather than after it. Swap the sense of
-    // the condition and the first fails; turn the refusal into a log line
-    // and the second fails.
     const auto source = ReadSource(FLM_REST_HANDLER_SOURCE);
-    const auto body = FunctionBody(
-        source, "bool RestHandler::ensure_model_loaded(");
-    const auto negated = body.find("!supported_models.is_model_supported(");
-    const auto refusal = body.find("return false;");
-    const auto resolve = body.find("resolve_model_load(");
-    TEST_REQUIRE(negated != std::string::npos);
-    TEST_REQUIRE(refusal != std::string::npos);
-    TEST_REQUIRE(resolve != std::string::npos);
-    // The FIRST `return false;` in this body is the gate's own -- the others
-    // are the download-incompatible and load-failure paths, both of which
-    // come after resolve_model_load.
-    TEST_REQUIRE(negated < refusal);
-    TEST_REQUIRE(refusal < resolve);
+    const auto body = FunctionBody(source, "RestHandler::generation_model_error(");
+    const auto rectify = body.find("rectify_model_tag(model_tag)");
+    const auto refusal = body.find("if (!supported_models.is_model_supported(tag)) return UnknownModelResponse(");
+    TEST_REQUIRE(rectify < refusal && refusal != std::string::npos);
 }
 
 void TestTheUnsupportedTagBranchDoesNotReturnBeforeTheCatalogResolvesIt() {
