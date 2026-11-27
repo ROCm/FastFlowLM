@@ -59,9 +59,14 @@ inline std::string text_blocks(const json& content, const std::string& p) {
     return result;
 }
 
+inline bool provided(const json& obj, const char* key) {
+    const auto it = obj.find(key);
+    return it != obj.end() && !it->is_null();
+}
+
 inline json prompt_fields(const json& req, std::string& first_image) {
     json result = json::object(), out = json::array();
-    if (req.contains("system")) out.push_back({{"role","system"},{"content",text_blocks(req.at("system"),"system")}});
+    if (provided(req,"system")) out.push_back({{"role","system"},{"content",text_blocks(req.at("system"),"system")}});
     std::set<std::string> seen, pending;
     const auto& messages = member(req,"messages","",json::value_t::array);
     if (messages.empty()) throw request_error("messages","expected at least one turn");
@@ -90,9 +95,9 @@ inline json prompt_fields(const json& req, std::string& first_image) {
                 keys(b,p,{"type","tool_use_id","content","is_error","cache_control"});
                 const auto id = text(b,"tool_use_id",p);
                 if (!parts.empty() || !pending.erase(id)) throw request_error(p+".tool_use_id","late, unknown, or duplicate tool result");
-                if (b.contains("is_error") && member(b,"is_error",p,json::value_t::boolean).get<bool>())
+                if (provided(b,"is_error") && member(b,"is_error",p,json::value_t::boolean).get<bool>())
                     throw request_error(p+".is_error","error results are not representable");
-                out.push_back({{"role","tool"},{"tool_call_id",id},{"content",b.contains("content") ? text_blocks(b["content"],p+".content") : ""}});
+                out.push_back({{"role","tool"},{"tool_call_id",id},{"content",provided(b,"content") ? text_blocks(b["content"],p+".content") : ""}});
             } else if (type == "tool_use" && role == "assistant") {
                 keys(b,p,{"type","id","name","input","cache_control"});
                 const auto id = text(b,"id",p), name = text(b,"name",p);
@@ -123,7 +128,8 @@ inline json prompt_fields(const json& req, std::string& first_image) {
                 const auto mime = text(src,"media_type",sp);
                 if (mime!="image/png" && mime!="image/jpeg" && mime!="image/webp" && mime!="image/gif")
                     throw request_error(sp+".media_type","unsupported image media type");
-                parts.push_back({{"type","image_url"},{"image_url",{{"url","data:"+mime+";base64,"+text(src,"data",sp)}}}});
+                parts.push_back({{"type","image_url"},{"_source_path",sp+".data"},
+                    {"image_url",{{"url","data:"+mime+";base64,"+text(src,"data",sp)}}}});
             } else throw request_error(p+".type","unsupported "+role+" block: "+type);
         }
         if (role == "assistant") {
@@ -142,17 +148,18 @@ inline json prompt_fields(const json& req, std::string& first_image) {
     if (!pending.empty()) throw request_error("messages","missing tool results");
     if (auto e = flm::chat::order_parallel_tool_results(out)) throw request_error("messages",e->message);
     result["messages"] = std::move(out);
-    if (req.contains("tools")) {
+    if (provided(req,"tools")) {
         const auto& tools = member(req,"tools","",json::value_t::array);
         result["tools"] = json::array();
         for (size_t i=0; i<tools.size(); ++i) {
             const auto at = at_index("tools",i);
             const auto& t = tools[i];
-            if (t.contains("type") && t["type"] != "custom") throw request_error(at+".type","only client tools are supported");
+            if (provided(t,"type") && t["type"] != "custom") throw request_error(at+".type","only client tools are supported");
             keys(t,at,{"type","name","description","input_schema","cache_control","eager_input_streaming"});
-            if (t.contains("eager_input_streaming")) member(t,"eager_input_streaming",at,json::value_t::boolean);
+            if (provided(t,"eager_input_streaming")) member(t,"eager_input_streaming",at,json::value_t::boolean);
             json fn = {{"name",text(t,"name",at)},{"parameters",member(t,"input_schema",at,json::value_t::object)}};
-            if (t.contains("description")) fn["description"] = text(t,"description",at);
+            if (fn["name"]=="") throw request_error(at+".name","expected a tool name");
+            if (provided(t,"description")) fn["description"] = text(t,"description",at);
             result["tools"].push_back({{"type","function"},{"function",std::move(fn)}});
         }
     }
@@ -170,15 +177,15 @@ inline generation_request convert(const json& req) {
     if (c["model"]=="") throw request_error("model","expected a model name");
     const int total = integer(req,"max_tokens","",1);
     c["max_tokens"] = total;
-    if (req.contains("stream")) c["stream"] = member(req,"stream","",json::value_t::boolean);
-    for (const char* k : {"temperature","top_p"}) if (req.contains(k)) {
+    if (provided(req,"stream")) c["stream"] = member(req,"stream","",json::value_t::boolean);
+    for (const char* k : {"temperature","top_p"}) if (provided(req,k)) {
         if (!req[k].is_number() || req[k]<0 || req[k]>1) throw request_error(k,"expected a number from 0 to 1");
         c[k] = req[k];
     }
-    if (req.contains("top_k")) c["top_k"] = integer(req,"top_k","",0);
-    if (req.contains("stop_sequences") && !member(req,"stop_sequences","",json::value_t::array).empty())
+    if (provided(req,"top_k")) c["top_k"] = integer(req,"top_k","",0);
+    if (provided(req,"stop_sequences") && !member(req,"stop_sequences","",json::value_t::array).empty())
         throw request_error("stop_sequences","matched stop sequences are not available");
-    if (req.contains("tool_choice")) {
+    if (provided(req,"tool_choice")) {
         const auto& choice = req["tool_choice"];
         const auto mode = text(choice,"type","tool_choice");
         if (mode == "tool") {
@@ -189,15 +196,15 @@ inline generation_request convert(const json& req) {
             if (mode!="auto" && mode!="any" && mode!="none") throw request_error("tool_choice.type","unsupported mode");
             c["tool_choice"] = mode=="any" ? "required" : mode;
         }
-        if (choice.contains("disable_parallel_tool_use"))
+        if (provided(choice,"disable_parallel_tool_use"))
             c["parallel_tool_calls"] = !member(choice,"disable_parallel_tool_use","tool_choice",json::value_t::boolean).get<bool>();
     }
-    if (req.contains("thinking")) {
+    if (provided(req,"thinking")) {
         const auto& t = req["thinking"];
         const auto mode = text(t,"type","thinking");
         if (mode=="enabled") {
             keys(t,"thinking",{"type","budget_tokens","display"});
-            if (t.contains("display")) {
+            if (provided(t,"display")) {
                 const auto mode_display = text(t,"display","thinking");
                 if (mode_display!="summarized" && mode_display!="omitted")
                     throw request_error("thinking.display","expected summarized or omitted");

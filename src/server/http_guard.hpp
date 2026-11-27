@@ -245,13 +245,13 @@ inline constexpr const char* kDefaultAllowHeaders =
 
 /// Echo a preflight's Access-Control-Request-Headers if it is a plain header list, else the
 /// default list. Anything but token characters, commas and spaces is refused (header injection).
-inline std::string allow_headers_for(std::string_view requested) {
+inline std::string allow_headers_for(std::string_view requested, bool messages = false) {
     const std::string r = trim(requested);
-    if (r.empty()) return kDefaultAllowHeaders;
-    for (unsigned char c : r) {
-        if (!(std::isalnum(c) || c == '-' || c == '_' || c == ',' || c == ' ')) return kDefaultAllowHeaders;
-    }
-    return r;
+    if (!r.empty() && std::all_of(r.begin(), r.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '-' || c == '_' || c == ',' || c == ' ';
+    })) return r;
+    return messages ? std::string(kDefaultAllowHeaders) +
+        ", anthropic-version, anthropic-beta, x-api-key, anthropic-dangerous-direct-browser-access" : kDefaultAllowHeaders;
 }
 
 using HeaderList = std::vector<std::pair<std::string, std::string>>;
@@ -271,9 +271,7 @@ inline HeaderList cors_headers(const OriginPolicy& policy, std::string_view orig
         h.emplace_back("Access-Control-Allow-Origin", o);       // well formed: no CR/LF reaches the header
     }
     h.emplace_back("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    h.emplace_back("Access-Control-Allow-Headers", messages && preflight && requested_headers.empty()
-        ? std::string(kDefaultAllowHeaders) + ", anthropic-version, anthropic-beta, x-api-key, anthropic-dangerous-direct-browser-access"
-        : preflight ? allow_headers_for(requested_headers) : std::string(kDefaultAllowHeaders));
+    h.emplace_back("Access-Control-Allow-Headers", preflight ? allow_headers_for(requested_headers,messages) : std::string(kDefaultAllowHeaders));
     if (preflight) h.emplace_back("Access-Control-Max-Age", "600");
     return h;
 }

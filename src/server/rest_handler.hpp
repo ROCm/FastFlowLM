@@ -141,7 +141,8 @@ private:
                                           const std::optional<std::string>& reasoning_effort = std::nullopt);
     /// \brief Run one chat turn, whatever protocol asked for it, and report it to the sink
     void run_chat_turn(const json& request, chat_sink& sink,
-                       std::shared_ptr<CancellationToken> cancellation_token, int thinking_budget = 0);
+                       std::shared_ptr<CancellationToken> cancellation_token, int thinking_budget = 0,
+                       bool use_source_paths = false);
 
 
     flm_rt::device* npu_device_inst;

@@ -224,6 +224,8 @@ void test_cors_headers() {
     CHECK(header(h, "Access-Control-Allow-Origin") == "http://localhost:3000");
     CHECK(header(h, "Vary") == "Origin");
     CHECK(header(h, "Access-Control-Allow-Headers").find("X-Stainless-OS") != std::string::npos);
+    CHECK(allow_headers_for("bad: header",true).find("anthropic-version") != std::string::npos);
+    CHECK(allow_headers_for("bad: header").find("anthropic-version") == std::string::npos);
 
     auto pre = cors_headers(local, "http://localhost:3000", "x-stainless-os, openai-beta, content-type", true);
     CHECK(header(pre, "Access-Control-Allow-Headers") == "x-stainless-os, openai-beta, content-type");

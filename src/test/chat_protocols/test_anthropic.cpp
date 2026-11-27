@@ -32,6 +32,10 @@ int test_anthropic() {
     bad=input; bad["messages"][1]["content"][0]["signature"]="foreign"; rejected(bad,"messages[1].content[0]");
     bad=input; bad["thinking"]["budget_tokens"]=1024.5; rejected(bad,"thinking.budget_tokens");
     bad=input; bad["max_tokens"]=1024; rejected(bad,"thinking.budget_tokens");
+    bad=input; bad["tools"][0]["name"]=""; rejected(bad,"tools[0].name");
+    auto nullable=input;
+    for (const char* key : {"temperature","top_p","system","tool_choice","stream","thinking"}) nullable[key]=nullptr;
+    check(convert(nullable).thinking_budget==0 && !convert(nullable).chat.contains("tool_choice"),"optional nulls are absent");
 
     std::vector<json> events;
     bool last=false;
@@ -43,7 +47,7 @@ int test_anthropic() {
         auto event=json::parse(wire.substr(split+7));
         check(wire.substr(0,split)=="event: "+event.at("type").get<std::string>(),"event name");
         events.push_back(std::move(event)); last=final;
-    });
+    },true);
     s.on_begin({"model",true}); s.on_start({12,5,{}});
     chat_msg_delta d; d.reasoning="thinking"; s.on_delta(d);
     d={}; d.content="text"; s.on_delta(d);
@@ -71,30 +75,46 @@ int test_anthropic() {
     check(abort && abort->starts_with("event: error\ndata: ") && abort->find("[DONE]")==std::string::npos,"transport abort dialect");
     std::vector<std::string> wire;
     sink interrupted([&](const json&){check(false,"HTTP error after stream began");},
-        [&](const json& frame,bool){ wire.push_back(frame.get<std::string>()); });
+        [&](const json& frame,bool){ wire.push_back(frame.get<std::string>()); },true);
     interrupted.on_begin({"m",true}); interrupted.on_start({});
     interrupted.on_error({500,"server_error","failed",{},std::nullopt});
     interrupted.on_end(end); interrupted.on_error({500,"server_error","repeated",{},std::nullopt});
     check(wire.size()==2 && wire.back()==*abort,"one error event, no later success");
     wire.clear();
     sink invalid_tool([&](const json&){check(false,"HTTP body after invalid streamed tool");},
-        [&](const json& frame,bool){wire.push_back(frame.get<std::string>());});
+        [&](const json& frame,bool){wire.push_back(frame.get<std::string>());},true);
     invalid_tool.on_begin({"m",true}); invalid_tool.on_start({});
     d={}; d.tool_index=0; d.tool_id="a"; d.tool_name="f"; d.tool_arguments="[]"; invalid_tool.on_delta(d);
     m.tool_calls.push_back({"a","f","[]"});
     invalid_tool.on_end(end);
     check(wire.back().starts_with("event: error\n") &&
           wire.back().find("message_stop")==std::string::npos,"invalid tool input cannot stream tool_use success");
+    for (bool streaming : {false,true}) for (bool capped : {false,true}) {
+        std::vector<std::string> order; json msg;
+        sink ordered([&](const json& body){msg=body;},[&](const json& frame,bool){
+            const auto w=frame.get<std::string>(); const auto e=json::parse(w.substr(w.find("\ndata: ")+7));
+            if (e["type"]=="content_block_start") order.push_back(e["content_block"]["type"]);
+            if (e["type"]=="message_delta") msg=e["delta"];
+        },streaming);
+        ordered.on_begin({"m",true}); ordered.on_start({});
+        d={}; d.tool_index=0; d.tool_id="a"; d.tool_name="f"; d.tool_arguments="{}"; ordered.on_delta(d);
+        d={}; d.content="after tool"; ordered.on_delta(d);
+        if (capped) { d={}; d.tool_index=1; d.tool_id="b"; d.tool_name="f"; d.tool_arguments="{\"x\":"; ordered.on_delta(d); }
+        auto e=end; e.finish=capped ? chat_finish::LENGTH : chat_finish::TOOL_CALLS; ordered.on_end(e);
+        if (!streaming) for (auto& b : msg.at("content")) order.push_back(b["type"]);
+        check(order==std::vector<std::string>{"tool_use","text"} &&
+              msg.at("stop_reason")==(capped ? "max_tokens" : "tool_use"),"ordered and capped JSON/SSE blocks");
+    }
     for (const char* mode : {"summarized","omitted"}) for (bool streaming : {false,true}) {
         auto req=input; req["thinking"]["display"]=mode;
         auto cfg=convert(req);
         std::string out;
         sink hidden([&](const json& body){out=body.dump();},
-                    [&](const json& frame,bool){out+=frame.get<std::string>();},cfg.show_local_thinking);
+                    [&](const json& frame,bool){out+=frame.get<std::string>();},streaming,cfg.show_local_thinking);
         chat_msg done; done.reasoning="PRIVATE"; done.content="OK";
         chat_turn_end e; e.message=&done;
         hidden.on_begin({"m",streaming}); hidden.on_start({});
-        if (streaming) {
+        {
             d={}; d.reasoning=done.reasoning; hidden.on_delta(d);
             d={}; d.content=done.content; hidden.on_delta(d);
         }

@@ -512,6 +512,7 @@ public:
 	virtual std::string backend_id() const noexcept {
 		return backend_ ? backend_->id() : std::string();
 	}
+	virtual bool supports_manual_thinking_budget() const { return false; }
 
 	/// \brief Get the current context length
 	/// \return the current context length
