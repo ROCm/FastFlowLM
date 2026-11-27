@@ -119,7 +119,7 @@ struct qwen3_5vl_desc {
 
     inline size_t get_kv_cache_size(uint32_t MAX_L) const { return (size_t)MAX_L * (DK + DV); }
     inline size_t get_linear_cache_size() { return (size_t)(conv_kernel_size - 1) * (Linear_DQ + Linear_DK + Linear_DV) * sizeof(bf16) + (size_t)linear_num_v_heads * linear_v_head_dim * linear_qk_head_dim * sizeof(float); }
-    inline size_t get_lm_head_w_size() { return (size_t)vocab_size_padded * D + (size_t)vocab_size_padded * D / 32 * 2; }
+    inline size_t get_lm_head_w_size(flm_dtype_t dtype = flm_q80) { return get_quantization_byte_size((size_t)vocab_size_padded * D, dtype); }
     inline size_t get_conv_w_size() { return (size_t)conv_kernel_size * (Linear_DQ + Linear_DK + Linear_DV) * sizeof(bf16); }
     inline size_t get_s_offset() { return (size_t)(conv_kernel_size - 1) * (Linear_DQ + Linear_DK + Linear_DV); }
 

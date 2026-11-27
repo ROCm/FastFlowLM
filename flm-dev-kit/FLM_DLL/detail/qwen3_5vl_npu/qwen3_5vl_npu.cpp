@@ -18,6 +18,7 @@ static const bool DP_SPLIT = dp_env("QWEN35_DPROF_SPLIT"), DP_LMX2 = dp_env("QWE
 static std::chrono::steady_clock::time_point dp_last_end{};
 #endif
 #include "qwen3_5vl_npu_detail.hpp"
+#include "lm_head_q4k.hpp"
 #include "metrices.hpp"
 #include "utils/error_measure.hpp"
 #include "npu_sequences/GateDeltaNetPrefillRuntimeSequence.hpp"
@@ -61,7 +62,15 @@ qwen3_5vl_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, qw
         this->layers_run = layer_app_manager->create_runlist();
     }
 
-    lm_head_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "lm_head.xclbin"));
+    // lm_head_q4k.xclbin reads the tied lm_head re-quantized to q4_k at load: 4.625 instead of 8.5 bits per weight, and
+    // decode's lm_head is bandwidth bound. Used when the model's xclbin folder has it; QWEN35_LMHEAD_Q8=1 keeps lm_head.xclbin.
+    {
+        const std::string xdir = utils::path_join(config.exec_path, "xclbins", config.model_name);
+        const std::string q4k_lm_head = utils::path_join(xdir, "lm_head_q4k.xclbin");
+        const char* keep_q8 = std::getenv("QWEN35_LMHEAD_Q8");
+        lm_head_q4k = std::filesystem::exists(q4k_lm_head) && !(keep_q8 && keep_q8[0] == '1');
+        lm_head_app_manager = npu->register_xclbin(lm_head_q4k ? q4k_lm_head : utils::path_join(xdir, "lm_head.xclbin"));
+    }
     this->lm_head = lm_head_app_manager->create_app();
 
     // allocate all buffers
@@ -105,7 +114,7 @@ qwen3_5vl_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, qw
     }
 
     x = layer.create_bo_buffer<bf16>(desc.D * 2);
-    lm_head_weights = layer.create_bo_buffer<u8>(desc.get_lm_head_w_size());
+    lm_head_weights = layer.create_bo_buffer<u8>(desc.get_lm_head_w_size(lm_head_q4k ? flm_q4k : flm_q80));
     logits = layer.create_bo_buffer<bf16>(desc.vocab_size_padded);
     logits_valid = buffer<bf16>(logits.data(), desc.vocab_size);
 
@@ -116,7 +125,7 @@ qwen3_5vl_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, qw
     pctx = std::make_unique<qwen3_5vl_prefill_context>(npu, &desc, sequence.get(), config);
 
     lm_head = this->lm_head_app_manager->create_app();
-    this->sequence->gen_lm_head_seq(lm_head.seq(), desc.vocab_size_padded, desc.D);
+    this->sequence->gen_lm_head_seq(lm_head.seq(), desc.vocab_size_padded, desc.D, lm_head_q4k ? flm_q4k : flm_q80);
     this->lm_head_run = lm_head.create_run(this->logits, this->lm_head_weights, this->x);
 
     this->sequence->gen_layer_seq(this->linear_layer.seq(), 0, false, false);
@@ -161,8 +170,19 @@ void qwen3_5vl_npu::Impl::load_weights(Q4NX& q4nx){
     {
         buffer<u8> lm_head_w;
         q4nx.load_weights(lm_head_w, "lm_head.weight");
-
-        desc.reorder_cpy_lm_head(this->lm_head_weights.data(), lm_head_w, desc.D, flm_q80, 4);
+        if (lm_head_q4k) {
+            namespace lq = qwen3_5vl_lm_head_q4k;
+            const int64_t nb = lm_head_w.size() / lq::Q80_BLOCK;
+            buffer<u8> lm_head_q4(nb * lq::Q4K_BLOCK);
+            #pragma omp parallel for schedule(dynamic, 64)
+            for (int64_t b = 0; b < nb; b++) {
+                lq::q80_to_q4k(lm_head_w.data() + b * lq::Q80_BLOCK, lm_head_q4.data() + b * lq::Q4K_BLOCK);
+            }
+            desc.reorder_cpy_lm_head(this->lm_head_weights.data(), lm_head_q4, desc.D, flm_q4k, 4);
+        }
+        else {
+            desc.reorder_cpy_lm_head(this->lm_head_weights.data(), lm_head_w, desc.D, flm_q80, 4);
+        }
         this->lm_head_weights.sync_to_device();
     }
 

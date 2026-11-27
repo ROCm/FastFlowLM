@@ -69,7 +69,7 @@ struct qwen3_5vl_npu_sequence{
     void _receive_kv_cache(npu_sequence* seq, const int L);
     void _move_kv_cache(npu_sequence* seq, const size_t L);
     void _move_weights(npu_sequence* seq, const size_t Dout, const size_t Din, const weight_desc_t& weight);
-    void gen_lm_head_seq(npu_sequence* seq, int VOCAB_SIZE, int D);
+    void gen_lm_head_seq(npu_sequence* seq, int VOCAB_SIZE, int D, flm_dtype_t w_dtype = flm_q80);
 
     void _gen_linear_sequence(npu_sequence* seq, bool is_first = true);
     void _send_linear_conv_weights(npu_sequence* seq);

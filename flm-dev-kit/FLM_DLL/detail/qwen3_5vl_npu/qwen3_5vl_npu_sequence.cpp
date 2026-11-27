@@ -664,7 +664,7 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
     seq->cmds2seq();
 }
 
-void qwen3_5vl_npu_sequence::gen_lm_head_seq(npu_sequence* seq, int VOCAB_SIZE, int D){
+void qwen3_5vl_npu_sequence::gen_lm_head_seq(npu_sequence* seq, int VOCAB_SIZE, int D, flm_dtype_t w_dtype){
     static constexpr int y_arg_id = 0;
     static constexpr int w_arg_id = 1;
     static constexpr int x_arg_id = 2;
@@ -684,7 +684,8 @@ void qwen3_5vl_npu_sequence::gen_lm_head_seq(npu_sequence* seq, int VOCAB_SIZE, 
     static constexpr int LOOKAHEAD = 3;
     assert(VOCAB_SIZE % M_PER_ROUND == 0);
     int rounds = VOCAB_SIZE / M_PER_ROUND;
-    size_t W_PER_COL = q8_0_size(M_PER_COL * D) / sizeof(bf16);
+    // w_dtype: flm_q80 (lm_head.xclbin) or flm_q4k (lm_head_q4k.xclbin), 32 x 256 blocks either way
+    size_t W_PER_COL = get_quantization_byte_size((size_t)M_PER_COL * D, w_dtype) / sizeof(bf16);
     size_t W_PER_ROUND = W_PER_COL * COLS;
     // A column's four cores are fed by two independent shim MM2S channels, one per
     // pair of cores: a single channel saturates at roughly a quarter of what the

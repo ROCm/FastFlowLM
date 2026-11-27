@@ -89,6 +89,8 @@ struct qwen3_5vl_npu::Impl{
     buffer<bf16> logits;
     buffer<bf16> logits_valid;
     buffer<u8> lm_head_weights;
+    /// @brief lm_head_weights holds the tied q8_0 lm_head re-quantized to q4_k (lm_head_q4k.xclbin), see lm_head_q4k.hpp
+    bool lm_head_q4k = false;
 
     flm_rt::runlist layers_run;
     flm_rt::run lm_head_run;

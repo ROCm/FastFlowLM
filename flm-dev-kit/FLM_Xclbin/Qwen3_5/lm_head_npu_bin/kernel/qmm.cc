@@ -11,6 +11,7 @@
 #define QWEN3_5_2B         1
 #define QWEN3_5_4B         2
 #define QWEN3_5_9B         3
+#define QWEN3_5_4B_Q4K     4  // 4B with the lm_head re-quantized to Q4_K at load
 
 #ifndef MODEL_TYPE
 #define MODEL_TYPE QWEN3_5_4B
@@ -28,8 +29,15 @@ constexpr int MODEL_DIM  = 2048;
 constexpr int MODEL_DIM  = 2560;
 #elif MODEL_TYPE == QWEN3_5_9B
 constexpr int MODEL_DIM  = 4096;
+#elif MODEL_TYPE == QWEN3_5_4B_Q4K
+constexpr int MODEL_DIM  = 2560;
+#define LM_HEAD_Q4K 1
 #else
 #error "Unsupported MODEL_TYPE"
+#endif
+
+#ifdef LM_HEAD_Q4K
+#include "q4k_core.h"
 #endif
 
 
@@ -111,10 +119,16 @@ void copy_y(bf16 * y, const float * y_acc) {
 }
 
 
+#ifdef LM_HEAD_Q4K
+typedef q4k_block_t lm_head_block_t;
+#else
+typedef q80_block_t lm_head_block_t;
+#endif
+
 extern "C" {
 void qmm(
     bf16* y_ping, bf16* y_pong,
-    q80_block_t* w_ping, q80_block_t* w_pong,
+    lm_head_block_t* w_ping, lm_head_block_t* w_pong,
     bf16* x
 ){
     // Peano's CDO loader does not zero .bss; keep this ping/pong selector in .data.
@@ -128,25 +142,58 @@ void qmm(
     static bool is_w_ping = false;
 
     alignas(aie::vector_decl_align) float  y_acc[QXNX_ROW_BLOCK_SIZE];
+#ifdef LM_HEAD_Q4K
+    // sum_i x_i per group as REDUCE_LIMBS bf16 limbs (l0, l1), built once per
+    // token and read by every row block; see the decoding layers' mvm().
+    constexpr int NUM_GROUPS = MODEL_DIM_PADDED / GGML_GROUP_SIZE;
+    alignas(aie::vector_decl_align) bf16 b_col_reduce_add[REDUCE_LIMBS * NUM_GROUPS];
+#endif
 
     _lock_acquire(x_cons_lock);
 
     rms_norm(x, x, x + MODEL_DIM);
+#ifdef LM_HEAD_Q4K
+    for (int l = 0; l < NUM_GROUPS; l++) {
+        aie::accum<accfloat, GGML_GROUP_SIZE> x_acc;
+        x_acc.from_vector(aie::load_v<GGML_GROUP_SIZE>(x + GGML_GROUP_SIZE * l));
+        float sum = aie::reduce_add(x_acc.template to_vector<float>());
+        bf16 l0 = bf16(sum);
+        b_col_reduce_add[REDUCE_LIMBS * l]     = l0;
+#if defined(__chess__)
+        b_col_reduce_add[REDUCE_LIMBS * l + 1] = bf16(sum - float(l0));
+#else
+        b_col_reduce_add[REDUCE_LIMBS * l + 1] = bf16(AIE_FSUB(sum, float(l0)));  // round like chess
+#endif
+    }
+#endif
     for (int r = 0; r < ROUNDS; r++) {
 
+#ifdef LM_HEAD_Q4K
+        q4k_accum_t c_accum_s, c_accum_m, c_accum_b;
+        _Q4K_zero(c_accum_s, c_accum_m, c_accum_b);
+#else
         zero_vectorized<float, QXNX_ROW_BLOCK_SIZE>(y_acc);
+#endif
 
         for (int k = 0; k < K_BLOCKS; k++) {
             bf16* x_using = x + k * QXNX_COL_BLOCK_SIZE;
 
             _lock_acquire(w_cons_lock);
             is_w_ping = !is_w_ping;
-            q80_block_t* w_using = is_w_ping ? w_ping : w_pong;
+            lm_head_block_t* w_using = is_w_ping ? w_ping : w_pong;
 
+#ifdef LM_HEAD_Q4K
+            _Q4K_x_bf16(c_accum_s, c_accum_m, c_accum_b, x_using, w_using,
+                        b_col_reduce_add + REDUCE_LIMBS * k * (QXNX_COL_BLOCK_SIZE / GGML_GROUP_SIZE));
+#else
             _Q80_x_bf16(y_acc, x_using, w_using);
+#endif
 
             _lock_release(w_prod_lock);
         }
+#ifdef LM_HEAD_Q4K
+        _Q4K_finalize(y_acc, c_accum_s, c_accum_m, c_accum_b);
+#endif
 
         _lock_acquire(y_prod_lock);
 
