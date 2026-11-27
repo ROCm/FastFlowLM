@@ -20,6 +20,7 @@
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
 #include "chat/message_roles.hpp"
+#include "chat/active_tool_reasoning.hpp"
 #include "chat/positional_tool_results.hpp"
 #include "utils/log_privacy.hpp"
 #include <algorithm>
@@ -728,6 +729,9 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         prefill_chunk_len = chunk;
         positional_tool_results = plan.info.value("positional_tool_results", false)
             && engine->backend_id() == flm::backend::kOgaHipepBackendId;
+        // The history rule is verified for this package, frontend and backend together.
+        active_tool_reasoning = plan.info.value("active_tool_reasoning", false)
+            && dynamic_cast<Qwen3_5VL*>(engine.get()) && engine->backend_id() == flm::backend::kOgaHipepBackendId;
         {
             std::lock_guard lock(model_info_mutex);
             loaded_backend = engine->backend_id();
@@ -1552,7 +1556,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         std::vector<size_t> original_indices;
         try {
             current_messages = flm::chat::normalize_messages(current_messages, auto_chat_engine->message_roles(),
-                                                              positional_tool_results ? &original_indices : nullptr);
+                                                              (positional_tool_results || active_tool_reasoning) ? &original_indices : nullptr);
         } catch (const flm::chat::message_error& e) {
             bad_request(e.what());
             return;
@@ -1571,6 +1575,9 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         if (current_messages.empty()) {
             bad_request("'messages' must contain at least one non-empty message", "messages");
             return;
+        }
+        if (active_tool_reasoning) {
+            flm::chat::apply_active_tool_reasoning(current_messages, request.at("messages"), original_indices);
         }
         if (positional_tool_results) {
             if (auto error = flm::chat::order_parallel_tool_results(current_messages, original_indices)) {

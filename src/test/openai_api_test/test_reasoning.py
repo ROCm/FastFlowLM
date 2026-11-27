@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+from uuid import uuid4
 
 import flm_api
 from flm_api import Api, Skip, case, expect
@@ -295,6 +296,48 @@ def nested_thinking_ignored_elsewhere(api: Api) -> None:
         body["chat_template_kwargs"] = value
         resp = api.post(body)
         expect(resp.status == 200, f"chat_template_kwargs={value!r}: expected 200, got {resp.status} {resp.error_message()}")
+
+
+@case
+def active_tool_reasoning(api: Api) -> None:
+    """The pinned GPU template takes a supplied note only while answering the same question."""
+    if api.model not in ("qwen3.5-oga-hipep:9b", "qwen3.5:4b"):
+        raise Skip("requires the verified Qwen3.5 GPU package or its NPU negative control")
+    call = {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function",
+            "function": {"name": "read_shelf", "arguments": "{}"}}]}
+    history = [*user("Check the shelf."), call, {"role": "tool", "tool_call_id": "a", "content": "42"}]
+
+    def usage():
+        response = api.post(api.body(history, max_tokens=4))
+        expect(response.status == 200 and "usage" in response.body, f"expected usage: HTTP {response.status}")
+        return response.body["usage"]
+
+    def prompt():
+        return usage()["prompt_tokens"]
+
+    note = "Synthetic inventory note. " * 20
+    count = prompt()
+    call["reasoning_content"] = note
+    marked = prompt()
+    expect(marked > count if api.model == "qwen3.5-oga-hipep:9b" else marked == count,
+           f"active tool call: {count} without reasoning, {marked} with reasoning")
+    stream = api.ok_stream(api.body(history, think=True, max_tokens=4, stream_options={"include_usage": True}))
+    expect(stream.chunks[-1]["usage"]["prompt_tokens"] == marked, "SSE/think changed history rendering")
+    if api.model == "qwen3.5-oga-hipep:9b":
+        # A previous test run may have left either variant in a slot. Give this pair a fresh shared prefix.
+        trial = uuid4().hex + "\n"
+        call["reasoning_content"] = trial + note
+        before = prompt()
+        call["reasoning_content"] = trial + note.replace("note", "list")
+        changed = usage()
+        expect(changed["prompt_tokens"] == before, "the cache control must have the same token length")
+        expect(changed["prompt_tokens_details"]["cached_tokens"] < before, "full cache hit on a different note")
+    del call["reasoning_content"]
+    expect(prompt() == count, "omitting the note did not restore the original prompt")
+    history.extend([{"role": "assistant", "content": "42"}, *user("New question.")])
+    past = prompt()
+    call["reasoning_content"] = note
+    expect(prompt() == past, "previous user turn still includes the note")
 
 
 @case

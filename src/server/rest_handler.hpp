@@ -182,5 +182,6 @@ private:
     std::string backend;
     flm::backend::BackendSelection loaded_selection;
     bool positional_tool_results = false;
+    bool active_tool_reasoning = false;
     PromptCache prompt_cache;
 };
