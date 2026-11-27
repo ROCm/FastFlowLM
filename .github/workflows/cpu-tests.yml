@@ -261,6 +261,21 @@ jobs:
           cmake --build build-model-catalog -j"$(nproc)"
           ctest --test-dir build-model-catalog --output-on-failure
 
+  # Local OGA model folders (--model-dir/--family): the catalog entry built from an OGA package folder, its tag, the
+  # refusal messages, and model_list taking the entry. CPU only; the real-package check is opt-in by env.
+  local-model-oga:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the local OGA model test
+        run: |
+          cmake -S src/test/local_model_oga -B build-local-model-oga -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-local-model-oga -j"$(nproc)"
+          ctest --test-dir build-local-model-oga --output-on-failure
+
   # Log privacy and download TLS (WP-15): the request log hides user text unless FLM_LOG_CONTENT=1, every
   # "Model RAW Output" dump goes through one switch, downloads verify TLS unless FLM_INSECURE_DOWNLOAD=1. CPU only.
   log-privacy:

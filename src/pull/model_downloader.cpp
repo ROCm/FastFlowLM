@@ -92,6 +92,14 @@ bool matches_record(const std::string& path, const ResolvedModelFile& file) {
         ? download_utils::calculate_file_sha256(path) : download_utils::calculate_git_blob_oid(path));
 }
 
+/// \brief whether an entry is a folder the user named (--model-dir)
+/// \note Such a folder is read in place. It has no download source, so a pull
+///       would fail anyway; what matters more is that nothing which cleans up
+///       after a failed download or removes a model touches the user's files.
+bool is_local_model(const nlohmann::json& model_info) {
+    return model_info.value("local", false);
+}
+
 /// \brief whether an entry's files come from pinned upstream revisions
 /// \param model_info the resolved model_list.json entry
 /// \return true when the entry carries a "file_sources" map
@@ -377,6 +385,12 @@ std::string ModelDownloader::preview_pull(const std::string& model_tag, bool use
 }
 
 bool ModelDownloader::pull_own_model(const std::string& model_tag, bool use_modelscope, bool force_redownload) {
+    if (const auto [local_tag, local_info] = supported_models.get_model_info(model_tag);
+        is_local_model(local_info)) {
+        header_print("ERROR", local_tag + " is a model folder (--model-dir); it is never downloaded. "
+                              "Missing files must be added to " + local_info.at("name").get<std::string>());
+        return false;
+    }
     try {
         // Once the pull is over, the files on disk say again which source it got.
         SourceChoiceReset reset_source_choice{supported_models, model_tag};
@@ -679,6 +693,10 @@ bool ModelDownloader::remove_model(const std::string& model_tag, bool sub_proces
             model_not_found(model_tag);
             return false;
         }
+        if (is_local_model(model_info)) {
+            header_print("ERROR", model_tag + " is a model folder (--model-dir); flm never removes it");
+            return false;
+        }
         
         // Removing a base leaves its dependants without their main weights.
         // Warn, never cascade.
@@ -816,6 +834,11 @@ bool ModelDownloader::verify_and_clean_files(const std::string& model_tag, bool 
     bool any_error = false;
     try {
         auto [new_model_tag, model_info] = supported_models.get_model_info(model_tag);
+        if (is_local_model(model_info)) {
+            // This pass deletes the files that fail their hash; there is no hash to fail here.
+            header_print("ERROR", new_model_tag + " is a model folder (--model-dir); its files are never verified or deleted");
+            return false;
+        }
         std::vector<std::string> model_files = model_info["files"];
         std::string model_path = supported_models.get_model_path(new_model_tag);
         const nlohmann::json records = load_model_file_records(model_info, new_model_tag);
