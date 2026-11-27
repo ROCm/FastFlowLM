@@ -119,12 +119,17 @@ def later_instruction_keeps_prefix(api: Api) -> None:
         return cached if isinstance(cached, int) else 0
 
     # control: the same next turn without the instruction; only a model that reuses nothing there skips
-    if reused(answered + [msg("user", QUESTION)]) == 0:
+    control = reused(answered + [msg("user", QUESTION)])
+    if control == 0:
         raise Skip("the server reports no reused prompt tokens for this model")
+    # A template that opens reasoning after the reply header, and renders the reply
+    # without it on the next turn, reuses the earlier prompt only up to that header
+    # (the control's count): the instruction must not cost anything beyond it.
+    expected = min(usage["prompt_tokens"], control)
     cached = reused(answered + [msg("system", RULE), msg("user", QUESTION)])
-    expect(cached >= usage["prompt_tokens"],
+    expect(cached >= expected,
            f"the turn with a later instruction reused {cached} tokens, fewer than the earlier prompt "
-           f"({usage['prompt_tokens']}): something before it moved")
+           f"({usage['prompt_tokens']}, {control} reused without the instruction): something before it moved")
 
 
 CASES = flm_api.collect(globals())

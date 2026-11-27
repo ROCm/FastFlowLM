@@ -934,7 +934,7 @@ void test_glm_detection() {
     CHECK(spec.has_reasoning());
     CHECK_EQ(spec.tool_start, "<tool_call>");
     CHECK_EQ(spec.tool_end, "</tool_call>");
-    // Nemotron 3.5 writes Qwen XML inside <tool_call>
+    // Nemotron 3.5 and Step 3.5 write Qwen XML inside <tool_call>
     CHECK(chat_format_detect("<tool_call>\n<function=f>\n<parameter=k>\n", no_token).kind == chat_format_kind::QWEN_XML);
     CHECK(chat_format_detect("<tool_call>\n{\"name\": f}\n</tool_call>", no_token).kind == chat_format_kind::HERMES_JSON);
     // Hy-Memory (NPU) puts <tool_sep> after the name: it stays on Hermes
@@ -1067,7 +1067,7 @@ void test_glm_string_length() {
 // ---------------------------------------------------------------- minja on the new templates
 
 void test_minja_tojson_ensure_ascii() {
-    std::printf("minja's tojson takes ensure_ascii, as the Laguna 2.1 template writes it\n");
+    std::printf("minja's tojson takes ensure_ascii, as the Step 3.5 and Laguna 2.1 templates write it\n");
     auto render = [](const std::string& source, const json& context) {
         auto tmpl = minja::Parser::parse(source, {true, true, false});
         return tmpl->render(minja::Context::make(minja::Value(context)));
@@ -1079,6 +1079,32 @@ void test_minja_tojson_ensure_ascii() {
     CHECK_EQ(render("{{ v | tojson(ensure_ascii=True) }}", ctx),
              "{\"city\": \"Z\\u00fcrich \\u2713 \\ud83d\\ude00\", \"n\": 1}");
     CHECK_EQ(render("{{ v | tojson(indent=2, ensure_ascii=False) }}", json{{"v", {{"a", 1}}}}), "{\n  \"a\": 1\n}");
+}
+
+void test_minja_call_postfix() {
+    std::printf("minja indexes and calls on the result of a call, as the Step 3.5 template does\n");
+    auto render = [](const std::string& source, const json& context) {
+        auto tmpl = minja::Parser::parse(source, {true, true, false});
+        return tmpl->render(minja::Context::make(minja::Value(context)));
+    };
+    // Step-3.5-Flash's search for the last user query that is not a tool response
+    const std::string last_query =
+        "{% macro render_content(content) %}{% if content is string %}{{- content }}{% endif %}{% endmacro %}"
+        "{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}"
+        "{%- for message in messages[::-1] %}"
+        "{%- set index = (messages|length - 1) - loop.index0 %}"
+        "{%- if ns.multi_step_tool and message.role == \"user\" and render_content(message.content) is string and "
+        "not(render_content(message.content).startswith('<tool_response>') and "
+        "render_content(message.content).endswith('</tool_response>')) %}"
+        "{%- set ns.multi_step_tool = false %}{%- set ns.last_query_index = index %}"
+        "{%- endif %}{%- endfor %}{{ ns.last_query_index }}";
+    const json messages = json::array({
+        {{"role", "user"}, {"content", "Weather in Paris?"}},
+        {{"role", "assistant"}, {"content", "Checking."}},
+        {{"role", "user"}, {"content", "<tool_response>18 C</tool_response>"}},
+    });
+    CHECK_EQ(render(last_query, json{{"messages", messages}}), "0");
+    CHECK_EQ(render("{{ range(5)[2] }} {{ namespace(a=7).a }} {{ 'Ab'.upper().lower() }}", json::object()), "2 7 ab");
 }
 
 // Laguna-XS-2.1's chat_template.jinja without its comments and its literal BOS
@@ -1196,6 +1222,12 @@ void test_glm_template_capabilities() {
                       "<arg_key>days</arg_key><arg_value>3</arg_value></tool_call></assistant>\n"
                       "<tool_response>18 C</tool_response>\n<assistant></think>") != std::string::npos);
     CHECK(prompt.find("\"tool_calls\"") == std::string::npos);
+
+    // Step 3.5 lists its tools with tojson(ensure_ascii=False); a template that throws there has no tools
+    minja::chat_template step("{%- if tools %}<tools>{%- for tool in tools %}\n{{- tool | tojson(ensure_ascii=False) }}"
+                              "{%- endfor %}\n</tools>{%- endif %}{%- for m in messages %}{{ m.content }}{%- endfor %}",
+                              "", "");
+    CHECK(step.original_caps().supports_tools);
 }
 
 void test_minja_template_exception() {
@@ -1333,6 +1365,7 @@ int main() {
     test_glm_grammar();
     test_glm_string_length();
     test_minja_tojson_ensure_ascii();
+    test_minja_call_postfix();
     test_glm_template_capabilities();
     test_minja_template_exception();
     test_inkling();

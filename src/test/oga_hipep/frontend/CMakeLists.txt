@@ -61,3 +61,4 @@ endfunction()
 
 add_frontend_test(test_qwen_frontend modeling_qwen3_5vl.cpp modeling_qwen2.cpp)
 add_frontend_test(test_gpt_oss_frontend modeling_gpt_oss.cpp)
+add_frontend_test(test_template_chat_frontend modeling_template_chat.cpp)

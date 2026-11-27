@@ -92,7 +92,7 @@ frontend and features, and differ only in weights. That is the newest Qwen
 (`qwen3.8-oga-hipep:27b`, for the Qwen3.5, 3.6 and 3.8 models) and Gemma 4
 (`gemma4-it-oga-hipep:26b-a4b`), about 33 GB; Qwen2.5, Gemma 3, the Gemma 4
 12B on its own frontend (`gemma4-12b`), gpt-oss (69 GB) and the families on
-the TemplateChat frontend (`laguna`, `nemotron-h`; 18 GB each)
+the TemplateChat frontend (`laguna`, `nemotron-h`, `step3.5`; 18 to 60 GB)
 run there only when the change touches their family (`--families`).
 An oga-hipep entry the change edits without new weights (a capability, a
 context length) counts its family as touched (`changes.py`'s
@@ -100,7 +100,7 @@ context length) counts its family as touched (`changes.py`'s
 The run also tests the models with new weights: added, republished or moved
 onto the GPU (`changes.py`'s `hipep_models`, passed as `--required-models`), on
 the kinds of machine that test them (see [HIPEP machines](#hipep-machines)).
-The `full` tier tests every oga-hipep model (4 to 124 GB each, about 500 GB
+The `full` tier tests every oga-hipep model (4 to 124 GB each, about 560 GB
 in all).
 Models larger than the machine holds are skipped either way, and a manual run
 that names the models (below) tests only those. Such a run gives `api` the
@@ -115,7 +115,7 @@ when any changed file is shared code. The HRX packages never run `api` or
 HIPEP runs when every suite does, or when the change reaches an oga-hipep
 model: the oga-hipep backend or its catalog entries, the frontend of a family
 with an oga-hipep entry (qwen3.5, qwen2, gemma3, gemma4e, gemma4-12b, gpt-oss,
-laguna, nemotron-h today, read from the catalog), the `chat`, `api` and `shutdown` tests. A change only to
+laguna, nemotron-h, step3.5 today, read from the catalog), the `chat`, `api` and `shutdown` tests. A change only to
 the backend, its entries or the `shutdown` tests touches no NPU family and
 runs no NPU test job.
 
@@ -150,9 +150,9 @@ memory dedicated to each GPU, which Windows leaves out of its own figure
   STX Halo machines) that also carry `oga-hipep`, whichever is free. It holds
   that runner for its run, as an NPU test job does. It tests the `pr` tier's
   models even nightly (`max-tier`), since each runner would otherwise
-  download all 500 GB and the NPU nightly needs them, and skips the models
-  above 32 GB (`max-model-gb`): gpt-oss and the 120B-class Qwen and Laguna
-  models. It
+  download all 560 GB and the NPU nightly needs them, and skips the models
+  above 32 GB (`max-model-gb`): gpt-oss, the 120B-class Qwen and Laguna
+  models, and Step 3.5 Flash. It
   leaves the changed entries' models to `stx-halo` (`changed-models`), so a
   change to many of them does not hold an NPU runner for hours. When
   `FLM_HIPEP_MACHINES` leaves `stx-halo` out, it tests them itself, those up
@@ -188,7 +188,7 @@ A runner of a kind of its own (xconucstrhalo86 for `stx-halo`):
    `self-hosted`, `windows`, `x64`, `oga-hipep` and the kind's label
    (`stx-halo`), and neither `npu` nor `sweep`, or NPU test jobs would take it.
 3. `FLM_MODEL_PATH`, in the runner's `.env`, on a disk with room for every
-   model it tests (about 500 GB for all of them, which the nightly tests, and
+   model it tests (about 560 GB for all of them, which the nightly tests, and
    room for a new revision); otherwise they go to the machine's own
    `FLM_MODEL_PATH`, which installing flm may have set, or else to
    `%USERPROFILE%\.flm`.

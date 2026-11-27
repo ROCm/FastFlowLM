@@ -2936,6 +2936,48 @@
                 ]
             }
         },
+        "step3.5-flash-oga-hipep": {
+            "196b-a11b": {
+                "name": "Step-3.5-Flash_gpuep_1.0_gpu_128",
+                "positional_tool_results": true,
+                "url": "https://huggingface.co/amd/Step-3.5-Flash_gpuep_1.0_gpu_128/resolve/8628e8f3413ca72d14f90bc1de21e802746ffb5f",
+                "file_url": "https://huggingface.co/api/models/amd/Step-3.5-Flash_gpuep_1.0_gpu_128/tree/8628e8f3413ca72d14f90bc1de21e802746ffb5f",
+                "size": 59979198256,
+                "default_context_length": 32768,
+                "max_prefill_len": 4096,
+                "details": {
+                    "family": "step3.5",
+                    "think": true,
+                    "think_toggleable": false,
+                    "parameter_size": "196B-A11B",
+                    "quantization_level": "INT2 experts group-64, INT4 group-128, fp16 activations"
+                },
+                "flm_min_version": "1.0.15",
+                "tools": true,
+                "vlm": false,
+                "files": [
+                    "chat_template.jinja",
+                    "config.json",
+                    "genai_config.json",
+                    "lm_head.onnx.data",
+                    "model.onnx",
+                    "model.onnx.data",
+                    "router.onnx.data",
+                    "tokenizer.json",
+                    "tokenizer_config.json"
+                ],
+                "file_sources": {
+                    "config.json": {
+                        "url": "https://huggingface.co/stepfun-ai/Step-3.5-Flash",
+                        "revision": "ab446a3de5e171ea341227e24bb1f090e1b771f7"
+                    }
+                },
+                "label": [
+                    "reasoning",
+                    "tool-calling"
+                ]
+            }
+        },
         "qwen3.6-moe-core":     {
         "35b-a3b": {
             "tools": true,

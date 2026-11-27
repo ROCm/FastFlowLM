@@ -97,15 +97,17 @@ PR_GPU = {
     "gpt-oss": "gpt-oss-oga-hipep:120b",
     "laguna": "laguna2.1-oga-hipep:33b-a3b",
     "nemotron-h": "nemotron3.5-lightning-oga-hipep:30b-a3b",
+    "step3.5": "step3.5-flash-oga-hipep:196b-a11b",
 }
 
 # Families whose PR_GPU model the install and pr tiers test only when the
 # change touches the family (--families), so that every pull request tests
 # just the newest Qwen and Gemma: Qwen2.5 and Gemma 3, the generations before;
 # gemma4-12b, a second Gemma 4 family; gpt-oss, whose one model is 69 GB; and
-# laguna and nemotron-h, on the TemplateChat frontend that only they use.
+# laguna, nemotron-h and step3.5, on the TemplateChat frontend that only they
+# use (Step's one model is 60 GB).
 PR_GPU_WHEN_TOUCHED = {"qwen2", "gemma3", "gemma4-12b", "gpt-oss",
-                       "laguna", "nemotron-h"}
+                       "laguna", "nemotron-h", "step3.5"}
 
 # Suites with a fixed NPU model list that a GPU backend run gives its own chat
 # models instead: the OpenAI contract (tools, streaming, errors, usage) holds
@@ -116,7 +118,12 @@ BACKEND_SUITES = {"api", "shutdown"}
 # Models that reason even when asked not to. Their answer comes after the
 # reasoning, so they need a larger token budget before any content appears.
 ALWAYS_THINKS_FAMILIES = {"qwen3-tk", "lfm2.5-tk", "deepseek-r1", "deepseek-r1-0528",
-                          "nanbeige", "gpt-oss", "inkling-2"}
+                          "nanbeige", "gpt-oss", "inkling-2", "step3.5"}
+
+# Of those, the ones whose reasoning outgrows the API tests' default budget
+# (run_all.py --reasoning-budget, 1024 tokens): Step 3.5 Flash reasons for
+# about 2,900 tokens before a JSON schema answer.
+REASONING_BUDGETS = {"step3.5": 4096}
 
 # Per-suite model lists for the tiers that do not derive from PR_CHAT.
 SUITE_MODELS = {
@@ -191,6 +198,10 @@ class Model:
     @property
     def always_thinks(self) -> bool:
         return self.family in ALWAYS_THINKS_FAMILIES
+
+    @property
+    def reasoning_budget(self) -> int | None:
+        return REASONING_BUDGETS.get(self.family) if self.always_thinks else None
 
     @property
     def translation(self) -> bool:

@@ -105,6 +105,7 @@ void register_builtin_frontends(FrontendRegistry& registry) {
     Register<Phi4>(registry, "phi4");
     Register<Laguna>(registry, "laguna");
     Register<NemotronH>(registry, "nemotron-h");
+    Register<Step3_5>(registry, "step3.5");
 }
 
 }  // namespace flm::frontend

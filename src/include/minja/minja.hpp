@@ -2226,7 +2226,10 @@ private:
 
       auto value = parseValue();
 
-      while (it != end && consumeSpaces() && peekSymbols({ "[", "." })) {
+      // Upstream minja parses a call only after the [ and . postfixes, so the result of a
+      // call could not be indexed or called on, and Step-3.5-Flash's chat template, which
+      // writes render_content(message.content).startswith(...), failed to parse.
+      while (it != end && consumeSpaces() && peekSymbols({ "[", ".", "(" })) {
         if (!consumeToken("[").empty()) {
           std::shared_ptr<Expression> index;
           auto slice_loc = get_location();
@@ -2271,14 +2274,12 @@ private:
               auto key = std::make_shared<LiteralExpr>(identifier->location, Value(identifier->get_name()));
               value = std::make_shared<SubscriptExpr>(identifier->location, std::move(value), std::move(key));
             }
+        } else {
+          auto location = get_location();
+          auto callParams = parseCallArgs();
+          value = std::make_shared<CallExpr>(location, std::move(value), std::move(callParams));
         }
         consumeSpaces();
-      }
-
-      if (peekSymbols({ "(" })) {
-        auto location = get_location();
-        auto callParams = parseCallArgs();
-        value = std::make_shared<CallExpr>(location, std::move(value), std::move(callParams));
       }
       return value;
     }
@@ -2761,10 +2762,10 @@ inline std::shared_ptr<Context> Context::builtins() {
   }));
   // Upstream minja takes no ensure_ascii and throws on an argument it does not
   // know, so `x | tojson(ensure_ascii=False)` failed the whole render.
-  // Laguna-2.1's chat template writes it for every non-string tool call
-  // argument. dump() keeps non-ASCII text as it is, which is ensure_ascii=False;
-  // ensure_ascii=True escapes it as json.dumps does, \uXXXX with surrogate pairs
-  // past U+FFFF.
+  // Step-3.5-Flash's chat template writes it for every tool it lists, and
+  // Laguna-2.1's for every non-string tool call argument. dump() keeps non-ASCII
+  // text as it is, which is ensure_ascii=False; ensure_ascii=True escapes it as
+  // json.dumps does, \uXXXX with surrogate pairs past U+FFFF.
   globals.set("tojson", simple_function("tojson", { "value", "indent", "ensure_ascii" }, [](const std::shared_ptr<Context> &, Value & args) {
     auto text = args.at("value").dump(args.get<int64_t>("indent", -1), /* to_json= */ true);
     if (!args.get<bool>("ensure_ascii", false)) {

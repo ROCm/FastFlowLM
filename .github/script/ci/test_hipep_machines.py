@@ -193,6 +193,7 @@ class Standby(unittest.TestCase):
         self.assertEqual(ids(families=["qwen2", "gemma3", "gemma4-12b", "laguna", "nemotron-h"]),
                          ["npu-runners"])
         self.assertEqual(ids(families=["gpt-oss"]), ["stx-halo", "npu-runners"])
+        self.assertEqual(ids(families=["step3.5"]), ["stx-halo", "npu-runners"])
         self.assertEqual(ids(tier="full"), ["stx-halo", "npu-runners"])
 
 

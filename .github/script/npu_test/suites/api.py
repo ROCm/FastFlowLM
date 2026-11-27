@@ -26,7 +26,10 @@ DESCRIPTION = "OpenAI API and usage contract tests from src/test, per model"
 
 # A run_all.py pass is about a minute on qwen3:0.6b; the budget is for large
 # models on the full tier, whose answers come after up to 1024 reasoning tokens.
+# A model with a larger plan.REASONING_BUDGETS entry gets the longer one (Step
+# 3.5 Flash at 4096 tokens: 37 minutes on stx-halo).
 RUN_ALL_TIMEOUT = 30 * 60
+LONG_REASONING_RUN_ALL_TIMEOUT = 60 * 60
 USAGE_TIMEOUT = 10 * 60
 
 # flm_api.run_cases(): "PASS  name (1.2s)", "FAIL  name (1.2s): why",
@@ -80,11 +83,14 @@ def test_model(ctx, server, model: str, run_all: Path, usage: Path) -> None:
         return
 
     common = [model, "--endpoint", server.base_url, "--timeout", str(ctx.request_timeout)]
-    always_thinks = ["--always-thinks"] if ctx.plan.model(model).always_thinks else []
+    info = ctx.plan.model(model)
+    always_thinks = ["--always-thinks"] if info.always_thinks else []
+    if info.reasoning_budget:
+        always_thinks += ["--reasoning-budget", str(info.reasoning_budget)]
     with ctx.case(NAME, "openai_api_test", model, server) as case:
         parser = RunAllParser(ctx, model, server)
-        out = run_script(ctx, run_all, common + always_thinks, model, RUN_ALL_TIMEOUT,
-                         on_line=parser.feed)
+        timeout = LONG_REASONING_RUN_ALL_TIMEOUT if info.reasoning_budget else RUN_ALL_TIMEOUT
+        out = run_script(ctx, run_all, common + always_thinks, model, timeout, on_line=parser.feed)
         case.data.update(out.data())
         parser.flush()
         # Before the output checks: after a crash, they would only blame run_all.py.
