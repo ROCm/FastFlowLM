@@ -5,6 +5,12 @@
 #include <stdexcept>
 #include <algorithm>
 #include <omp.h>
+#ifdef QWEN35_DECODE_PROF
+#include <chrono>
+#include <cstdio>
+#define DP_NOW() std::chrono::steady_clock::now()
+#define DP_US(a,b) std::chrono::duration<double,std::micro>((b)-(a)).count()
+#endif
 #include "qwen3_5vl_npu_detail.hpp"
 #include "metrices.hpp"
 #include "utils/error_measure.hpp"
@@ -206,9 +212,15 @@ void qwen3_5vl_npu::Impl::set_context_length(int L, int new_general_token_idx){
 }
 
 buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
+#ifdef QWEN35_DECODE_PROF
+    auto t0 = DP_NOW();
+#endif
     this->embed_forward(ids, this->x);
     this->x.sync_to_device();
 
+#ifdef QWEN35_DECODE_PROF
+    auto t1 = DP_NOW();
+#endif
     if (!this->npu->is_preemption_enabled()){
         this->layers_run.execute();
         flm::npu::wait_for_completion(this->layers_run, "layers_run");
@@ -228,11 +240,27 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
         }
     }
 
+#ifdef QWEN35_DECODE_PROF
+    auto t2 = DP_NOW();
+#endif
     this->x.sync_to_device();
     this->lm_head_run.start();
+#ifdef QWEN35_DECODE_PROF
+    auto t3 = DP_NOW();
+#endif
     this->set_context_length(this->current_context_length + 1, this->general_token_idx + 1);
+#ifdef QWEN35_DECODE_PROF
+    auto t4 = DP_NOW();
+#endif
     flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+#ifdef QWEN35_DECODE_PROF
+    auto t5 = DP_NOW();
+#endif
     this->logits.sync_from_device();
+#ifdef QWEN35_DECODE_PROF
+    auto t6 = DP_NOW();
+    fprintf(stderr, "DECPROF embed %.0f layers %.0f xsync+lmstart %.0f setctx(host) %.0f lm_wait %.0f logits_sync %.0f total %.0f us\n", DP_US(t0,t1), DP_US(t1,t2), DP_US(t2,t3), DP_US(t3,t4), DP_US(t4,t5), DP_US(t5,t6), DP_US(t0,t6));
+#endif
     return this->logits_valid;
 }
 
@@ -623,6 +651,9 @@ buffer<bf16> qwen3_5vl_npu::forward(int ids){
 }
 
 buffer<bf16> qwen3_5vl_npu::prefill(std::vector<int>& ids, void* payload){
+    // warm switches need the array to themselves from the first layer to the last (qwen3_5vl_launch.hpp)
+    qwen3_5vl_array_lock array((this->_impl->pctx && this->_impl->pctx->ll.ready) ||
+                               (this->_impl->qwen3_5vl_image_encoder && this->_impl->qwen3_5vl_image_encoder->vll.ready));
     try {
         buffer<bf16> result = this->_impl->prefill(ids, payload);
         return result;

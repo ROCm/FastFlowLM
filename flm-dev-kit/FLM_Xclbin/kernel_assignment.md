@@ -264,8 +264,18 @@ columns on each of the two DDR channels.
 | `layer.xclbin` | `xclbins-Qwen3_5_qwen3_5_decoding_QWEN3_5_4B` | Peano |
 | `lm_head.xclbin` | `xclbins-Qwen3_5_lm_head_npu_bin_QWEN3_5_4B` | Peano |
 | `mm.xclbin` | `xclbins-dequant_mm_512x512x512` | Peano |
+| `mm_rtm2_glu.xclbin` | `xclbins-dequant_mm_bfp16_rtm2_glu_512x512x512` | Peano |
+| `qwen3_5.switches` | `xclbins-Qwen3_5_prefill_switches` | Peano |
+| `qwen3_5_vision.switches` | `xclbins-Qwen3_5_vision_switches` | Peano |
 | `vision_attn.xclbin` | `xclbins-VisionAttention_hostAttention_whoel_array_QWEN3_5_4B-VISION-ATTENTION` | Peano |
 | `vision_mm.xclbin` | `xclbins-MM_host7_mt_variant_bias_QWEN3_5_4B-VISION-MM` | Peano |
+
+`qwen3_5.switches` is not a kernel: it packs the aie2p-launchlib control-packet switches that let the prefill's conv1d,
+gated delta net and attention run in the hardware context of `mm_rtm2_glu.xclbin` (about 0.1 ms per switch instead of
+about 2.6 ms for a second context); see `Qwen3_5/prefill_switches/README.md`. The engine uses it when it is in the
+folder and `mm_rtm2_glu.xclbin` is the mm kernel; `QWEN35_NO_SWITCH=1` turns it off. `qwen3_5_vision.switches` does
+the same for the vision encoder: its attention runs in the hardware context of `vision_mm.xclbin` (see
+`Qwen3_5/vision_switches/README.md`); `QWEN35_VISION_NO_SWITCH=1` turns it off.
 
 #### `qwen3.5:9b` → `Qwen3.5-9B-NPU2`
 

@@ -456,7 +456,62 @@ void qwen3_5vl_npu_sequence::gen_mha_engine_seq(
     seq->cmds2seq();
 }
 
+namespace {
+    // mm_rtm2_glu.xclbin memtile registers (FLM_Xclbin/dequant_mm_bfp16_rtm2_glu_512x512x512/check_memtile_bds.py checks them in the CDO)
+    constexpr uint32_t MT_BD_BASE = 0xA0000, MT_BD_STRIDE = 0x20, MT_LOCK_BASE = 0xC0000, MT_LOCK_STRIDE = 0x10;
+    struct mt_channel { uint32_t ctrl, start_bd; };
+    constexpr mt_channel MT_X_CH[] = {{0xA0600, 0}, {0xA0630, 2}};                                                   // S2MM0, MM2S0
+    constexpr mt_channel MT_Y_CH[] = {{0xA0608, 24}, {0xA0610, 6}, {0xA0618, 26}, {0xA0620, 8}, {0xA0638, 28}};      // S2MM1-4, MM2S1
+    constexpr uint32_t MT_X_S2MM[] = {0, 1}, MT_X_MM2S[] = {2, 3, 4, 5}, MT_Y_S2MM[] = {6, 7, 8, 9, 24, 25, 26, 27}, MT_Y_MM2S[] = {28, 29};
+    constexpr uint32_t MT_X_LOCKS[] = {0, 1, 2, 3, 4}, MT_X_INIT[] = {2, 0, 0, 0, 0};
+    constexpr uint32_t MT_Y_LOCKS[] = {5, 6, 7, 8}, MT_Y_INIT[] = {4, 4, 0, 0};   // parallel y join: 4 producer credits per buffer
+}
+
+// GLU mode (rtp_act 3): a core sends 32 columns per row (silu(gate) * up of its two n slices) instead of 64, so three words of
+// the memtile y descriptors differ from the design's: S2MM D2 wrap (8 -> 4 n tiles), MM2S D0 wrap (32 -> 16 words) and the
+// buffer lengths. The channels park on a descriptor they already fetched, so they are reset, their locks put back to the
+// initial values (writing the maximum first grants a pending acquire), the descriptors rewritten and the channels started
+// again as the design's CDO starts them. m stays 128 (the design's 512-row blocks). Same sequence as MiniCPM-V's mm_rearm.
+void qwen3_5vl_npu_sequence::mm_rearm_y(npu_sequence* seq, const uint32_t ymode){
+    constexpr uint32_t m = 128;
+    auto bd_word = [](uint32_t bd, uint32_t word){ return MT_BD_BASE + MT_BD_STRIDE * bd + 4 * word; };
+    auto lock_reg = [](uint32_t id){ return MT_LOCK_BASE + MT_LOCK_STRIDE * id; };
+    const bool glu = ymode == MM_Y_GLU;
+    for (uint32_t col = 0; col < 8; col++){
+        const npu_tiles mt = get_tile(1, col);
+        const bool has_x = (col % 2) == 0;     // the x of core row r enters through memtile 2r
+        if (has_x) for (auto& c : MT_X_CH) seq->rtp_write(mt, c.ctrl, 2);
+        for (auto& c : MT_Y_CH) seq->rtp_write(mt, c.ctrl, 2);
+        if (has_x) for (uint32_t i = 0; i < 5; i++){ seq->rtp_write(mt, lock_reg(MT_X_LOCKS[i]), 63); seq->rtp_write(mt, lock_reg(MT_X_LOCKS[i]), MT_X_INIT[i]); }
+        for (uint32_t i = 0; i < 4; i++){ seq->rtp_write(mt, lock_reg(MT_Y_LOCKS[i]), 63); seq->rtp_write(mt, lock_reg(MT_Y_LOCKS[i]), MT_Y_INIT[i]); }
+        if (has_x){
+            for (uint32_t bd : MT_X_S2MM) seq->rtp_write(mt, bd_word(bd, 0), m * 256);
+            for (uint32_t bd : MT_X_MM2S) seq->rtp_write(mt, bd_word(bd, 0), m * 128);
+        }
+        for (uint32_t bd : MT_Y_S2MM) {
+            seq->rtp_write(mt, bd_word(bd, 0), glu ? m * 16 : m * 32);
+            seq->rtp_write(mt, bd_word(bd, 4), glu ? ((4u << 17) | 3u) : ((8u << 17) | 3u));
+        }
+        for (uint32_t bd : MT_Y_MM2S) {
+            seq->rtp_write(mt, bd_word(bd, 0), glu ? m * 64 : m * 128);
+            seq->rtp_write(mt, bd_word(bd, 2), glu ? (16u << 17) : (32u << 17));
+            seq->rtp_write(mt, bd_word(bd, 4), (m << 17) | 0x1F);
+        }
+        if (has_x) for (auto& c : MT_X_CH){ seq->rtp_write(mt, c.ctrl, 0); seq->rtp_write(mt, c.ctrl + 4, c.start_bd); }
+        for (auto& c : MT_Y_CH){ seq->rtp_write(mt, c.ctrl, 0); seq->rtp_write(mt, c.ctrl + 4, c.start_bd); }
+    }
+}
+
 void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_t L, const uint32_t Din, const uint32_t Dout, const size_t weight_offset, const size_t out_offset, const int rtp_act){
+    // one segment: the whole y row (Dout / 2 columns for the fused GLU) at out_offset
+    gen_dequant_mm_512(seq, L, Din, {mm_out_seg{rtp_act == 3 ? Dout / 2 : Dout, out_offset}}, weight_offset, rtp_act);
+}
+
+void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_t L, const uint32_t Din, const std::vector<mm_out_seg>& segs, const size_t weight_offset, const int rtp_act){
+    assert(!segs.empty() && (segs.size() == 1 || rtp_act == 0));
+    uint32_t Dout = 0;
+    for (const auto& s : segs) Dout += s.cols;
+    if (rtp_act == 3) Dout *= 2;
     static constexpr npu_tiles IT[8] = {IT0, IT1, IT2, IT3, IT4, IT5, IT6, IT7};
 
     static constexpr int m = QXNX_ROW_BLOCK_SIZE;
@@ -485,6 +540,49 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
     int N_div_n = Dout / desired_n / columns;
     assert(L % (desired_m * 4) == 0);
 
+    // rtp_act 3: the kernel needs [up block | gate block] of the same hidden channels per 256 columns of a core's stream.
+    // load_linear_weights stores the projection as 512-row slices [up | gate] of 32-row blocks, pairs of blocks interleaved
+    // per 256-column block (off(rb, cb) below), so in pass j = 2 s + h core c takes up block 32 s + 8 h + c and the gate
+    // block 16 blocks further, which is the same column block 16 * bpr blocks later: one strided descriptor (column block as
+    // the iteration, up / gate, two halves of a block). Core c then yields hidden channels 256 j + 32 c .. + 31.
+    const bool glu = rtp_act == 3;
+    assert(!glu || (mm_glu && Dout % 1024 == 0));
+    const uint32_t half_cols = glu ? desired_n * 2 : desired_n * 4;            // columns of one memtile group
+    const uint32_t pass_cols = 2 * half_cols;
+    // output segment of each pass: its row pitch Dy and where pass j's columns start in the y buffer (row 0)
+    std::vector<uint32_t> pass_dy(Dout / desired_n / columns);
+    std::vector<size_t> pass_base(pass_dy.size());
+    {
+        uint32_t j = 0;
+        for (const auto& s : segs){
+            assert(s.cols % pass_cols == 0);
+            for (uint32_t c = 0; c < s.cols; c += pass_cols, j++){
+                pass_dy[j] = s.cols;
+                pass_base[j] = s.base + c;
+            }
+        }
+        assert(j == pass_dy.size());
+    }
+    const size_t bb = a_block_size;
+    auto blk_off = [&](uint32_t rb, uint32_t cb){ return ((size_t)(rb / 2) * 2 * blocks_per_row + (size_t)cb * 2 + (rb % 2)) * bb; };
+    const size_t gate_delta = 16 * (size_t)blocks_per_row * bb;
+    assert(!glu || (gate_delta / 4 < (1u << 20) && bb % 8 == 0 && bb / 8 <= 1024 && blocks_per_row < 64));
+    auto send_w = [&](npu_tiles tile, npu_bd_id bd, uint32_t j, uint32_t c, size_t linear_offset){
+        if (!glu){
+            seq->npu_dma_memcpy_nd(sizeof(char), 2, MM2S, tile, bd, it_channel_1,
+                {0, 0, 0, (uint32_t)linear_offset},
+                {1, 1, 1, (uint32_t)get_quantization_byte_size(desired_n * Din, flm_q4k)},
+                {0, 0, 0, 1}, -1, 0, false, aggressive_cache);
+            return;
+        }
+        const uint32_t rb_up = 32 * (j / 2) + 8 * (j % 2) + c;
+        seq->npu_dma_memcpy_nd(sizeof(char), 2, MM2S, tile, bd, it_channel_1,
+            {0, 0, 0, (uint32_t)(weight_offset + blk_off(rb_up, 0))},
+            {blocks_per_row, 2, 2, (uint32_t)(bb / 2)},
+            {(uint32_t)(2 * bb), (uint32_t)gate_delta, (uint32_t)(bb / 2), 1}, -1, 0, false, aggressive_cache);
+    };
+    if (glu) mm_rearm_y(seq, MM_Y_GLU);
+
     for (int row = 2; row < 6; row+=2){
         for (int col = 0; col < columns; col++){
             npu_tiles tile = get_tile(row, col);
@@ -505,7 +603,8 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
             int round = i * N_div_n + j;
             int is_pong = round % 2;
             int bd_offset = is_pong * 8;
-            uint32_t y_offset = i * desired_m * 4 * Dout + j * desired_n * columns;
+            const uint32_t Dy = pass_dy[j];
+            uint32_t y_offset = (uint32_t)(i * desired_m * 4 * Dy + pass_base[j]);
             uint32_t x_offset = i * desired_m * 4 * Din;
             int w_offset = get_quantization_byte_size((size_t)j * desired_n * Din * columns, flm_q4k) + weight_offset;
 
@@ -515,47 +614,27 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
             npu_bd_id w_bd_0 = npu_bd_id(2 + bd_offset);
             npu_bd_id w_bd_1 = npu_bd_id(4 + bd_offset);
             for (uint32_t col = 0; col < 4; col++){
-                seq->npu_dma_memcpy_nd(
-                    sizeof(char),
-                    2,
-                    MM2S,
-                    IT[col],
-                    w_bd_0,
-                    it_channel_1,
-                    {0, 0, 0, (uint32_t)(w_offset + get_quantization_byte_size((size_t)col * desired_n * Din, flm_q4k))},
-                    {1, 1, 1, (uint32_t)get_quantization_byte_size(desired_n * Din, flm_q4k)},
-                    {0, 0, 0, 1},
-                    -1, 0, false, aggressive_cache
-                );
-                seq->npu_dma_memcpy_nd(
-                    sizeof(char),
-                    2,
-                    MM2S,
-                    IT[col + 4],
-                    w_bd_1,
-                    it_channel_1,
-                    {0, 0, 0, (uint32_t)(w_offset + get_quantization_byte_size((size_t)col * desired_n * Din, flm_q4k) + get_quantization_byte_size(4 * desired_n * Din, flm_q4k))},
-                    {1, 1, 1, (uint32_t)get_quantization_byte_size(desired_n * Din, flm_q4k)},
-                    {0, 0, 0, 1},
-                    -1, 0, false, aggressive_cache
-                );
+                send_w(IT[col], w_bd_0, j, col,
+                    w_offset + get_quantization_byte_size((size_t)col * desired_n * Din, flm_q4k));
+                send_w(IT[col + 4], w_bd_1, j, col + 4,
+                    w_offset + get_quantization_byte_size((size_t)col * desired_n * Din, flm_q4k) + get_quantization_byte_size(4 * desired_n * Din, flm_q4k));
                 // receive y
                 seq->npu_dma_memcpy_nd(
                     2, 0,
                     S2MM, IT[col],
                     y_bd_0, it_channel_0,
-                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dout + out_offset)},
-                    {1, 1, desired_m, desired_n * 4},
-                    {0, 0, Dout, 1},
+                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dy)},
+                    {1, 1, desired_m, half_cols},
+                    {0, 0, Dy, 1},
                     -1, 0, true
                 );
                 seq->npu_dma_memcpy_nd(
                     2, 0,
                     S2MM, IT[col + 4],
                     y_bd_1, it_channel_0,
-                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dout + 4 * desired_n + out_offset)},
-                    {1, 1, desired_m, desired_n * 4},
-                    {0, 0, Dout, 1},
+                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dy + half_cols)},
+                    {1, 1, desired_m, half_cols},
+                    {0, 0, Dy, 1},
                     -1, 0, true
                 );
                 // send x
@@ -581,6 +660,7 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
         seq->npu_dma_wait(IT[r], S2MM, it_channel_0);
         seq->npu_dma_wait(IT[r + 4], S2MM, it_channel_0);
     }
+    if (glu) mm_rearm_y(seq, MM_Y_RESTORE);   // leave the design's configuration behind
     seq->cmds2seq();
 }
 

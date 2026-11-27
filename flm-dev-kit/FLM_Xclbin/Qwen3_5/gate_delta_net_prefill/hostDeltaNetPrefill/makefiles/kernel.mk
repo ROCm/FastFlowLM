@@ -12,6 +12,15 @@ KERNEL_SRCS := $(shell find ${HOME_DIR}/kernel -name '*.cc')
 KERNEL_OBJS := $(patsubst ${HOME_DIR}/kernel/%.cc, ${KERNEL_O_DIR}/%.o, $(KERNEL_SRCS))
 KERNEL_HEADERS := $(shell find ${HOME_DIR}/kernel -name '*.h')
 
+# GateDeltaNet prefill core: 0 = per-token recurrence, 1 = chunked C=16 (hi/lo bf16, accurate),
+# 2 = chunked C=16 (one bf16 pass, fast). See kernel/gdn_chunked.h.
+GDN_CHUNK_MODE ?= 0
+PEANOWRAP2P_FLAGS += -DGDN_CHUNK_MODE=${GDN_CHUNK_MODE}
+ifneq (${GDN_CHUNK_MODE},0)
+# the chunked core reuses its buffers in place as float and as bf16
+PEANOWRAP2P_FLAGS += -fno-strict-aliasing
+endif
+
 # Build kernels
 ${KERNEL_O_DIR}/%.o: ${HOME_DIR}/kernel/%.cc ${KERNEL_HEADERS}
 	mkdir -p ${@D}
