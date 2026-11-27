@@ -84,7 +84,8 @@ bool normalize_chat_reasoning(json& request, std::string& param, std::string& er
     const bool on = level != "none";
     param = effort.is_null() ? "reasoning.enabled" : "reasoning.effort";
     if (!enabled.is_null() && enabled != on)
-        return reject("reasoning.enabled", "reasoning.enabled contradicts the explicit effort level");
+        return reject("reasoning.enabled", effort.is_null() ? "reasoning.enabled contradicts reasoning_effort" :
+                                                             "reasoning.enabled contradicts reasoning.effort");
     auto agrees = [&](const json& value, const char* name) {
         if (value.is_null()) return true;
         if (!value.is_boolean()) return reject(name, std::string(name) + " must be a boolean");

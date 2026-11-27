@@ -487,6 +487,7 @@ def openrouter_errors(api: Api) -> None:
         ({"reasoning": {"max_tokens": 4}}, "reasoning.max_tokens"),
         ({"reasoning": {"exclude": True}}, "reasoning.exclude"),
         ({"reasoning": {"effort": "none"}, "think": True}, "reasoning.effort"),
+        ({"reasoning": {"enabled": False}, "reasoning_effort": "high"}, "reasoning.enabled"),
     ]:
         body = {**default, **fields}
         for stream in (False, True):
@@ -502,13 +503,17 @@ def openrouter_errors(api: Api) -> None:
     resp = api.post(cross)
     if resp.status != 404:  # the catalog can omit the model on unsupported hardware
         expect(resp.status == 400 and resp.body["error"]["param"] == "reasoning.enabled", repr(resp.body))
+        expect("reasoning.enabled" in resp.error_message(), resp.error_message())
+    malformed = api.stream({**cross, "reasoning": {"enabled": "false"}})
+    expect(malformed.status == 400 and not malformed.chunks and
+           malformed.error["error"]["param"] == "reasoning.enabled", repr(malformed.error))
     expect(loaded_models(api) == resident, "invalid reasoning changed the resident model")
 
 
 @case
 def openrouter_effort(api: Api) -> None:
     """On toggleable Qwen, the reasoning object works in both JSON and SSE without changing defaults."""
-    if loaded_family(api) not in ("qwen3", "qwen3.5"):
+    if api.always_thinks or loaded_family(api) not in ("qwen3", "qwen3.5"):
         raise Skip("requires a toggleable Qwen model")
     default = api.body(user(PROMPT), max_tokens=128)
     del default["think"]
@@ -526,7 +531,9 @@ def openrouter_effort(api: Api) -> None:
             native = thinks({"reasoning_effort": level}, stream)
             expect(native == (level != "none"), f"native {level} control did not work")
             expect(thinks({"reasoning": obj}, stream) == native, f"{obj} != native {level}, stream={stream}")
-        expect(api.post({**default, "reasoning": {"effort": "bad"}}).status == 400, "bad effort succeeded")
+        expect(thinks({"reasoning": {"enabled": not before}}, stream) != before, "opposite setting had no effect")
+        conflict = {**default, "reasoning": {"enabled": False}, "reasoning_effort": "high"}
+        expect(api.post(conflict).status == 400, "conflicting effort succeeded")
         expect(thinks({}, stream) == before, "nested reasoning changed next request's default")
 
 

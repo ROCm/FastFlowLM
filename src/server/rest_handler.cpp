@@ -1482,7 +1482,7 @@ void RestHandler::handle_openai_chat_completion(json request,
 ///       receives the four canonical FLM levels.
 static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, bool is_gpt_oss,
                                           bool is_hy_memory, std::optional<std::string>& resolved_effort,
-                                          std::string& error) {
+                                          std::string& error, const std::string& effort_param) {
     resolved_effort.reset();
     std::optional<std::string> canonical;
     if (!chat_reasoning_effort_from_openai(request, canonical, error, is_hy_memory)) {
@@ -1501,7 +1501,8 @@ static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, 
         return true;
     }
     if (is_gpt_oss && *canonical == "none") {
-        error = "reasoning_effort \"none\" is not supported by gpt-oss (use \"low\", \"medium\", or \"high\")";
+        error = effort_param + (effort_param == "reasoning.enabled" ? " false" : " \"none\"") +
+                " is not supported by gpt-oss (use \"low\", \"medium\", or \"high\")";
         return false;
     }
     resolved_effort = std::move(canonical);
@@ -1600,7 +1601,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         std::optional<std::string> resolved_effort;
         std::string effort_error;
         if (!resolve_chat_reasoning_effort(request, pre_is_inkling, pre_is_gpt_oss, pre_is_hy_memory, resolved_effort,
-                                           effort_error)) {
+                                           effort_error, effort_param)) {
             bad_request(effort_error, effort_param);
             return;
         }
@@ -1626,7 +1627,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         const bool is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
         const bool is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
         if (!resolve_chat_reasoning_effort(request, is_inkling, is_gpt_oss, is_hy_memory, resolved_effort,
-                                           effort_error)) {
+                                           effort_error, effort_param)) {
             bad_request(effort_error, effort_param);
             return;
         }
