@@ -129,12 +129,38 @@ inline std::optional<ErrorValue> extract_error(const ojson& response_data) {
     return ev;
 }
 
+/// Where an exception was caught: while the handler reads the request, or inside the engine
+/// (prefill, generation, finishing the reply) after the request was accepted.
+enum class Stage { Request, Engine };
+
+/// std::stoi and friends throw std::invalid_argument with a bare message ("stoi" on libstdc++,
+/// "invalid stoi argument" on MSVC). Request parsing names the field instead, so these are internal.
+inline bool is_std_conversion_error(const std::exception& e) {
+    if (!dynamic_cast<const std::invalid_argument*>(&e)) return false;
+    std::string_view what = e.what();
+    constexpr std::string_view msvc_prefix = "invalid ";
+    constexpr std::string_view msvc_suffix = " argument";
+    if (what.size() > msvc_prefix.size() + msvc_suffix.size() && what.substr(0, msvc_prefix.size()) == msvc_prefix &&
+        what.substr(what.size() - msvc_suffix.size()) == msvc_suffix) {
+        what = what.substr(msvc_prefix.size(), what.size() - msvc_prefix.size() - msvc_suffix.size());
+    }
+    for (std::string_view fn : {"stoi", "stol", "stoll", "stoul", "stoull", "stof", "stod", "stold"}) {
+        if (what == fn) return true;
+    }
+    return false;
+}
+
 /// Map standard/JSON exceptions escaping a handler to 400 (client type/arg fault) or 500.
-inline ErrorValue exception_error(const std::exception& e) {
-    if (dynamic_cast<const nlohmann::json::type_error*>(&e) ||
-        dynamic_cast<const nlohmann::json::out_of_range*>(&e) ||
-        dynamic_cast<const nlohmann::json::invalid_iterator*>(&e) ||
-        dynamic_cast<const std::invalid_argument*>(&e)) {
+/// JSON access errors are the client's only while the request is read; inside the engine they come
+/// from model files or model output. Engines reject bad input with std::invalid_argument, which stays
+/// 400 at either stage, except a bare std::sto* conversion failure, which is never the client's.
+inline ErrorValue exception_error(const std::exception& e, Stage stage = Stage::Request) {
+    const bool json_access = dynamic_cast<const nlohmann::json::type_error*>(&e) ||
+                             dynamic_cast<const nlohmann::json::out_of_range*>(&e) ||
+                             dynamic_cast<const nlohmann::json::invalid_iterator*>(&e);
+    const bool client_fault = json_access ? stage == Stage::Request
+                                          : dynamic_cast<const std::invalid_argument*>(&e) && !is_std_conversion_error(e);
+    if (client_fault) {
         return ErrorValue{400, "invalid_request_error", e.what()};
     }
     return ErrorValue{500, "server_error", e.what()};
