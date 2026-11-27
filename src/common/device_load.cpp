@@ -45,10 +45,17 @@ std::optional<std::size_t> single_adapter(std::span<const Candidate> candidates)
     std::optional<std::size_t> selected;
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         if (!candidates[i].hardware) continue;
-        if (selected || candidates[i].nodes != 1) return {};
+        if (selected || (candidates[i].nodes && *candidates[i].nodes != 1)) return {};
         selected = i;
     }
     return selected;
+}
+
+const char* no_adapter_reason(std::span<const Candidate> candidates) {
+    std::size_t hardware = 0;
+    for (const auto& c : candidates) hardware += c.hardware;
+    return hardware == 0 ? "no hardware adapter" : hardware > 1 ? "several hardware adapters" :
+                           "a linked adapter with several physical nodes";
 }
 
 void EngineUsage::add(std::wstring_view s, double value, bool valid) {
@@ -80,6 +87,12 @@ Usage EngineUsage::get(AdapterId id) const {
         else if (result.own) result.own = std::min(100., std::max(*result.own, sum.own));
     }
     return measured ? result : Usage{};
+}
+
+bool EngineUsage::linked(AdapterId id) const {
+    return std::ranges::any_of(engines_, [&](const auto& row) {
+        return row.first.same_luid(id) && row.first.physical != id.physical;
+    });
 }
 
 #ifndef _WIN32
