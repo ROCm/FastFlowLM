@@ -287,9 +287,9 @@ void HttpSession::abort_open_stream(flm::error_model::Protocol proto, const flm:
     if (stream_finished_.load()) {
         return;
     }
-    if (proto == flm::error_model::Protocol::OpenAI) {
-        write_streaming_response(json(flm::error_model::stream_error_frame(proto, err)), false);
-        write_streaming_response(json("data: [DONE]\n\n"), true);
+    // The client gets the error in the stream's own format, and the stream is ended, not cut off
+    if (const auto frames = flm::error_model::stream_abort_frames(proto, err)) {
+        write_streaming_response(json(*frames), true);
     } else {
         close_connection();
     }
@@ -424,7 +424,7 @@ void HttpSession::handle_request(bool cors) {
     res_.keep_alive(req_.keep_alive());
 
     // Handle the request through the server. Nothing may escape into ioc.run(): answer 500
-    // (or, mid-stream, drop the connection) instead of leaving the client without a reply.
+    // (or, mid-stream, an error frame that ends the stream) instead of leaving the client without a reply.
     bool deferred = false;
     const auto proto = flm::error_model::protocol_for_path(
         std::string_view(req_.target().data(), req_.target().size()));

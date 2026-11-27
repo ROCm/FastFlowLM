@@ -159,4 +159,15 @@ inline std::string stream_error_frame(Protocol protocol, const ErrorValue& err) 
     return payload + "\n";
 }
 
+/// The last bytes of a stream that fails after it started: OpenAI one error event then [DONE],
+/// Ollama one {"error": ...} line (as Ollama does). System One does not stream: nullopt, drop it.
+inline std::optional<std::string> stream_abort_frames(Protocol protocol, const ErrorValue& err) {
+    switch (protocol) {
+        case Protocol::OpenAI: return stream_error_frame(protocol, err) + "data: [DONE]\n\n";
+        case Protocol::Ollama: return stream_error_frame(protocol, err);
+        case Protocol::SystemOne: break;
+    }
+    return std::nullopt;
+}
+
 }  // namespace flm::error_model
