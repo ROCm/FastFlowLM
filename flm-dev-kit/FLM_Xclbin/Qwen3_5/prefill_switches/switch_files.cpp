@@ -2,9 +2,10 @@
 // Portions of this file consist of AI-generated content.
 //
 // switch_files.cpp : write the aie2p-launchlib switches of a package for the Qwen3.5 prefill (no NPU, no XRT).
-//   switch_files --package DIR --out DIR --apps mm,conv,gdn,attn [--file qwen3_5.switches]
+//   switch_files --package DIR --out DIR --apps mm,conv,gdn,attn [--pairs a:b,c:d,...] [--file qwen3_5.switches]
 // Writes OUT/<file> (also used for the vision encoder, ../vision_switches): per kernel its instruction stream (the engine turns it into an ELF with aiebu) and
-// control packets (XRT argument 3 + packet_arg). Kernels: cold_<first app>, and <a>_then_<b> for every ordered pair.
+// control packets (XRT argument 3 + packet_arg). Kernels: cold_<first app>, and <a>_then_<b> for every ordered pair, or
+// for the pairs of --pairs only.
 #include "launch/launch.hpp"
 
 #include <cstdio>
@@ -23,20 +24,29 @@ static std::vector<std::string> split(const std::string &s) {
 }
 
 int main(int argc, char **argv) {
-  std::string package, out, apps_arg = "mm,conv,gdn,attn", file = "qwen3_5.switches";
+  std::string package, out, apps_arg = "mm,conv,gdn,attn", pairs_arg, file = "qwen3_5.switches";
   for (int i = 1; i + 1 < argc; i += 2) {
     const std::string o = argv[i];
     if (o == "--package") package = argv[i + 1];
     else if (o == "--out") out = argv[i + 1];
     else if (o == "--apps") apps_arg = argv[i + 1];
+    else if (o == "--pairs") pairs_arg = argv[i + 1];
     else if (o == "--file") file = argv[i + 1];
   }
   try {
     const auto apps = split(apps_arg);
     std::vector<launch::Config> cfg{launch::cold(apps[0])};
-    for (auto &a : apps)
-      for (auto &b : apps)
-        if (a != b) cfg.push_back(launch::warm(a, b));
+    if (pairs_arg.empty()) {
+      for (auto &a : apps)
+        for (auto &b : apps)
+          if (a != b) cfg.push_back(launch::warm(a, b));
+    } else {
+      for (const std::string &p : split(pairs_arg)) {
+        const size_t c = p.find(':');
+        if (c == std::string::npos) throw std::runtime_error("bad pair '" + p + "' (want from:to)");
+        cfg.push_back(launch::warm(p.substr(0, c), p.substr(c + 1)));
+      }
+    }
     launch::ConfigList list{package, launch::Transport::ctrlpkt, cfg};
     const auto none = [](launch::Rt &) {};
     launch::SequenceMap seqs;

@@ -14,11 +14,15 @@ other kernels; as separate xclbins each needs its own hardware context, and a sw
 aie2p-launchlib the four kernels are apps of one package and the array switches between them with control packets
 inside the mm hardware context, about 0.1 ms per switch.
 
-`make bitstream` builds the four kernels as their own units do (kernel objects, IRON design, `aiecc.py` with their
+`make bitstream` builds the kernels as their own units do (kernel objects, IRON design, `aiecc.py` with their
 flags plus `--aie-generate-txn`), packs them with `aie2p-launchlib/launchlib/tools/make_package.py`, and runs
 `switch_files.cpp` (host only, no NPU or XRT needed) over the package: `build/xclbins/qwen3_5.switches` holds, for
-every ordered pair of apps and for the cold start of mm, the instruction stream and the control packets. The format is
-in `qwen3_5vl_launch.hpp` (`Q35SW1`). `qwen3_5_switches_base.xclbin` is the mm build's xclbin, there because every
+the cold start of mm and for each switch the engine takes (`--pairs`), the instruction stream and the control packets.
+The format is in `qwen3_5vl_launch.hpp` (`Q35SW1`).
+
+The delta net is there twice, from the same unit and with the same buffers and DMA: `gdn`, built with
+`GDN_CHUNK_MODE=1` (the chunked core, `kernel/gdn_chunked.h`, about 2.9 times faster), which the engine takes, and
+`gdn0`, the per-token recurrence of `GateDeltaNet_prefill.xclbin`, which it takes with `QWEN35_GDN_RECURRENT=1`. `qwen3_5_switches_base.xclbin` is the mm build's xclbin, there because every
 unit's output needs an xclbin; nothing ships it.
 
 `kernel_assignment.json` places `qwen3_5.switches` in the `Qwen3.5-4B-NPU2` folder next to `mm_rtm2_glu.xclbin`. The

@@ -98,6 +98,9 @@ struct qwen3_5vl_linear_block_prefill_context{
     // one window per layer; null without them
     qwen3_5vl_launch* ll;
     npu_app_manager* gemm_mgr;
+    // the switches into and out of the delta net's app (gdn or gdn0, see qwen3_5vl_prefill_context)
+    std::string sw_to_gdn = "conv_then_gdn";
+    std::string sw_from_gdn = "gdn_then_mm";
 
     // host stages overlapped with the projections, ranged qkv syncs; QWEN35_NO_OVERLAP=1 keeps the serial path
     bool overlap = std::getenv("QWEN35_NO_OVERLAP") == nullptr;
@@ -226,9 +229,9 @@ struct qwen3_5vl_linear_block_prefill_context{
             std::vector<qwen3_5vl_launch::hop> hops(2);
             hops[0].to = "mm_then_conv";
             hops[0].runs.push_back(conv1d.create_run(conv_qkv, qkv, ssm_weights));
-            hops[1].to = "conv_then_gdn";
+            hops[1].to = sw_to_gdn.c_str();
             hops[1].runs.push_back(deltanet.create_run(cache, conv_qkv, alpha_beta, common_bufs->after_mix));
-            ll->window(gemm_mgr, hops, "gdn_then_mm");
+            ll->window(gemm_mgr, hops, sw_from_gdn.c_str());
             common_bufs->after_mix.sync_from_device();
             PREFILL_PROF_TICK("linear:conv1d+deltanet");
         } else
@@ -532,7 +535,12 @@ struct qwen3_5vl_prefill_context{
         const char* no_glu = std::getenv("QWEN35_NO_GLU");
         seq_gen->mm_glu = use_bfp && desc->intermediate_size % 512 == 0 && !(no_glu && no_glu[0] == '1');
         // conv1d, the delta net and attention in mm_rtm2_glu's context when the folder has qwen3_5.switches (built
-        // against it, see qwen3_5vl_launch.hpp); runlists need preemption off
+        // against it, see qwen3_5vl_launch.hpp); runlists need preemption off. Its delta net app gdn is the chunked
+        // core (GDN_CHUNK_MODE=1); QWEN35_GDN_RECURRENT=1 takes gdn0, the per-token recurrence of
+        // GateDeltaNet_prefill.xclbin (FLM_Xclbin/Qwen3_5/prefill_switches)
+        const char* gdn_rec = std::getenv("QWEN35_GDN_RECURRENT");
+        const std::string gdn_app = gdn_rec && gdn_rec[0] == '1' ? "gdn0" : "gdn";
+        ll.names = {"cold_mm", "mm_then_conv", "conv_then_" + gdn_app, gdn_app + "_then_mm", "mm_then_attn", "attn_then_mm"};
         if (use_bfp && !npu->is_preemption_enabled() && ll.ensure(gemm_app_manager, utils::path_join(xdir, "qwen3_5.switches"))) {
             header_print("qwen3.5", "prefill conv1d, delta net and attention share the mm hardware context (control-packet switches)");
             this->conv1d_app_manager = this->gate_delta_net_manager = this->mha_app_manager = gemm_app_manager;
@@ -558,6 +566,8 @@ struct qwen3_5vl_prefill_context{
             gate_delta_net_manager,
             sw
         );
+        this->linear_block->sw_to_gdn = ll.names[2];
+        this->linear_block->sw_from_gdn = ll.names[3];
 
         this->attn_block = std::make_unique<qwen3_5vl_attn_block_prefill_context>(
             desc,

@@ -22,15 +22,15 @@ OUT=$(mkdir -p "$1" && cd "$1" && pwd)
 WORK=$HERE/build/work
 FLAGS="--aie-generate-cdo --no-compile-host --no-xchesscc --no-xbridge"
 
-# build_one APP UNIT IRON_SCRIPT EXTRA_AIECC_FLAGS [IRON_ARGS...]
+# build_one APP UNIT IRON_SCRIPT EXTRA_AIECC_FLAGS MAKE_VARS [IRON_ARGS...]
 build_one() {
-    local app=$1 src=$X/$2 script=$3 extra=${4:-}
-    shift 4
+    local app=$1 src=$X/$2 script=$3 extra=${4:-} vars=${5:-}
+    shift 5
     local unit=$WORK/src_$app out=$WORK/$app
-    echo "== $app ($src)"
+    echo "== $app ($src) $vars"
     mkdir -p "$unit"
     (cd "$src" && tar cf - --exclude=./build --exclude='*.exe' --exclude='*.log' .) | (cd "$unit" && tar xf -)
-    (cd "$unit" && make kernel)
+    (cd "$unit" && make kernel $vars)
     mkdir -p "$out"
     python3 "$unit/iron/$script" "$@" > "$out/design.mlir"
     cp "$unit"/build/*/kernel/*.o "$out/" 2>/dev/null || cp "$unit"/build/kernel/*.o "$out/"
@@ -41,18 +41,23 @@ build_one() {
 }
 
 rm -rf "$WORK" && mkdir -p "$WORK"
-build_one mm   dequant_mm_bfp16_rtm2_glu_512x512x512 dequant_mm_aie.py "--alloc-scheme=basic-sequential"
-build_one conv Qwen3_5/conv1d_prefill conv_aie.py ""
+build_one mm   dequant_mm_bfp16_rtm2_glu_512x512x512 dequant_mm_aie.py "--alloc-scheme=basic-sequential" ""
+build_one conv Qwen3_5/conv1d_prefill conv_aie.py "" ""
+# The delta net twice: gdn with the chunked core (GDN_CHUNK_MODE=1, kernel/gdn_chunked.h), gdn0 with the per-token
+# recurrence (the standalone GateDeltaNet_prefill.xclbin's), for QWEN35_GDN_RECURRENT=1. Same buffers and DMA.
 # IRON_ARGS of hostDeltaNetPrefill/Makefile: DEVICE TRACE_SIZE L DQ DK DV rows columns MT_L CT_L heads QK_group layout
-build_one gdn  Qwen3_5/gate_delta_net_prefill/hostDeltaNetPrefill GateDeltaNet_prefill_aie.py "" \
-    npu2 0 2048 128 128 128 4 8 128 16 32 2 1
-build_one attn Qwen3_5/gated_attention_prefill attn_aie.py ""
+GDN_ARGS="npu2 0 2048 128 128 128 4 8 128 16 32 2 1"
+build_one gdn  Qwen3_5/gate_delta_net_prefill/hostDeltaNetPrefill GateDeltaNet_prefill_aie.py "" GDN_CHUNK_MODE=1 $GDN_ARGS
+build_one gdn0 Qwen3_5/gate_delta_net_prefill/hostDeltaNetPrefill GateDeltaNet_prefill_aie.py "" GDN_CHUNK_MODE=0 $GDN_ARGS
+build_one attn Qwen3_5/gated_attention_prefill attn_aie.py "" ""
 
-python3 "$LL/tools/make_package.py" -o "$WORK/pkg" mm="$WORK/mm" conv="$WORK/conv" gdn="$WORK/gdn" attn="$WORK/attn"
+python3 "$LL/tools/make_package.py" -o "$WORK/pkg" mm="$WORK/mm" conv="$WORK/conv" gdn="$WORK/gdn" gdn0="$WORK/gdn0" \
+    attn="$WORK/attn"
 
-# The switch generator needs no NPU and no XRT.
+# The switch generator needs no NPU and no XRT. Only the switches the engine takes (qwen3_5vl_launch.hpp names).
 ${CXX:-g++} -std=c++20 -O2 -Wall -I "$LL/include" -I "$X/../FLM_DLL/include" "$HERE/switch_files.cpp" -o "$WORK/switch_files"
-"$WORK/switch_files" --package "$WORK/pkg" --out "$OUT" --apps mm,conv,gdn,attn
+"$WORK/switch_files" --package "$WORK/pkg" --out "$OUT" --apps mm,conv,gdn,gdn0,attn \
+    --pairs mm:conv,conv:gdn,gdn:mm,mm:attn,attn:mm,conv:gdn0,gdn0:mm
 
 # The base xclbin the switches were built against (the engine's mm context is this unit's xclbin).
 cp "$WORK/mm/mm.xclbin" "$OUT/qwen3_5_switches_base.xclbin"
