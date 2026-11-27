@@ -168,6 +168,34 @@ void test_the_chat_template_decides_thinking_and_tools() {
     TEST_REQUIRE(both.at("tools") == true);
 }
 
+void test_think_and_tools_overrides_win_over_the_template() {
+    // a template that only mentions "tools" in a comment would turn tools on by itself
+    TempFolder commented("commented");
+    make_vlm_package(commented.path, "{# tools are not used here #}{{ messages }}");
+    const auto guessed = flm::catalog::build_local_model_entry(commented.path, "qwen3.5", "aie2p").entry;
+    TEST_REQUIRE(guessed.at("tools") == true);
+
+    const auto forced_off = flm::catalog::build_local_model_entry(
+        commented.path, "qwen3.5", "aie2p", std::nullopt, false).entry;
+    TEST_REQUIRE(forced_off.at("tools") == false);
+    TEST_REQUIRE(forced_off.at("details").at("think") == false);
+
+    // a template with the thinking marker is turned off by an override, and a plain one is turned on
+    TempFolder reasoning("reasoning-override");
+    make_vlm_package(reasoning.path, "{% if enable_thinking %}<think>{% endif %}");
+    const auto thinking_off = flm::catalog::build_local_model_entry(
+        reasoning.path, "qwen3.5", "aie2p", false, std::nullopt).entry;
+    TEST_REQUIRE(thinking_off.at("details").at("think") == false);
+    TEST_REQUIRE(thinking_off.at("tools") == false);
+
+    TempFolder plain("plain-override");
+    make_vlm_package(plain.path, "{{ messages }}");
+    const auto thinking_on = flm::catalog::build_local_model_entry(
+        plain.path, "qwen3.5", "aie2p", true, std::nullopt).entry;
+    TEST_REQUIRE(thinking_on.at("details").at("think") == true);
+    TEST_REQUIRE(thinking_on.at("tools") == false);
+}
+
 void test_tag_names_are_safe() {
     // lower case, only letters, digits, '.', '_' and '-'; never empty
     TempFolder odd("My Model (v2)");
@@ -395,6 +423,8 @@ int main() {
             "a text package is not a vlm and a small context is kept");
     RunTest(test_the_chat_template_decides_thinking_and_tools,
             "the chat template decides thinking and tools");
+    RunTest(test_think_and_tools_overrides_win_over_the_template,
+            "think and tools overrides win over the template");
     RunTest(test_tag_names_are_safe, "tag names are safe");
     RunTest(test_a_bad_folder_says_what_is_wrong, "a bad folder says what is wrong");
     RunTest(test_a_package_cannot_name_files_outside_its_folder,

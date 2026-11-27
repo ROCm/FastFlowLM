@@ -571,7 +571,14 @@ static bool register_local_model(program_args_t& args, model_list& models, const
     auto& frontends = flm::frontend::FrontendRegistry::instance();
     auto& backends = flm::backend::BackendRegistry::instance();
     try {
-        auto local = flm::catalog::build_local_model_entry(args.model_dir, args.family, platform);
+        // --think / --tools: -1 leaves the chat template in charge, 0 and 1 set the flag
+        const auto as_override = [](int mode) -> std::optional<bool> {
+            if (mode < 0) return std::nullopt;
+            return mode == 1;
+        };
+        auto local = flm::catalog::build_local_model_entry(args.model_dir, args.family, platform,
+                                                           as_override(args.think_mode),
+                                                           as_override(args.tools_mode));
         const std::string backend = local.backend;
         if (!frontends.has(args.family) || !backends.has(args.family, backend)) {
             std::string runnable;

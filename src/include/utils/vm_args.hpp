@@ -122,6 +122,10 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "(for run and serve). The folder is read in place: nothing is downloaded, verified or deleted")
             ("family", po::value<std::string>(&parsed_args.family)->default_value(""),
              "With --model-dir: the model family that runs the package, e.g. qwen3.5")
+            ("think", po::value<std::string>(&parsed_args.think)->default_value(""),
+             "With --model-dir: on or off to set whether the model reasons; default reads the chat template")
+            ("tools", po::value<std::string>(&parsed_args.tools)->default_value(""),
+             "With --model-dir: on or off to set whether the model takes tools; default reads the chat template")
             ("prefill-chunk-len,pcl", po::value<int>(&parsed_args.prefill_chunk_len)->default_value(-1),
              "Set prefill chunk length")
             ("prefix-cache-mb", po::value<int>(&parsed_args.prefix_cache_mb)->default_value(-1),
@@ -301,6 +305,26 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
                 std::cerr << "Error: --model-dir replaces the model tag; give one or the other, not both" << std::endl;
                 return false;
             }
+        }
+
+        // --think and --tools override what the chat template says, for a --model-dir folder only
+        const auto parse_switch = [&](const std::string& name, const std::string& value, int& mode) {
+            if (value.empty()) return true;
+            if (parsed_args.model_dir.empty()) {
+                std::cerr << "Error: --" << name << " is only supported with --model-dir" << std::endl;
+                return false;
+            }
+            if (value == "on") mode = 1;
+            else if (value == "off") mode = 0;
+            else {
+                std::cerr << "Error: --" << name << " takes on or off, not '" << value << "'" << std::endl;
+                return false;
+            }
+            return true;
+        };
+        if (!parse_switch("think", parsed_args.think, parsed_args.think_mode) ||
+            !parse_switch("tools", parsed_args.tools, parsed_args.tools_mode)) {
+            return false;
         }
 
 
