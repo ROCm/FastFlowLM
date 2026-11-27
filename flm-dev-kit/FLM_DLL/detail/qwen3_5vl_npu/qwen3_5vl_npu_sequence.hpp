@@ -57,6 +57,14 @@ struct qwen3_5vl_npu_sequence{
     size_t conv_w_size_bf16;
 
     size_t s_offset;
+    /// QWEN35_DSEQ_V1=1: the previous decode layer order (every small DMA waited where it is issued, the weight
+    /// double buffer drained after each projection); default keeps one weight stream across the layer's projections
+    /// and waits for the state, conv and alpha/beta transfers only where the next use needs them. The default order
+    /// needs the GDN decode kernel that takes its S_out lock before writing the state (qwen3_5_decoding/kernels)
+    bool seq_v1 = false;
+    /// weight rounds issued in the current layer sequence / issued and not waited yet
+    size_t w_round = 0;
+    uint32_t w_pending = 0;
 
     static constexpr uint32_t l_begin_mha_address = 61568;
     static constexpr uint32_t l_end_mha_address = 11904;
@@ -65,18 +73,20 @@ struct qwen3_5vl_npu_sequence{
     void _gen_sequence(npu_sequence* seq, int L);
     void _send_hidden_states(npu_sequence* seq);
     void _send_rms_weights(npu_sequence* seq);
-    void _send_rope_rms_weights(npu_sequence* seq);
+    void _send_rope_rms_weights(npu_sequence* seq, bool wait = true);
     void _receive_kv_cache(npu_sequence* seq, const int L);
     void _move_kv_cache(npu_sequence* seq, const size_t L);
     void _move_weights(npu_sequence* seq, const size_t Dout, const size_t Din, const weight_desc_t& weight);
+    /// waits for every weight round still in flight; ends a layer sequence
+    void _drain_weights(npu_sequence* seq);
     void gen_lm_head_seq(npu_sequence* seq, int VOCAB_SIZE, int D, flm_dtype_t w_dtype = flm_q80);
 
     void _gen_linear_sequence(npu_sequence* seq, bool is_first = true);
-    void _send_linear_conv_weights(npu_sequence* seq);
-    void _receive_linear_kv_cache(npu_sequence* seq);
-    void _move_linear_kv_cache(npu_sequence* seq);
+    void _send_linear_conv_weights(npu_sequence* seq, bool wait = true);
+    void _receive_linear_kv_cache(npu_sequence* seq, bool wait = true);
+    void _move_linear_kv_cache(npu_sequence* seq, bool wait = true);
     void _move_s(npu_sequence* seq);
-    void _move_alpha_beta_weights(npu_sequence* seq, const size_t Dout, const size_t Din, const size_t w_offset);
+    void _move_alpha_beta_weights(npu_sequence* seq, const size_t Dout, const size_t Din, const size_t w_offset, bool wait = true);
     /// \param rtp_act 3 = fused GLU (needs mm_glu): the weights are the up/gate projection as load_linear_weights stores it,
     ///        y = silu(gate) * up, Dout / 2 columns wide, hidden channels in natural order
     void gen_dequant_mm_512(npu_sequence* seq, const uint32_t L, const uint32_t Din, const uint32_t Dout, const size_t weight_offset, const size_t out_offset, const int rtp_act);

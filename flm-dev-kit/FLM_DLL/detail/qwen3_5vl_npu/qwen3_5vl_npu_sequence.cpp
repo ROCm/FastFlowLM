@@ -11,6 +11,7 @@ qwen3_5vl_npu_sequence::qwen3_5vl_npu_sequence(qwen3_5vl_desc& desc, LM_Config c
     this->MAX_L = MAX_L;
 
     const uint32_t intermediate_size = desc.intermediate_size;
+    if (const char* e = std::getenv("QWEN35_DSEQ_V1")) seq_v1 = e[0] == '1';
 }
 
 void qwen3_5vl_npu_sequence::set_max_length(const uint32_t MAX_L){
@@ -781,7 +782,7 @@ void qwen3_5vl_npu_sequence::_gen_sequence(npu_sequence* seq, int L) {
     seq->clear_cmds();
 
     _send_rms_weights(seq);
-    _send_rope_rms_weights(seq);
+    _send_rope_rms_weights(seq, seq_v1);
     // receive y
     seq->npu_dma_memcpy_nd(
         sizeof(bf16),
@@ -804,6 +805,8 @@ void qwen3_5vl_npu_sequence::_gen_sequence(npu_sequence* seq, int L) {
     _move_weights(seq, desc->D, desc->DQ, _weight_desc.attn_output);
     _move_weights(seq, 2 * desc->intermediate_size, desc->D, _weight_desc.ffn_up);
     _move_weights(seq, desc->D, desc->intermediate_size, _weight_desc.ffn_down);
+    _drain_weights(seq);
+    if (!seq_v1) seq->npu_dma_wait(xyr_tile, MM2S, it_channel_0); // rope/rms weights
 
     // wait for receiving y
     seq->npu_dma_wait(
@@ -847,7 +850,7 @@ void qwen3_5vl_npu_sequence::_send_rms_weights(npu_sequence* seq){
     );
 }
 
-void qwen3_5vl_npu_sequence::_send_rope_rms_weights(npu_sequence* seq){
+void qwen3_5vl_npu_sequence::_send_rope_rms_weights(npu_sequence* seq, bool wait){
     seq->npu_dma_memcpy_nd(
         sizeof(bf16),
         w_rope_rms_arg_idx,
@@ -860,7 +863,7 @@ void qwen3_5vl_npu_sequence::_send_rope_rms_weights(npu_sequence* seq){
         {0, 0, 0, 1},
         1, 0, true, no_cache
     );
-    seq->npu_dma_wait(
+    if (wait) seq->npu_dma_wait(
         xyr_tile,
         MM2S,
         it_channel_0
@@ -913,8 +916,12 @@ void qwen3_5vl_npu_sequence::_move_weights(npu_sequence* seq, const size_t Dout,
     const uint32_t cores = columns * 4;
     assert(Dout / m / cores > 0);
     assert(Dout % (m * cores) == 0);
+    // two rounds in flight; by default the double buffer runs on across projections (BD parity from w_round)
+    // and only _drain_weights empties it at the end of the layer
+    const bool stream = !seq_v1;
     for (size_t round = 0; round < Dout / m / cores; round++){
-        uint32_t bd_offset = (round % 2) * 8;
+        const size_t g = stream ? w_round++ : round;
+        uint32_t bd_offset = (g % 2) * 8;
         for (uint32_t col = 0; col < columns; col++){
             seq->npu_dma_memcpy_nd(
                 sizeof(bf16),
@@ -941,7 +948,8 @@ void qwen3_5vl_npu_sequence::_move_weights(npu_sequence* seq, const size_t Dout,
                 -1, 0, true, aggressive_cache
             );
         }
-        if (round > 0){
+        if (stream ? ++w_pending > 1 : round > 0){
+            if (stream) w_pending--;
             for (uint32_t col = 0; col < columns; col++){
                 seq->npu_dma_wait(
                     mvm_tiles[col],
@@ -956,6 +964,7 @@ void qwen3_5vl_npu_sequence::_move_weights(npu_sequence* seq, const size_t Dout,
             }
         }
     }
+    if (stream) return;
     for (uint32_t col = 0; col < columns; col++){
         seq->npu_dma_wait(
             mvm_tiles[col],
@@ -968,6 +977,16 @@ void qwen3_5vl_npu_sequence::_move_weights(npu_sequence* seq, const size_t Dout,
             it_channel_1
         );
     }
+}
+
+void qwen3_5vl_npu_sequence::_drain_weights(npu_sequence* seq){
+    for (; w_pending > 0; w_pending--){
+        for (uint32_t col = 0; col < 4; col++){
+            seq->npu_dma_wait(mvm_tiles[col], MM2S, it_channel_0);
+            seq->npu_dma_wait(mvm_tiles[col], MM2S, it_channel_1);
+        }
+    }
+    w_round = 0;
 }
 
 void qwen3_5vl_npu_sequence::_move_kv_cache(npu_sequence* seq, const size_t L){
@@ -1020,21 +1039,30 @@ void qwen3_5vl_npu_sequence::_gen_linear_sequence(npu_sequence* seq, bool is_fir
         _send_hidden_states(seq);
     }
     _send_rms_weights(seq);
-    _send_linear_conv_weights(seq);
+    // default: the 2 MB GDN state starts streaming before the conv and qkv traffic (its own IT4 channels), and the
+    // IT5 transfers (conv weights + conv cache on ch1, alpha/beta on ch0) are waited only once later work needs them
+    if (!seq_v1) _move_s(seq);
+    _send_linear_conv_weights(seq, seq_v1);
 
-    _move_linear_kv_cache(seq);
-    _move_alpha_beta_weights(seq, desc->linear_num_v_heads_padded * 2, desc->D, _weight_desc.ssm_alpha.offset);
+    _move_linear_kv_cache(seq, seq_v1);
+    _move_alpha_beta_weights(seq, desc->linear_num_v_heads_padded * 2, desc->D, _weight_desc.ssm_alpha.offset, seq_v1);
     _move_weights(seq, desc->Linear_DQ + desc->Linear_DK + desc->Linear_DV, desc->D, _weight_desc.linear_attn_qkv);
-    _receive_linear_kv_cache(seq); // also move qkv weights
-    _move_s(seq);
+    if (!seq_v1) seq->npu_dma_wait(IT5, MM2S, it_channel_0); // alpha/beta
+    _receive_linear_kv_cache(seq, seq_v1); // also move qkv weights
+    if (seq_v1) _move_s(seq);
     _move_weights(seq, desc->Linear_DV, desc->D, _weight_desc.attn_gate);
+    if (!seq_v1) seq->npu_dma_wait(IT5, S2MM, it_channel_1); // conv cache back
     _move_weights(seq, desc->D, desc->Linear_DV, _weight_desc.ssm_out);
     _move_weights(seq, 2 * desc->intermediate_size, desc->D, _weight_desc.ffn_up);
     _move_weights(seq, desc->D, desc->intermediate_size, _weight_desc.ffn_down);
+    _drain_weights(seq);
+    if (!seq_v1) for (int i = 0; i < 2; i++) seq->npu_dma_wait(IT5, MM2S, it_channel_1); // conv weights, conv cache
+    // the state write-back must land before the next layer's sequence reprograms IT4's BDs
+    if (!seq_v1) seq->npu_dma_wait(IT4, S2MM, it_channel_0);
     seq->cmds2seq();
 }
 
-void qwen3_5vl_npu_sequence::_send_linear_conv_weights(npu_sequence* seq){
+void qwen3_5vl_npu_sequence::_send_linear_conv_weights(npu_sequence* seq, bool wait){
     seq->npu_dma_memcpy_nd(
         sizeof(bf16),
         w_rope_rms_arg_idx,
@@ -1047,34 +1075,34 @@ void qwen3_5vl_npu_sequence::_send_linear_conv_weights(npu_sequence* seq){
         {0, 0, 0, 1},
         -1, 0, true, no_cache
     );
-    seq->npu_dma_wait(
+    if (wait) seq->npu_dma_wait(
         IT5,
         MM2S,
         it_channel_1
     );
 }
 
-void qwen3_5vl_npu_sequence::_receive_linear_kv_cache(npu_sequence* seq){
+void qwen3_5vl_npu_sequence::_receive_linear_kv_cache(npu_sequence* seq, bool wait){
     seq->npu_dma_memcpy_nd(
         sizeof(bf16),
         kv_cache_arg_idx,
         S2MM,
         IT5,
-        bd_2,
+        seq_v1 ? bd_2 : bd_5, // own BD: in flight together with the conv weights and cache send
         it_channel_1,
         {0, 0, 0, 0},
         {1, 1, 1, (uint32_t)(desc->conv_kernel_size - 1) * (desc->Linear_DQ + desc->Linear_DK + desc->Linear_DV)},
         {0, 0, 0, 1},
         -1, 0, true, no_cache
     );
-    seq->npu_dma_wait(
+    if (wait) seq->npu_dma_wait(
         IT5,
         S2MM,
         it_channel_1
     );
 }
 
-void qwen3_5vl_npu_sequence::_move_alpha_beta_weights(npu_sequence* seq, const size_t Dout, const size_t Din, const size_t w_offset){
+void qwen3_5vl_npu_sequence::_move_alpha_beta_weights(npu_sequence* seq, const size_t Dout, const size_t Din, const size_t w_offset, bool wait){
     // currently, only on DMA channel 0 of IT5
     const int m = 32;
     const int k = 256;
@@ -1093,27 +1121,27 @@ void qwen3_5vl_npu_sequence::_move_alpha_beta_weights(npu_sequence* seq, const s
         {0, 0, 0, 1},
         -1, 0, true, aggressive_cache
     );
-    seq->npu_dma_wait(
+    if (wait) seq->npu_dma_wait(
         IT5,
         MM2S,
         it_channel_0
     );
 }
 
-void qwen3_5vl_npu_sequence::_move_linear_kv_cache(npu_sequence* seq){
+void qwen3_5vl_npu_sequence::_move_linear_kv_cache(npu_sequence* seq, bool wait){
     seq->npu_dma_memcpy_nd(
         sizeof(bf16),
         kv_cache_arg_idx,
         MM2S,
         IT5,
-        bd_2,
+        seq_v1 ? bd_2 : bd_4, // own BD: still in flight behind the conv weights (bd_2)
         it_channel_1,
         {0, 0, 0, 0},
         {1, 1, 1, (uint32_t)(desc->conv_kernel_size - 1) * (desc->Linear_DQ + desc->Linear_DK + desc->Linear_DV)},
         {0, 0, 0, 1},
         -1, 0, true, no_cache
     );
-    seq->npu_dma_wait(
+    if (wait) seq->npu_dma_wait(
         IT5,
         MM2S,
         it_channel_1
@@ -1143,7 +1171,7 @@ void qwen3_5vl_npu_sequence::_move_s(npu_sequence* seq){
         {0, 0, 0, (uint32_t)s_offset},
         {1, 1, 1, (uint32_t)(desc->linear_num_v_heads * desc->linear_v_head_dim * desc->linear_qk_head_dim * 2)},
         {0, 0, 0, 1},
-        -1, 0, false, no_cache
+        -1, 0, !seq_v1, no_cache
     );
 
     // seq->npu_dma_wait(

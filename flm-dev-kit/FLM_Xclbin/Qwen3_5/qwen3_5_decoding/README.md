@@ -41,3 +41,10 @@ Dataflow of Q:
 Inside Kernel:
 
 - Requires process padding and remove useless data according to parameters
+
+## Gated DeltaNet decode kernel
+
+`kernels/gate_delta_net_decode_128_128_128_32.cc` writes the new state into a single `S_out` buffer that the core DMA
+sends out together with `o`. It must acquire `CT_S_O_out_prod_lock` before it writes the state, not after: until the DMA
+releases that lock it may still be sending the previous head's state from the same buffer. With the lock taken late,
+host sequences that move the next head's inputs earlier corrupt the state now and then (non-deterministic decode).
