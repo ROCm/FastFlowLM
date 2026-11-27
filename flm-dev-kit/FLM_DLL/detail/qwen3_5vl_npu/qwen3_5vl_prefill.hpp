@@ -104,6 +104,8 @@ struct qwen3_5vl_linear_block_prefill_context{
 
     // host stages overlapped with the projections, ranged qkv syncs; QWEN35_NO_OVERLAP=1 keeps the serial path
     bool overlap = std::getenv("QWEN35_NO_OVERLAP") == nullptr;
+    // only the conv state rows of the cache cross in the overlapped path; QWEN35_NO_GEMM_FUSE=1 syncs all of it
+    bool ranged_state = std::getenv("QWEN35_NO_GEMM_FUSE") == nullptr;
 
     qwen3_5vl_linear_block_prefill_context(
         qwen3_5vl_desc* desc,
@@ -195,10 +197,13 @@ struct qwen3_5vl_linear_block_prefill_context{
             auto g_run = linear_g_proj.create_run(common_bufs->gate, common_bufs->x, proj_weights);
             g_run.start();
             qkv.sync_range_from_device_exact(qkv_tail_bytes, conv_state_bytes);
-            cache.sync_from_device();
+            // the conv state rows lead the cache; the delta net state behind them stays on the device
+            if (ranged_state) cache.sync_range_from_device_exact(0, conv_state_bytes);
+            else cache.sync_from_device();
             memcpy(qkv.data(), cache.data(), conv_state_bytes);
             memcpy(cache.data(), (u8*)qkv.data() + qkv_tail_bytes, conv_state_bytes);
-            cache.sync_to_device();
+            if (ranged_state) cache.sync_range_to_device_exact(0, conv_state_bytes);
+            else cache.sync_to_device();
             qkv.sync_range_to_device_exact(0, conv_state_bytes);
             flm::npu::wait_for_completion(g_run, "linear_g_proj");
             common_bufs->gate.sync_from_device();
@@ -307,6 +312,13 @@ struct qwen3_5vl_attn_block_prefill_context{
     buffer<bf16> g;
     buffer<bf16> g_sigmoid;
 
+    // q, k and v in one dispatch into qkv = [q | k | v] (L_padded rows each, q first so attention reads it at offset
+    // 0), their weights being stored back to back; z alone while the host ropes q and k and fills the kv cache.
+    // QWEN35_NO_GEMM_FUSE=1 keeps the four projections
+    npu_app qkv_proj;
+    buffer<bf16> qkv;
+    bool fuse = std::getenv("QWEN35_NO_GEMM_FUSE") == nullptr;
+
     // control-packet switches (qwen3_5vl_launch.hpp): attention runs as a guest in the mm context; null without them
     qwen3_5vl_launch* ll;
     npu_app_manager* gemm_mgr;
@@ -324,22 +336,39 @@ struct qwen3_5vl_attn_block_prefill_context{
         this->v_proj = gemm_app_manager->create_app();
         this->g_proj = gemm_app_manager->create_app();
         this->o_proj = gemm_app_manager->create_app();
+        this->qkv_proj = gemm_app_manager->create_app();
 
         this->mha = mha_app_manager->create_app();
+    }
+
+    // the fused dispatch reads q, k and v as one weight block
+    bool qkv_weights_contiguous() {
+        auto* w = (qwen3_5vl_attn_layer*)(desc->weight_desc[desc->attn_idx].get());
+        return w->attn_k.offset == w->attn_q.offset + w->attn_q.get_size()
+            && w->attn_v.offset == w->attn_k.offset + w->attn_k.get_size();
     }
 
     buffer<bf16> forward(int L, buffer<u8>& proj_weights, buffer<bf16>& rope_rms_weights, buffer<bf16>& cache, std::vector<int>& input_idx, int L_begin) {
         PREFILL_PROF_INIT();
         int L_padded = (L + 511) / 512 * 512;
         if (L_padded_old != L_padded){
-            seq_gen->gen_dequant_mm_512(this->q_proj.seq(), L_padded, desc->D, desc->DQ, desc->get_attn_q_offset(), 0, 0);
-            seq_gen->gen_dequant_mm_512(this->k_proj.seq(), L_padded, desc->D, desc->DK, desc->get_attn_k_offset(), 0, 0);
-            seq_gen->gen_dequant_mm_512(this->v_proj.seq(), L_padded, desc->D, desc->DV, desc->get_attn_v_offset(), 0, 0);
+            fuse = fuse && qkv_weights_contiguous();
+            if (fuse) {
+                const size_t rows = (size_t)L_padded;
+                seq_gen->gen_dequant_mm_512(this->qkv_proj.seq(), L_padded, desc->D,
+                    {{desc->DQ, 0}, {desc->DK, rows * desc->DQ}, {desc->DV, rows * (desc->DQ + desc->DK)}},
+                    desc->get_attn_q_offset(), 0);
+                qkv = this->qkv_proj.create_bo_buffer<bf16>(rows * (desc->DQ + desc->DK + desc->DV));
+            } else {
+                seq_gen->gen_dequant_mm_512(this->q_proj.seq(), L_padded, desc->D, desc->DQ, desc->get_attn_q_offset(), 0, 0);
+                seq_gen->gen_dequant_mm_512(this->k_proj.seq(), L_padded, desc->D, desc->DK, desc->get_attn_k_offset(), 0, 0);
+                seq_gen->gen_dequant_mm_512(this->v_proj.seq(), L_padded, desc->D, desc->DV, desc->get_attn_v_offset(), 0, 0);
+                q  = this->q_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->DQ);
+                k  = this->q_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->DK);
+                v  = this->q_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->DV);
+            }
             seq_gen->gen_dequant_mm_512(this->g_proj.seq(), L_padded, desc->D, desc->DQ, desc->get_attn_g_offset(), 0, 0);
             seq_gen->gen_dequant_mm_512(this->o_proj.seq(), L_padded, desc->DQ, desc->D, desc->get_attn_o_offset(), 0, 0);
-            q  = this->q_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->DQ);
-            k  = this->q_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->DK);
-            v  = this->q_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->DV);
             g  = this->q_proj.create_bo_buffer<bf16>((size_t)L_padded * desc->DQ);
             g_sigmoid  = buffer<bf16>((size_t)L_padded * desc->DQ);
         }
@@ -352,6 +381,32 @@ struct qwen3_5vl_attn_block_prefill_context{
         bf16* q_norm_weight = rope_rms_weights.data() + desc->RoPE_DIM;
         bf16* k_norm_weight = rope_rms_weights.data() + desc->RoPE_DIM + desc->DH;
 
+        if (fuse) {
+            const size_t rows = (size_t)L_padded;
+            buffer<bf16> q_rows(qkv.data(), rows * desc->DQ);
+            buffer<bf16> k_rows(qkv.data() + rows * desc->DQ, rows * desc->DK);
+            buffer<bf16> v_rows(qkv.data() + rows * (desc->DQ + desc->DK), rows * desc->DV);
+            qkv_proj(qkv, common_bufs->x, proj_weights);
+            qkv.sync_from_device();
+
+            auto g_run = g_proj.create_run(g, common_bufs->x, proj_weights);
+            g_run.start();
+            cpu_func::_rope_rms_batch(q_rows, desc->DQ, input_idx, L, desc->num_heads, q_norm_weight, desc->RoPE_DIM, desc->DH, desc->inv_freq);
+            cpu_func::_rope_rms_batch(k_rows, desc->DK, input_idx, L, desc->num_kv_heads, k_norm_weight, desc->RoPE_DIM, desc->DH, desc->inv_freq);
+            // q for attention; k was written on the host too, flushed before the array writes this bo again
+            qkv.sync_to_device();
+            fill_kv_cache(k_rows, v_rows, cache, L_begin, L, true);
+            flm::npu::wait_for_completion(g_run, "g_run");
+            g.sync_from_device();
+            // the host only reads g here, so no flush; 16-aligned chunks give the same values as one call
+            const int n = L * (int)desc->DQ;
+            const int chunk = 16 * 4096;
+            #pragma omp parallel for num_threads(max_prefill_thread) schedule(static)
+            for (int c = 0; c < n; c += chunk)
+                cpu_func::_sigmoid(g_sigmoid.data() + c, g.data() + c, std::min(chunk, n - c));
+            PREFILL_PROF_TICK("attn:qkvg_proj");
+            PREFILL_PROF_TICK("attn:fill_kv_cache");
+        } else {
         q_proj(q, common_bufs->x, proj_weights);
 
         q.sync_from_device();
@@ -380,17 +435,19 @@ struct qwen3_5vl_attn_block_prefill_context{
 
         fill_kv_cache(k, v, cache, L_begin, L);
         PREFILL_PROF_TICK("attn:fill_kv_cache");
+        }
 
+        buffer<bf16>& q_bo = fuse ? qkv : q;
 #if !defined(FLM_USE_HRX)
         if (ll) {
             // one submission: mm -> attention -> mm
             std::vector<qwen3_5vl_launch::hop> hops(1);
             hops[0].to = "mm_then_attn";
-            hops[0].runs.push_back(mha.create_run(common_bufs->after_mix, q, cache));
+            hops[0].runs.push_back(mha.create_run(common_bufs->after_mix, q_bo, cache));
             ll->window(gemm_mgr, hops, "attn_then_mm");
         } else
 #endif
-        mha(common_bufs->after_mix, q, cache);
+        mha(common_bufs->after_mix, q_bo, cache);
 
         common_bufs->after_mix.sync_from_device();
         PREFILL_PROF_TICK("attn:mha");
@@ -408,9 +465,23 @@ struct qwen3_5vl_attn_block_prefill_context{
         return valid;
     }
 
-    void fill_kv_cache(buffer<bf16>& buffer_k, buffer<bf16>& buffer_v, buffer<bf16>& cache, int L_begin, int L){
+    // ranged: only the rows written cross to the device (whole rows of whole cache lines; the host does not read the
+    // cache, so it skips the invalidate)
+    void fill_kv_cache(buffer<bf16>& buffer_k, buffer<bf16>& buffer_v, buffer<bf16>& cache, int L_begin, int L, bool ranged = false){
         tensor_2d<bf16> k_cache(buffer_k, desc->DK);
         tensor_2d<bf16> v_cache(buffer_v, desc->DV);
+
+        if (ranged) {
+            bf16* k_ptr = cache.data() + (size_t)L_begin * desc->DK;
+            bf16* v_ptr = cache.data() + (size_t)L_begin * desc->DV + cache.size() / 2;
+            for (int l = 0; l < L; l++){
+                memcpy(k_ptr + (size_t)l * desc->DK, k_cache[l].data(), desc->DK * sizeof(bf16));
+                memcpy(v_ptr + (size_t)l * desc->DV, v_cache[l].data(), desc->DV * sizeof(bf16));
+            }
+            cache.sync_range_to_device_exact((size_t)L_begin * desc->DK * sizeof(bf16), (size_t)L * desc->DK * sizeof(bf16));
+            cache.sync_range_to_device_exact((cache.size() / 2 + (size_t)L_begin * desc->DV) * sizeof(bf16), (size_t)L * desc->DV * sizeof(bf16));
+            return;
+        }
 
         cache.sync_from_device();
 
@@ -505,6 +576,7 @@ struct qwen3_5vl_prefill_context{
     qwen3_5vl_common_buffers common_bufs;
 
     std::unique_ptr<qwen3_5vl_attn_block_prefill_context> attn_block;
+    bool pad_only_clear = std::getenv("QWEN35_NO_GEMM_FUSE") == nullptr;
     std::unique_ptr<qwen3_5vl_linear_block_prefill_context> linear_block;
     std::unique_ptr<qwen3_5vl_mlp_prefill_context> mlp;
 
@@ -596,7 +668,9 @@ struct qwen3_5vl_prefill_context{
             common_bufs.after_mix = this->gemm_app_manager->create_bo_buffer<bf16>((size_t)L_padded * desc->Linear_DV);
             common_bufs.gate = this->gemm_app_manager->create_bo_buffer<bf16>((size_t)L_padded * desc->Linear_DV);
         }
-        memset(common_bufs.x.data(), 0, common_bufs.x.size() * sizeof(bf16));
+        // the input norm writes rows [0, L) whole, so only the padding rows need clearing (QWEN35_NO_GEMM_FUSE=1: all)
+        if (pad_only_clear) memset(common_bufs.x.data() + (size_t)L * desc->D, 0, (x_size - (size_t)L * desc->D) * sizeof(bf16));
+        else memset(common_bufs.x.data(), 0, common_bufs.x.size() * sizeof(bf16));
 
         // for all layers , first step is store a residual and do input layer norm
         // this step do the rms norm and store it to x, the residual is kept

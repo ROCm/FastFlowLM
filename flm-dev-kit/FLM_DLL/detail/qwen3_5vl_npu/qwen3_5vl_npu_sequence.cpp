@@ -503,6 +503,15 @@ void qwen3_5vl_npu_sequence::mm_rearm_y(npu_sequence* seq, const uint32_t ymode)
 }
 
 void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_t L, const uint32_t Din, const uint32_t Dout, const size_t weight_offset, const size_t out_offset, const int rtp_act){
+    // one segment: the whole y row (Dout / 2 columns for the fused GLU) at out_offset
+    gen_dequant_mm_512(seq, L, Din, {mm_out_seg{rtp_act == 3 ? Dout / 2 : Dout, out_offset}}, weight_offset, rtp_act);
+}
+
+void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_t L, const uint32_t Din, const std::vector<mm_out_seg>& segs, const size_t weight_offset, const int rtp_act){
+    assert(!segs.empty() && (segs.size() == 1 || rtp_act == 0));
+    uint32_t Dout = 0;
+    for (const auto& s : segs) Dout += s.cols;
+    if (rtp_act == 3) Dout *= 2;
     static constexpr npu_tiles IT[8] = {IT0, IT1, IT2, IT3, IT4, IT5, IT6, IT7};
 
     static constexpr int m = QXNX_ROW_BLOCK_SIZE;
@@ -538,9 +547,22 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
     // the iteration, up / gate, two halves of a block). Core c then yields hidden channels 256 j + 32 c .. + 31.
     const bool glu = rtp_act == 3;
     assert(!glu || (mm_glu && Dout % 1024 == 0));
-    const uint32_t Dy = glu ? Dout / 2 : Dout;                                 // row pitch of y
     const uint32_t half_cols = glu ? desired_n * 2 : desired_n * 4;            // columns of one memtile group
     const uint32_t pass_cols = 2 * half_cols;
+    // output segment of each pass: its row pitch Dy and where pass j's columns start in the y buffer (row 0)
+    std::vector<uint32_t> pass_dy(Dout / desired_n / columns);
+    std::vector<size_t> pass_base(pass_dy.size());
+    {
+        uint32_t j = 0;
+        for (const auto& s : segs){
+            assert(s.cols % pass_cols == 0);
+            for (uint32_t c = 0; c < s.cols; c += pass_cols, j++){
+                pass_dy[j] = s.cols;
+                pass_base[j] = s.base + c;
+            }
+        }
+        assert(j == pass_dy.size());
+    }
     const size_t bb = a_block_size;
     auto blk_off = [&](uint32_t rb, uint32_t cb){ return ((size_t)(rb / 2) * 2 * blocks_per_row + (size_t)cb * 2 + (rb % 2)) * bb; };
     const size_t gate_delta = 16 * (size_t)blocks_per_row * bb;
@@ -581,7 +603,8 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
             int round = i * N_div_n + j;
             int is_pong = round % 2;
             int bd_offset = is_pong * 8;
-            uint32_t y_offset = i * desired_m * 4 * Dy + j * pass_cols;
+            const uint32_t Dy = pass_dy[j];
+            uint32_t y_offset = (uint32_t)(i * desired_m * 4 * Dy + pass_base[j]);
             uint32_t x_offset = i * desired_m * 4 * Din;
             int w_offset = get_quantization_byte_size((size_t)j * desired_n * Din * columns, flm_q4k) + weight_offset;
 
@@ -600,7 +623,7 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
                     2, 0,
                     S2MM, IT[col],
                     y_bd_0, it_channel_0,
-                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dy + out_offset)},
+                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dy)},
                     {1, 1, desired_m, half_cols},
                     {0, 0, Dy, 1},
                     -1, 0, true
@@ -609,7 +632,7 @@ void qwen3_5vl_npu_sequence::gen_dequant_mm_512(npu_sequence* seq, const uint32_
                     2, 0,
                     S2MM, IT[col + 4],
                     y_bd_1, it_channel_0,
-                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dy + half_cols + out_offset)},
+                    {0, 0, 0, (uint32_t)(y_offset + col * desired_m * Dy + half_cols)},
                     {1, 1, desired_m, half_cols},
                     {0, 0, Dy, 1},
                     -1, 0, true

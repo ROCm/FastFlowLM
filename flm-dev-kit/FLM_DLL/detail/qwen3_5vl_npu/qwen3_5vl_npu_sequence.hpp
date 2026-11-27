@@ -80,6 +80,12 @@ struct qwen3_5vl_npu_sequence{
     /// \param rtp_act 3 = fused GLU (needs mm_glu): the weights are the up/gate projection as load_linear_weights stores it,
     ///        y = silu(gate) * up, Dout / 2 columns wide, hidden channels in natural order
     void gen_dequant_mm_512(npu_sequence* seq, const uint32_t L, const uint32_t Din, const uint32_t Dout, const size_t weight_offset, const size_t out_offset, const int rtp_act);
+    /// one output segment of a fused projection: `cols` output columns (a multiple of 512) written as an L x cols
+    /// matrix at element offset `base` of the y buffer
+    struct mm_out_seg { uint32_t cols; size_t base; };
+    /// several projections whose weights are stored back to back (Dout = the sum of the segments' cols) in one
+    /// dispatch, each into its own region of the y buffer; rtp_act 0 only (the activation RTP is per dispatch)
+    void gen_dequant_mm_512(npu_sequence* seq, const uint32_t L, const uint32_t Din, const std::vector<mm_out_seg>& segs, const size_t weight_offset, const int rtp_act);
     /// the mm hw_context runs mm_rtm2_glu.xclbin (FLM_Xclbin/dequant_mm_bfp16_rtm2_glu_512x512x512), so rtp_act 3 is available
     bool mm_glu = false;
     /// y descriptor set of the mm_rtm2_glu memtiles: the fused GLU one (rtp_act 3), or the design's again after one
