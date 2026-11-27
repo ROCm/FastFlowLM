@@ -26,6 +26,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include "AutoModel/modeling_gpt_oss.hpp"
+#include "AutoModel/modeling_hy_memory.hpp"
+#include "AutoModel/modeling_inkling2.hpp"
 #include "AutoModel/modeling_minicpm_v.hpp"
 #include "AutoModel/modeling_qwen3_asr.hpp"
 #include "AutoModel/modeling_qwen3_5vl.hpp"
@@ -900,7 +903,8 @@ void RestHandler::handle_systemone(const std::string& raw_body,
 ///@param options the options JSON object
 ///@param request the request JSON object
 void RestHandler::configure_chat_engine_parameters(const json& options, const json& request,
-                                                   std::optional<bool> nested_think) {
+                                                   std::optional<bool> nested_think,
+                                                   const std::optional<std::string>& reasoning_effort) {
     auto_chat_engine->restore_request_settings();
     if (has_value(request, "temperature")) {
         float temperature = request["temperature"];
@@ -934,9 +938,11 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
         bool enable_thinking = request["think"];
         auto_chat_engine->configure_parameter("enable_think", enable_thinking);
     }
-    if (has_value(request, "reasoning_effort")) {
-        std::string reasoning_effort = request["reasoning_effort"];
-        auto_chat_engine->configure_parameter("reasoning_effort", reasoning_effort);
+    if (reasoning_effort.has_value()) {
+        auto_chat_engine->configure_parameter("reasoning_effort", *reasoning_effort);
+    } else if (has_value(request, "reasoning_effort")) {
+        std::string effort = request["reasoning_effort"];
+        auto_chat_engine->configure_parameter("reasoning_effort", effort);
     }
     // chat_template_kwargs.enable_thinking, already checked against the two above
     if (nested_think.has_value()) {
@@ -1448,6 +1454,38 @@ void RestHandler::handle_openai_chat_completion(const json& request,
     run_chat_turn(request, sink, cancellation_token);
 }
 
+/// \brief Validate and resolve `reasoning_effort` for a Chat Completions request.
+/// \note Inkling-2 accepts all seven OpenAI levels verbatim plus numeric strings in [0, 0.99];
+///       gpt-oss rejects "none"; Hy-Memory also takes its own "no_think"; every other model
+///       receives the four canonical FLM levels.
+static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, bool is_gpt_oss,
+                                          bool is_hy_memory, std::optional<std::string>& resolved_effort,
+                                          std::string& error) {
+    resolved_effort.reset();
+    std::optional<std::string> canonical;
+    if (!chat_reasoning_effort_from_openai(request, canonical, error, is_hy_memory)) {
+        const auto it = request.find("reasoning_effort");
+        if (is_inkling && it != request.end() && it->is_string() && Inkling2::valid_effort(it->get<std::string>())) {
+            resolved_effort = it->get<std::string>();
+            return true;
+        }
+        return false;
+    }
+    if (!canonical.has_value()) {
+        return true;
+    }
+    if (is_inkling) {
+        resolved_effort = request.at("reasoning_effort").get<std::string>();
+        return true;
+    }
+    if (is_gpt_oss && *canonical == "none") {
+        error = "reasoning_effort \"none\" is not supported by gpt-oss (use \"low\", \"medium\", or \"high\")";
+        return false;
+    }
+    resolved_effort = std::move(canonical);
+    return true;
+}
+
 void RestHandler::handle_openai_responses(const json& request,
                                          std::function<void(const json&)> send_response,
                                          StreamResponseCallback send_streaming_response,
@@ -1513,7 +1551,6 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             bad_request(request_error);
             return;
         }
-
         if (auto error = generation_model_error(model)) {
             const auto& body = error->at("error");
             sink.on_error({body.at("code").get<int>(), body.at("type").get<std::string>(),
@@ -1521,6 +1558,31 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                            std::nullopt});
             return;
         }
+        // Validate reasoning_effort against the selected catalog family before loading can
+        // download a model or unload the currently loaded engine.
+        bool pre_is_inkling = false;
+        bool pre_is_gpt_oss = false;
+        bool pre_is_hy_memory = false;
+        if (model == "model-faker") {
+            pre_is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
+            pre_is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
+            pre_is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
+        } else {
+            const auto info = supported_models.get_model_info(supported_models.rectify_model_tag(model)).second;
+            const std::string family = info.contains("details") && info["details"].is_object()
+                ? info["details"].value("family", std::string()) : std::string();
+            pre_is_inkling = (family == "inkling-2");
+            pre_is_gpt_oss = (family == "gpt-oss");
+            pre_is_hy_memory = (family == "hy-memory");
+        }
+        std::optional<std::string> resolved_effort;
+        std::string effort_error;
+        if (!resolve_chat_reasoning_effort(request, pre_is_inkling, pre_is_gpt_oss, pre_is_hy_memory, resolved_effort,
+                                           effort_error)) {
+            bad_request(effort_error, "reasoning_effort");
+            return;
+        }
+
         auto load_start_time = time_utils::now();
         std::string refusal;
         if (!ensure_model_loaded(model, request_backend, &refusal)) {
@@ -1537,6 +1599,16 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             return;
         }
 
+        // Recheck against the loaded frontend in case a pull changed the selected catalog entry.
+        const bool is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
+        const bool is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
+        const bool is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
+        if (!resolve_chat_reasoning_effort(request, is_inkling, is_gpt_oss, is_hy_memory, resolved_effort,
+                                           effort_error)) {
+            bad_request(effort_error, "reasoning_effort");
+            return;
+        }
+
         // The Qwen spelling of think, honored by the Qwen3.5 package only; any other model
         // keeps ignoring it. Refused here, before anything streams.
         std::optional<bool> nested_think;
@@ -1550,7 +1622,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             }
         }
 
-        configure_chat_engine_parameters(options, request, nested_think);
+        configure_chat_engine_parameters(options, request, nested_think, resolved_effort);
         apply_sampling_request(*auto_chat_engine, sampling);
 
         std::vector<size_t> original_indices;

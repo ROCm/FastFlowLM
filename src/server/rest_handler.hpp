@@ -134,7 +134,8 @@ private:
     void ensure_embed_model_loaded(const std::string& model_tag);
     void ensure_decision_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request,
-                                          std::optional<bool> nested_think = std::nullopt);
+                                          std::optional<bool> nested_think = std::nullopt,
+                                          const std::optional<std::string>& reasoning_effort = std::nullopt);
     /// \brief Run one chat turn, whatever protocol asked for it, and report it to the sink
     void run_chat_turn(const json& request, chat_sink& sink,
                        std::shared_ptr<CancellationToken> cancellation_token);
