@@ -88,6 +88,15 @@ class Qwen3_5VLImageEncoder{
         npu_app merger_fc1_app;
         npu_app merger_fc2_app;
 
+        // The patch embedding (a conv3d whose kernel covers the whole patch, so a GEMM over the flattened patches)
+        // as one more vision mm on the 4B; QWEN35_VIS_PATCH_HOST=1 (and the host path) keep the host conv
+        bool patch_npu = false;
+        size_t patch_k = 0; // the patch volume padded to the mm tile K
+        npu_app patch_embed_app;
+        buffer<bf16> patch_embed_npu_weight; // bias, then the [embed dim, patch volume] weight
+        buffer<bf16> patch_embed_input;
+        buffer<bf16> patch_embed_output;
+
         // The weights
         buffer<bf16> patch_embed_proj_weight;
         buffer<bf16> patch_embed_proj_bias;
@@ -136,6 +145,10 @@ class Qwen3_5VLImageEncoder{
         std::vector<bf16> cached_pos_embeds;
         std::vector<float> cached_cos_emb;
         std::vector<float> cached_sin_emb;
+
+        size_t patch_volume() const {
+            return (size_t)3 * parent_npu_ptr->QWEN3_5_TEMPORAL_PATCH_SIZE * parent_npu_ptr->QWEN3_5_PATCH_SIZE * parent_npu_ptr->QWEN3_5_PATCH_SIZE;
+        }
 
         inline int round_up_to_multiple (int x, int multiple)
         {

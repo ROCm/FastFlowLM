@@ -110,12 +110,31 @@ Qwen3_5VLImageEncoder::Qwen3_5VLImageEncoder(LM_Config config, npu_xclbin_manage
 #else
     host_v1 = std::getenv("QWEN35_VIS_HOST_V1") != nullptr;
 #endif
+    // the 4B's patch embedding is one more vision mm: [patches, patch volume] x [embed dim, patch volume]^T + bias
+    patch_npu = !host_v1 && config.model_name == "Qwen3.5-4B-NPU2" && std::getenv("QWEN35_VIS_PATCH_HOST") == nullptr;
+    patch_k = round_up_to_multiple(patch_volume(), MM_tile_K);
+    if (patch_npu)
+        this->patch_embed_app = this->proj->create_app();
 }
 void Qwen3_5VLImageEncoder::init_weights(SafeTensors &q4nx){
     // std::cout << "Loading Qwen3VL Image Encoder weights from " << this->config.get<std::string>("vision_model_weight", "") << " ..." <<std::endl;
     q4nx.load_weights(patch_embed_proj_weight, "model.visual.patch_embed.proj.weight");
     q4nx.load_weights(patch_embed_proj_bias,"model.visual.patch_embed.proj.bias");
     q4nx.load_weights(pos_embed_weight,  "model.visual.pos_embed.weight");
+    if (patch_npu) {
+        // bias, then the weight in the (mm_n mm_k) blocks the converter gives the other vision linears: the conv
+        // weight [embed dim, 3, t, p, p] is [N, K], cut into [N / n][K / k] blocks of n rows of k, zero padded
+        const size_t N = Padded_QWEN3_5_VISION_HIDDEN_SIZE, K = patch_volume(), n = MM_tile_N, k = MM_tile_K;
+        patch_embed_npu_weight = patch_embed_app.create_bo_buffer<bf16>(N * patch_k + N);
+        memset(patch_embed_npu_weight.data(), 0, patch_embed_npu_weight.size() * sizeof(bf16));
+        memcpy(patch_embed_npu_weight.data(), patch_embed_proj_bias.data(), QWEN3_5_VISION_EMBED_DIM * sizeof(bf16));
+        bf16* blocks = patch_embed_npu_weight.data() + N;
+        for (size_t row = 0; row < QWEN3_5_VISION_EMBED_DIM; row++)
+            for (size_t kb = 0; kb * k < K; kb++)
+                memcpy(blocks + (((row / n) * (patch_k / k) + kb) * n + row % n) * k,
+                       patch_embed_proj_weight.data() + row * K + kb * k, std::min(k, K - kb * k) * sizeof(bf16));
+        patch_embed_npu_weight.sync_to_device();
+    }
 
     //load each layer weights
     for(int layer_idx = 0; layer_idx < QWEN3_5_VISION_NUM_LAYERS; layer_idx++){
@@ -345,6 +364,18 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
                 ADD_BIAS, 0,
                 false,0
         );
+        if (patch_npu)
+        generate_mm_sequence<bf16, bf16>(*this->patch_embed_app.seq(),
+                seq_len_padded, patch_k,  Padded_QWEN3_5_VISION_HIDDEN_SIZE,
+                MM_tile_M,MM_tile_K,MM_tile_N,
+                8,8,8,
+                rtp_address, rtp_sync_lock_id,
+                MM_ROW_SIZE,MM_COL_SIZE,
+                0,0,0,
+                IS_B_ROW_MAJOR, ENABLE_AXI4, true, // B in (n, k) blocks, as init_weights lays it out
+                ADD_BIAS, 0,
+                false,0
+        );
         }
 
         if (!same_grid)
@@ -388,7 +419,14 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         zero_rows(merger_fc1_input, merger_seq_len, merger_seq_len_padded, Padded_QWEN3_5_MERGER_HIDDEN_SIZE);
         zero_rows(merger_fc1_output_fc2_input, merger_seq_len, merger_seq_len_padded, Padded_QWEN3_5_MERGER_HIDDEN_SIZE);
         zero_rows(merger_fc2_output, merger_seq_len, merger_seq_len_padded, Padded_QWEN3_5_VISION_OUT_HIDDEN_SIZE);
+        if (patch_npu) zero_rows(patch_embed_input, seq_len, seq_len_padded, patch_k);
     } else {
+        if (patch_npu) {
+            patch_embed_input = patch_embed_app.create_bo_buffer<bf16>((size_t)seq_len_padded * patch_k);
+            patch_embed_output = patch_embed_app.create_bo_buffer<bf16>((size_t)seq_len_padded * Padded_QWEN3_5_VISION_HIDDEN_SIZE);
+            memset(patch_embed_input.data(), 0, patch_embed_input.size() * sizeof(bf16));
+            patch_embed_input.sync_to_device();
+        }
         // initialize the remainig buffer
         mm_qkv_input = qkv_projection_app.create_bo_buffer<bf16>((size_t)seq_len_padded * Padded_QWEN3_5_VISION_HIDDEN_SIZE);
         mm_qkv_output_mha_input = qkv_projection_app.create_bo_buffer<bf16>((size_t)seq_len_padded*Padded_QWEN3_5_VISION_HIDDEN_SIZE*3);
@@ -429,7 +467,25 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     )
 
     auto time_start_patch_embed = std::chrono::high_resolution_clock::now();
-    std::vector<bf16> patch_embed = conv3d_patch_embed_avx512_max_performance(
+    std::vector<bf16> patch_embed;
+    bf16* patch_rows;
+    size_t patch_stride;
+    if (patch_npu) {
+        const size_t K = patch_volume();
+        const bf16* px = image_payload->_data__processed.data();
+        if (patch_k == K) {
+            memcpy(patch_embed_input.data(), px, (size_t)seq_len * K * sizeof(bf16));
+        } else {
+            for (int r = 0; r < seq_len; r++)
+                memcpy(patch_embed_input.data() + r * patch_k, px + r * K, K * sizeof(bf16));
+        }
+        patch_embed_input.sync_range_to_device_exact(0, (size_t)seq_len * patch_k * sizeof(bf16));
+        patch_embed_app(patch_embed_input, patch_embed_npu_weight, patch_embed_output);
+        patch_embed_output.sync_range_from_device_exact(0, (size_t)seq_len * Padded_QWEN3_5_VISION_HIDDEN_SIZE * sizeof(bf16));
+        patch_rows = patch_embed_output.data();
+        patch_stride = Padded_QWEN3_5_VISION_HIDDEN_SIZE;
+    } else {
+    patch_embed = conv3d_patch_embed_avx512_max_performance(
         image_payload->_data__processed.data(),
         patch_embed_proj_weight.data(),
         patch_embed_proj_bias.data(),
@@ -439,6 +495,9 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
         this->parent_npu_ptr->QWEN3_5_TEMPORAL_PATCH_SIZE,
         this->parent_npu_ptr->QWEN3_5_PATCH_SIZE
     );
+        patch_rows = patch_embed.data();
+        patch_stride = QWEN3_5_VISION_EMBED_DIM;
+    }
     auto time_end_patch_embed = std::chrono::high_resolution_clock::now();
     #ifdef DEBUG_PRINT_ENCODE_TIME_DETAIL
         auto duration_patch_embed = std::chrono::duration_cast<std::chrono::milliseconds>(time_end_patch_embed - time_start_patch_embed).count();
@@ -453,10 +512,10 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
             "hidden_states_after_patch_embed"
         );
         print_error_metrics<bf16, bf16>(
-            patch_embed.data(), after_patch_embed.data(),
+            patch_rows, after_patch_embed.data(),
                 1,
                 seq_len, QWEN3_5_VISION_EMBED_DIM,
-                seq_len, QWEN3_5_VISION_EMBED_DIM
+                seq_len, patch_stride
         );
 
     #endif
@@ -502,7 +561,7 @@ std::vector<std::vector<bf16>> Qwen3_5VLImageEncoder::encode( void* image_payloa
     assert(QWEN3_5_VISION_EMBED_DIM  == _QWEN3_5_VISION_HIDDEN_SIZE);
     for(int ll = 0; ll < seq_len; ll++){
         simd_add(
-            patch_embed.data() + ll * QWEN3_5_VISION_EMBED_DIM,
+            patch_rows + ll * patch_stride,
             pos_embeds.data() + ll * QWEN3_5_VISION_EMBED_DIM,
             hidden_state.data() + ll * Padded_QWEN3_5_VISION_HIDDEN_SIZE,
             QWEN3_5_VISION_EMBED_DIM
