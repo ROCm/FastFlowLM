@@ -54,11 +54,23 @@ chat_error model_error(const ModelRequestError& error) {
 }
 
 /// \brief An exception on a chat route: the model's own error, a 400 client type/arg fault, or a 500
-chat_error exception_error(const std::exception& error) {
+/// \param stage where it was caught; see flm::error_model::exception_error
+chat_error staged_exception_error(const std::exception& error, flm::error_model::Stage stage) {
     if (const auto* request_error = dynamic_cast<const ModelRequestError*>(&error))
         return model_error(*request_error);
-    const auto ev = flm::error_model::exception_error(error);
+    const auto ev = flm::error_model::exception_error(error, stage);
     return {ev.status, ev.type, ev.message, ev.param, ev.session_cleared};
+}
+
+/// \brief An exception while the handler reads the request or anywhere in it
+chat_error exception_error(const std::exception& error) {
+    return staged_exception_error(error, flm::error_model::Stage::Request);
+}
+
+/// \brief An exception that escaped prefill, generation or finishing the reply: a JSON access
+///        error there comes from model files or output, not from the request, so it is a 500
+chat_error engine_exception_error(const std::exception& error) {
+    return staged_exception_error(error, flm::error_model::Stage::Engine);
 }
 
 /// \brief insert() returned false without being cancelled: the reason the model gave, if any
@@ -103,6 +115,11 @@ json ModelErrorResponse(const ModelRequestError& error) {
 ///        route's wire protocol (OpenAI on /v1/*, Ollama on /api/*, System One on /v1/systemone).
 json ExceptionResponse(const std::exception& error) {
     return openai_error_json(exception_error(error));
+}
+
+/// \brief ExceptionResponse for an exception that escaped prefill, generation or finishing the reply
+json EngineExceptionResponse(const std::exception& error) {
+    return openai_error_json(engine_exception_error(error));
 }
 
 /// \brief The reply when insert() returned false without being cancelled: the reason the model gave, if any
@@ -1063,7 +1080,7 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1071,7 +1088,7 @@ void RestHandler::handle_generate(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1097,7 +1114,7 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1105,7 +1122,7 @@ void RestHandler::handle_generate(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1197,7 +1214,7 @@ void RestHandler::handle_chat(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1206,7 +1223,7 @@ void RestHandler::handle_chat(const json& request,
                 auto_chat_engine->generate(meta_info, length_limit, ostream,
                     [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1231,7 +1248,7 @@ void RestHandler::handle_chat(const json& request,
                     meta_info, uniformed_input, length_limit, nstream,
                     [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1825,7 +1842,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 }
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1851,7 +1868,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 if (error.session_cleared()) this->prompt_cache.reset();
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1865,7 +1882,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 sink.on_end(turn_end(ostream.finish(), true));
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         }
@@ -1905,7 +1922,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 }
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1929,7 +1946,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 }
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -2215,7 +2232,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(EngineExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2225,7 +2242,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 send_stream_error(ModelErrorResponse(error));
                 return;
             } catch (const std::exception& e) {
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(EngineExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2233,7 +2250,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 ostream.finalize(meta_info);
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(EngineExceptionResponse(e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
 
@@ -2258,7 +2275,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -2266,7 +2283,7 @@ void RestHandler::handle_openai_completion(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;

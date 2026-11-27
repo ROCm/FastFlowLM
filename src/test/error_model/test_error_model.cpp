@@ -159,6 +159,56 @@ void test_exceptions_and_prefill() {
         CHECK(ev.status == 500 && ev.type == "server_error" && ev.message == "engine crash");
     }
 
+    // Inside the engine, JSON access errors come from model files or output: 500. An engine's own
+    // std::invalid_argument rejection of the input stays 400.
+    try {
+        ojson j = ojson::object();
+        (void)j.at("missing");
+        CHECK(false);
+    } catch (const std::exception& e) {
+        CHECK(exception_error(e, Stage::Request).status == 400);
+        const auto ev = exception_error(e, Stage::Engine);
+        CHECK(ev.status == 500 && ev.type == "server_error");
+    }
+    try {
+        ojson j = "text";
+        (void)j.get<int>();
+        CHECK(false);
+    } catch (const std::exception& e) {
+        CHECK(exception_error(e, Stage::Engine).status == 500);
+    }
+    {
+        const std::invalid_argument e("this model does not support tool calling");
+        const auto ev = exception_error(e, Stage::Engine);
+        CHECK(ev.status == 400 && ev.type == "invalid_request_error" && ev.message == e.what());
+    }
+
+    // A bare std::sto* failure is internal at either stage; a named field error is not.
+    try {
+        (void)std::stoi("not a number");
+        CHECK(false);
+    } catch (const std::exception& e) {
+        CHECK(is_std_conversion_error(e));
+        CHECK(exception_error(e).status == 500);
+        CHECK(exception_error(e, Stage::Engine).status == 500);
+    }
+    for (const char* msvc : {"invalid stoi argument", "invalid stod argument"}) {
+        const std::invalid_argument e(msvc);
+        CHECK(is_std_conversion_error(e));
+        CHECK(exception_error(e).status == 500);
+    }
+    for (const char* named : {"max_tokens must be an integer", "stoi", "invalid argument", "invalid  argument"}) {
+        const std::invalid_argument e(named);
+        const bool conversion = std::string(named) == "stoi";
+        CHECK(is_std_conversion_error(e) == conversion);
+        CHECK(exception_error(e).status == (conversion ? 500 : 400));
+    }
+    {
+        const std::out_of_range e("stoi");
+        CHECK(!is_std_conversion_error(e));
+        CHECK(exception_error(e).status == 500);
+    }
+
     // M4: chat_meta_info_t::error_code defaults to 0 (unspecified).
     // Empty message -> 500 server_error; non-empty message with default 0 -> 400 (preserves 5 models);
     // explicit 4xx/5xx wins.
