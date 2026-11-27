@@ -86,6 +86,10 @@ public:
     std::mt19937_64 rng_{};
     bool use_optimized_sampling = true;
 
+    /// \brief Skip the repetition penalties on the next samples; the sampled tokens still enter the window
+    /// \note Set by the caller around a sample inside a grammar-dictated span, see decode_constraint::penalty_free()
+    bool penalties_paused = false;
+
     // scratch for sampler_sort_all_apply(), sized on first use
     std::vector<uint64_t> sort_keys_;
     std::vector<uint64_t> sort_tmp_;

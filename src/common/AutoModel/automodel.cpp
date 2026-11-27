@@ -892,7 +892,11 @@ int AutoModel::_sample_masked(std::size_t n, At at, Draw draw, chat_meta_info_t&
     }
     // The mask goes to the sampler, which applies it to its own copy: the logits
     // live in the engine's device-mapped buffer and are never written here.
+    // Inside a tool call or a response_format body the grammar dictates the text,
+    // so the repetition penalties stay off there.
+    this->sampler->penalties_paused = constraint != nullptr && constraint->penalty_free();
     int token = draw(masked ? &this->constraint_mask_ : nullptr, raw);
+    this->sampler->penalties_paused = false;
     auto allowed = [this](size_t i) {
         return i / 32 < this->constraint_mask_.size() && ((this->constraint_mask_[i / 32] >> (i % 32)) & 1u);
     };

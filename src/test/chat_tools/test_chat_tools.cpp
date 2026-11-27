@@ -211,6 +211,13 @@ public:
         return true;
     }
 
+    /// \brief The request's constraint, started on prefill
+    std::shared_ptr<decode_constraint> constraint(const chat_constraint_request& request, const std::string& prefill = "") {
+        std::shared_ptr<decode_constraint> c = engine_->make(spec_, request);
+        if (c) c->start(prefill);
+        return c;
+    }
+
 private:
     chat_format_spec spec_;
     std::string path_;
@@ -1306,6 +1313,180 @@ void test_inkling() {
     CHECK(!grammar.takes(schema, think + "<|message_model|><|content_text|>x<|end_message|>"));
 }
 
+// ---------------------------------------------------------------- penalty-free spans
+
+/// \brief penalty_free() before each character of text is sampled, then after the last: '1' free, '0' penalised
+/// \note The fixture's tokens are single characters, token id = character code
+std::string penalty_marks(decode_constraint& constraint, const std::string& text) {
+    std::string marks;
+    for (char ch : text) {
+        marks += constraint.penalty_free() ? '1' : '0';
+        constraint.accept(static_cast<unsigned char>(ch));
+    }
+    return marks + (constraint.penalty_free() ? '1' : '0');
+}
+
+/// \brief The marks penalty_marks() should give: free from the character after each span's opener up to
+///        the last character of its closer
+/// \param spans [first character with the opener complete, first character after the closer)
+std::string span_marks(const std::string& text, const std::vector<std::pair<size_t, size_t>>& spans) {
+    std::string marks(text.size() + 1, '0');
+    for (const auto& [open, close] : spans) {
+        for (size_t i = open; i < close && i < marks.size(); i++) marks[i] = '1';
+    }
+    return marks;
+}
+
+/// \brief Where marker ends in text, searching from from
+size_t after(const std::string& text, const std::string& marker, size_t from = 0) {
+    const size_t at = text.find(marker, from);
+    return at == std::string::npos ? std::string::npos : at + marker.size();
+}
+
+void check_marks(grammar_fixture& grammar, const chat_constraint_request& request, const std::string& prefill,
+                 const std::string& text, const std::vector<std::pair<size_t, size_t>>& spans, const char* label) {
+    std::shared_ptr<decode_constraint> c = grammar.constraint(request, prefill);
+    if (!c) {
+        std::printf("  FAIL %s: no constraint\n", label);
+        failures++;
+        return;
+    }
+    const std::string got = penalty_marks(*c, text);
+    const std::string want = span_marks(text, spans);
+    if (got != want) {
+        std::printf("  FAIL %s\n    text: [%s]\n    got:  [%s]\n    want: [%s]\n", label, text.c_str(), got.c_str(), want.c_str());
+        failures++;
+    }
+}
+
+void test_penalty_free_spans() {
+    std::printf("sampling penalties stay off inside tool calls and response_format bodies only\n");
+    // qwen xml, auto: prose and the trigger are penalised, the call is not, nor is anything after it
+    grammar_fixture qwen;
+    const std::string prose = "Let me check.\n";
+    const std::string weather = render_calls(json::array({call("get_weather", {{"city", "Paris"}})}));
+    const std::string qwen_trigger = "<tool_call>\n<function=";
+    const std::string qwen_end = "</function>\n</tool_call>";
+    {
+        const std::string text = prose + weather;
+        check_marks(qwen, tools_request(), "", text, {{after(text, qwen_trigger), after(text, qwen_end)}}, "qwen_xml auto");
+        check_marks(qwen, tools_request(chat_tool_choice::REQUIRED), "", weather,
+                    {{after(weather, qwen_trigger), after(weather, qwen_end)}}, "qwen_xml required");
+        const std::string two = prose + render_calls(json::array({call("ping", json::object()), call("get_weather", {{"city", "Rome"}})}));
+        const size_t first_end = after(two, qwen_end);
+        check_marks(qwen, tools_request(), "", two,
+                    {{after(two, qwen_trigger), first_end}, {after(two, qwen_trigger, first_end), after(two, qwen_end, first_end)}},
+                    "qwen_xml two calls");
+    }
+    // a call quoted in reasoning is reasoning, penalised
+    {
+        chat_constraint_request request = tools_request();
+        request.allow_reasoning = true;
+        const std::string text = "I could write <tool_call>\n<function=ping> here.\n</think>\n\n" + weather;
+        const size_t thought = after(text, "</think>");
+        check_marks(qwen, request, "<think>\n", text, {{after(text, qwen_trigger, thought), after(text, qwen_end, thought)}},
+                    "qwen_xml call quoted in reasoning");
+    }
+    // a forced call is free throughout, after reasoning if there is any
+    {
+        check_marks(qwen, tools_request(chat_tool_choice::FUNCTION, "get_weather"), "", weather, {{0, weather.size() + 1}},
+                    "qwen_xml forced call");
+        chat_constraint_request request = tools_request(chat_tool_choice::FUNCTION, "get_weather");
+        request.allow_reasoning = true;
+        const std::string text = "Need it.\n</think>\n\n" + weather;
+        check_marks(qwen, request, "<think>\n", text, {{after(text, "</think>"), text.size() + 1}}, "qwen_xml forced call after reasoning");
+    }
+    // response_format: the body, not the reasoning before it
+    {
+        const chat_constraint_request schema = string_schema_request({{"type", "string"}});
+        const std::string body = "{\"v\": \"x x x\"}";
+        check_marks(qwen, schema, "", body, {{0, body.size() + 1}}, "response_format");
+        chat_constraint_request thinking = schema;
+        thinking.allow_reasoning = true;
+        const std::string text = "<think>ok</think>\n" + body;
+        // "<think" is free: until it is whole it could still be the body's start
+        check_marks(qwen, thinking, "", text, {{0, std::string("<think").size() + 1}, {after(text, "</think>"), text.size() + 1}},
+                    "response_format after reasoning");
+        // a body that writes the reasoning opener stays free
+        const std::string quoting = "{\"v\": \"<think>\"}";
+        check_marks(qwen, thinking, "", quoting, {{0, quoting.size() + 1}}, "response_format quoting <think>");
+    }
+    // the other tag formats
+    {
+        grammar_fixture hermes(HERMES);
+        const std::string call_text = "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}\n</tool_call>";
+        const std::string text = prose + call_text;
+        check_marks(hermes, tools_request(), "", text, {{after(text, "<tool_call>"), text.size()}}, "hermes auto");
+
+        chat_constraint_request auto_note = note_request();
+        auto_note.tool_choice = chat_tool_choice::AUTO;
+        auto_note.function_name.clear();
+        grammar_fixture gemma4(chat_format_make(chat_format_kind::GEMMA4, true));
+        const std::string g = prose + "<|tool_call>call:save_note{text:<|\"|>ab ab<|\"|>}<tool_call|>";
+        check_marks(gemma4, auto_note, "", g, {{after(g, "<|tool_call>"), g.size()}}, "gemma4 auto");
+
+        grammar_fixture lfm2(chat_format_make(chat_format_kind::LFM2_PYTHONIC, true));
+        const std::string l = prose + "<|tool_call_start|>[save_note(text=\"ab ab\")]<|tool_call_end|>";
+        check_marks(lfm2, auto_note, "", l, {{after(l, "<|tool_call_start|>"), l.size()}}, "lfm2 auto");
+
+        grammar_fixture glm(GLM_XML);
+        const std::string glm_call = render_glm_calls(json::array({call("get_weather", {{"city", "Paris"}})}));
+        const std::string t = prose + glm_call;
+        check_marks(glm, tools_request(), "", t, {{after(t, "<tool_call>"), t.size()}}, "glm_xml auto");
+        check_marks(glm, tools_request(chat_tool_choice::FUNCTION, "get_weather"), "", glm_call,
+                    {{0, glm_call.size() + 1}}, "glm_xml forced call");
+        chat_constraint_request thinking = tools_request();
+        thinking.allow_reasoning = true;
+        const std::string quoted = "I could write <tool_call>ping here.</think>" + glm_call;
+        const size_t thought = after(quoted, "</think>");
+        check_marks(glm, thinking, "<think>", quoted, {{after(quoted, "<tool_call>", thought), quoted.size()}},
+                    "glm_xml call quoted in reasoning");
+    }
+    // inkling: the call and schema messages, not the thinking ones
+    {
+        const chat_format_spec spec = chat_format_make(chat_format_kind::INKLING, false);
+        grammar_fixture inkling(spec);
+        const std::string think = "<|message_model|><|content_thinking|>Let me see.<|end_message|>";
+        const std::string call_msg = "<|message_model|>get_weather<|content_invoke_tool_json|>"
+                                     "{\"name\":\"get_weather\",\"args\":{\"city\":\"Paris\"}}<|end_message|>";
+        const std::string text = think + call_msg;
+        check_marks(inkling, tools_request(), "", text, {{after(text, "<|content_invoke_tool_json|>"), text.size()}}, "inkling auto");
+        check_marks(inkling, tools_request(chat_tool_choice::FUNCTION, "get_weather"), "", call_msg,
+                    {{after(call_msg, "<|content_invoke_tool_json|>"), call_msg.size()}}, "inkling forced");
+        const std::string answer = think + "<|message_model|><|content_text|>{\"v\": \"x\"}<|end_message|>";
+        check_marks(inkling, string_schema_request({{"type", "string"}}), "", answer,
+                    {{after(answer, "<|content_text|>"), answer.size()}}, "inkling schema");
+        // a plain answer is text, penalised
+        const std::string plain = think + "<|message_model|><|content_text|>Hi.<|end_message|>";
+        check_marks(inkling, tools_request(), "", plain, {}, "inkling plain answer");
+    }
+    // harmony: the call's commentary message, not the analysis
+    {
+        grammar_fixture harmony(chat_format_make(chat_format_kind::HARMONY, true));
+        const std::string text = "<|channel|>analysis<|message|>Need the weather.<|end|><|start|>assistant"
+                                 "<|channel|>commentary to=functions.get_weather <|constrain|>json<|message|>{\"city\":\"Paris\"}<|call|>";
+        CHECK(harmony.takes(tools_request(), text));
+        check_marks(harmony, tools_request(), "", text, {{after(text, "to=functions."), text.size()}}, "harmony auto");
+    }
+    // a rollback takes the span back with the tokens
+    {
+        std::shared_ptr<decode_constraint> c = qwen.constraint(tools_request());
+        CHECK(c != nullptr);
+        if (c) {
+            for (char ch : prose + qwen_trigger + "get") c->accept(static_cast<unsigned char>(ch));
+            CHECK(c->penalty_free());
+            c->rollback(3);
+            CHECK(c->penalty_free());
+            c->rollback(1);  // the trigger's "=" again
+            CHECK(!c->penalty_free());
+            c->accept('=');
+            CHECK(c->penalty_free());
+        }
+    }
+    // tool_choice=none bans the call opener and is never a span
+    CHECK(!token_ban_constraint(64, {7}).penalty_free());
+}
+
 } // namespace
 
 int main() {
@@ -1336,6 +1517,7 @@ int main() {
     test_glm_template_capabilities();
     test_minja_template_exception();
     test_inkling();
+    test_penalty_free_spans();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

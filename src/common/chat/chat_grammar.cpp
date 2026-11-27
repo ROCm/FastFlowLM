@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <deque>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -781,6 +782,16 @@ json glm_arguments(const json& schema, const json& sent) {
 
 // ---------------------------------------------------------------- per format tool tags
 
+/// \brief Where the request's grammar dictates the text, see decode_constraint::penalty_free()
+struct penalty_spans {
+    bool whole = false;                // everything outside reasoning: a forced call, a response_format body
+    std::vector<std::string> begins;   // otherwise a span opens once one of these is written ...
+    std::vector<std::string> ends;     // ... and closes once one of these is
+    std::string reasoning_start;       // reasoning is never a span, whatever it quotes
+    std::string reasoning_end;
+};
+
+
 struct tool_syntax {
     std::string trigger;
     std::vector<json> tags;
@@ -859,7 +870,7 @@ bool has_response_format(const chat_constraint_request& request) {
     return request.json_object || !request.json_schema.is_null();
 }
 
-json harmony_format(const chat_constraint_request& request, const std::vector<tool_def>& tools) {
+json harmony_format(const chat_constraint_request& request, const std::vector<tool_def>& tools, penalty_spans* spans) {
     // xgrammar's harmony style
     const std::string CALL_END = "<|call|>";
     const json FINAL_END = json::array({"<|end|>", "<|return|>"});
@@ -878,12 +889,20 @@ json harmony_format(const chat_constraint_request& request, const std::vector<to
             call_tags.push_back(tag(" to=functions." + tool.name + "<|channel|>commentary <|constrain|>json<|message|>", content, CALL_END));
             call_tags.push_back(tag(" to=functions." + tool.name + "<|channel|>commentary json<|message|>", content, CALL_END));
         }
+        if (spans) {
+            spans->begins.push_back("to=functions.");
+            spans->ends.push_back(CALL_END);
+        }
     }
     std::vector<json> message_tags;
     message_tags.push_back(tag("<|channel|>analysis<|message|>", any_text(), FINAL_END));
     if (request.tool_choice == chat_tool_choice::AUTO || request.tool_choice == chat_tool_choice::NONE) {
         json final_content = has_response_format(request) ? schema_content(response_schema(request)) : any_text();
         message_tags.push_back(tag("<|channel|>final<|message|>", final_content, FINAL_END));
+        if (spans && has_response_format(request)) {
+            spans->begins.push_back("<|channel|>final<|message|>");
+            for (const auto& end : FINAL_END) spans->ends.push_back(end.get<std::string>());
+        }
     }
 
     if (call_tags.empty()) {
@@ -909,7 +928,7 @@ json harmony_format(const chat_constraint_request& request, const std::vector<to
     return {{"type", "or"}, {"elements", options}};
 }
 
-json inkling_format(const chat_constraint_request& request, const std::vector<tool_def>& tools) {
+json inkling_format(const chat_constraint_request& request, const std::vector<tool_def>& tools, penalty_spans* spans) {
     // typed messages, each opened by <|message_model|>: the model opens the first one
     // itself, the prompt ends with the user's <|end_message|>
     const std::string MESSAGE = "<|message_model|>";
@@ -925,6 +944,10 @@ json inkling_format(const chat_constraint_request& request, const std::vector<to
             call_tags.push_back(tag(tool.name + "<|content_invoke_tool_json|>{\"name\":" + json(tool.name).dump() + ",\"args\":",
                                     schema_content(tool.parameters), "}" + END));
         }
+        if (spans) {
+            spans->begins.push_back("<|content_invoke_tool_json|>");
+            spans->ends.push_back(END);
+        }
     }
     // every turn opens with reasoning, at any effort
     std::vector<json> message_tags;
@@ -932,6 +955,10 @@ json inkling_format(const chat_constraint_request& request, const std::vector<to
     if (request.tool_choice == chat_tool_choice::AUTO || request.tool_choice == chat_tool_choice::NONE) {
         json text = has_response_format(request) ? schema_content(response_schema(request)) : any_text();
         message_tags.push_back(tag("<|content_text|>", text, END));
+        if (spans && has_response_format(request)) {
+            spans->begins.push_back("<|content_text|>");
+            spans->ends.push_back(END);
+        }
     }
 
     json format;
@@ -978,18 +1005,101 @@ std::string prefill_skip(const chat_format_spec& spec) {
     return spec.kind == chat_format_kind::HARMONY ? "assistant" : "";
 }
 
+// ---------------------------------------------------------------- penalty-free spans
+
+/// \brief Follows the generated text through penalty_spans
+class penalty_span_tracker {
+public:
+    /// \brief Everything feed() changes, so a rollback can restore it
+    struct state {
+        std::string tail;      // the text a marker may still be completing
+        bool reasoning = false;
+        bool open = false;
+        bool fresh = true;     // nothing but whitespace yet
+    };
+
+    explicit penalty_span_tracker(penalty_spans spans) : spans_(std::move(spans)) {
+        for (const auto* list : {&spans_.begins, &spans_.ends}) {
+            for (const auto& m : *list) longest_ = std::max(longest_, m.size());
+        }
+        longest_ = std::max({longest_, spans_.reasoning_start.size(), spans_.reasoning_end.size()});
+    }
+
+    bool inside() const {
+        return !state_.reasoning && (spans_.whole || state_.open);
+    }
+
+    const state& get() const { return state_; }
+    void set(state s) { state_ = std::move(s); }
+
+    void feed(const std::string& text) {
+        state& st = state_;
+        st.tail += text;
+        // a marker is only looked for in the state it changes, and the text up to it is
+        // dropped once it matches, so no marker is matched twice
+        for (;;) {
+            size_t best_end = std::string::npos;
+            int what = 0;  // 1 reasoning opens, 2 reasoning closes, 3 span opens, 4 span closes
+            auto look = [&](const std::string& marker, int kind) {
+                if (marker.empty()) return;
+                const size_t at = st.tail.find(marker);
+                if (at != std::string::npos && at + marker.size() < best_end) {
+                    best_end = at + marker.size();
+                    what = kind;
+                }
+            };
+            if (st.reasoning) {
+                look(spans_.reasoning_end, 2);
+            } else if (st.open) {
+                for (const auto& m : spans_.ends) look(m, 4);
+            } else {
+                // a whole-output span only follows reasoning, it never opens it
+                if (!spans_.whole || st.fresh) look(spans_.reasoning_start, 1);
+                if (!spans_.whole) {
+                    for (const auto& m : spans_.begins) look(m, 3);
+                }
+            }
+            if (what == 0) break;
+            st.reasoning = what == 1;
+            st.open = what == 3;
+            st.fresh = false;
+            st.tail.erase(0, best_end);
+        }
+        if (spans_.whole && st.fresh && !st.reasoning) {
+            // the body has begun once the text is more than the start of a reasoning block
+            const size_t first = st.tail.find_first_not_of(" \t\r\n");
+            if (first != std::string::npos &&
+                spans_.reasoning_start.compare(0, st.tail.size() - first, st.tail, first) != 0) {
+                st.fresh = false;
+            }
+        }
+        const size_t keep = longest_ > 0 ? longest_ - 1 : 0;
+        if (st.tail.size() > keep) {
+            st.tail.erase(0, st.tail.size() - keep);
+        }
+    }
+
+private:
+    penalty_spans spans_;
+    size_t longest_ = 0;
+    state state_;
+};
+
 // ---------------------------------------------------------------- the constraint
 
 class xgrammar_constraint : public decode_constraint {
 public:
     /// \param with_reasoning when the grammar leaves reasoning out, the same grammar with
     ///        it: a model made to open a reasoning block switches to this one
+    /// \param spans where the grammar dictates the text, for penalty_free()
     xgrammar_constraint(const xgrammar::CompiledGrammar& grammar, std::optional<xgrammar::CompiledGrammar> with_reasoning,
-                        std::string prefill_skip, size_t vocab_size)
+                        std::string prefill_skip, size_t vocab_size, penalty_spans spans)
         : matcher_(grammar, std::nullopt, false, MAX_ROLLBACK),
           with_reasoning_(std::move(with_reasoning)),
           skip_(std::move(prefill_skip)),
-          words_((vocab_size + 31) / 32) {}
+          words_((vocab_size + 31) / 32),
+          tokenizer_(grammar.GetTokenizerInfo()),
+          spans_(std::move(spans)) {}
 
     void start(const std::string& prefill) override {
         std::string text = prefill;
@@ -997,6 +1107,7 @@ public:
             text = text.substr(skip_.size());
         }
         prefill_ = text;
+        spans_.feed(text);
         if (text.empty() || matcher_.AcceptString(text)) {
             return;
         }
@@ -1032,7 +1143,7 @@ public:
             give_up("the grammar rejected token " + std::to_string(token));
             return;
         }
-        history_.push_back(token);
+        accepted(token);
     }
 
     void accept_forced(int token) override {
@@ -1040,7 +1151,7 @@ public:
             return;
         }
         if (matcher_.AcceptToken(token)) {
-            history_.push_back(token);
+            accepted(token);
             return;
         }
         // the model is made to reason although the request turned thinking off
@@ -1048,14 +1159,22 @@ public:
             give_up("the grammar rejected forced token " + std::to_string(token));
             return;
         }
-        history_.push_back(token);
+        accepted(token);
     }
 
     void rollback(int n) override {
         if (!failed_) {
             matcher_.Rollback(n);
             history_.resize(history_.size() > static_cast<size_t>(n) ? history_.size() - n : 0);
+            for (; n > 0 && !span_undo_.empty(); n--) {
+                spans_.set(std::move(span_undo_.back()));
+                span_undo_.pop_back();
+            }
         }
+    }
+
+    bool penalty_free() const override {
+        return !failed_ && spans_.inside();
     }
 
 private:
@@ -1079,6 +1198,18 @@ private:
         return ok;
     }
 
+    void accepted(int token) {
+        history_.push_back(token);
+        span_undo_.push_back(spans_.get());
+        if (span_undo_.size() > static_cast<size_t>(MAX_ROLLBACK)) {
+            span_undo_.pop_front();
+        }
+        const auto& decoded = tokenizer_.GetDecodedVocab();
+        if (token >= 0 && static_cast<size_t>(token) < decoded.size()) {
+            spans_.feed(decoded[token]);
+        }
+    }
+
     void give_up(const std::string& why) {
         // a desynchronised grammar would only produce garbage; let the model finish free
         header_print("WARNING", "Constrained decoding disabled for this request: " << why);
@@ -1092,6 +1223,9 @@ private:
     std::vector<int> history_;  // accepted tokens, to replay into with_reasoning_
     size_t words_;
     bool failed_ = false;
+    xgrammar::TokenizerInfo tokenizer_;  // its decoded vocabulary is the text the spans follow
+    penalty_span_tracker spans_;
+    std::deque<penalty_span_tracker::state> span_undo_;  // before each of the last MAX_ROLLBACK tokens
 };
 
 /// \brief An xgrammar error as the client should see it
@@ -1137,7 +1271,8 @@ std::vector<std::string> encoded_vocab(const nlohmann::json& tokenizer) {
 
 } // namespace
 
-json chat_structural_tag(const chat_format_spec& spec, const chat_constraint_request& request) {
+/// \brief chat_structural_tag(), and where its grammar dictates the text when spans is set
+static json structural_tag(const chat_format_spec& spec, const chat_constraint_request& request, penalty_spans* spans) {
     const std::vector<tool_def> tools = request_tools(request);
     // auto only constrains a format that has a call syntax; required and forced
     // calls on one that has none are an error below
@@ -1155,9 +1290,9 @@ json chat_structural_tag(const chat_format_spec& spec, const chat_constraint_req
 
     json format;
     if (spec.kind == chat_format_kind::HARMONY) {
-        format = harmony_format(request, tools);
+        format = harmony_format(request, tools, spans);
     } else if (spec.kind == chat_format_kind::INKLING) {
-        format = inkling_format(request, tools);
+        format = inkling_format(request, tools, spans);
     } else if (tool_grammar) {
         if (!spec.has_tools()) {
             throw std::invalid_argument(std::string("this model's chat format (") + chat_format_name(spec.kind) +
@@ -1169,7 +1304,17 @@ json chat_structural_tag(const chat_format_spec& spec, const chat_constraint_req
         json suffix;
         if (request.tool_choice == chat_tool_choice::FUNCTION) {
             suffix = sequence({whitespace(), syntax.tags.front()});
+            if (spans) spans->whole = true;
         } else {
+            if (spans) {
+                spans->begins.push_back(syntax.trigger);
+                for (const auto& t : syntax.tags) {
+                    const std::string end = t["end"].get<std::string>();
+                    if (std::find(spans->ends.begin(), spans->ends.end(), end) == spans->ends.end()) {
+                        spans->ends.push_back(end);
+                    }
+                }
+            }
             std::vector<std::string> excludes;
             if (spec.has_reasoning()) {
                 excludes = {spec.reasoning_start, spec.reasoning_end};
@@ -1188,8 +1333,18 @@ json chat_structural_tag(const chat_format_spec& spec, const chat_constraint_req
         json suffix = sequence({whitespace(), schema_content(response_schema(request))});
         json prefix = reasoning_prefix(spec, request.allow_reasoning);
         format = prefix.is_null() ? suffix : sequence({prefix, suffix});
+        if (spans) spans->whole = true;
+    }
+    // harmony and inkling spans are their call and schema messages, so reasoning needs no markers
+    if (spans && spec.has_reasoning() && spec.kind != chat_format_kind::HARMONY && spec.kind != chat_format_kind::INKLING) {
+        spans->reasoning_start = spec.reasoning_start;
+        spans->reasoning_end = spec.reasoning_end;
     }
     return {{"type", "structural_tag"}, {"format", format}};
+}
+
+json chat_structural_tag(const chat_format_spec& spec, const chat_constraint_request& request) {
+    return structural_tag(spec, request, nullptr);
 }
 
 struct chat_grammar_engine::impl {
@@ -1229,8 +1384,9 @@ chat_grammar_engine::~chat_grammar_engine() = default;
 
 std::shared_ptr<decode_constraint> chat_grammar_engine::make(const chat_format_spec& spec,
                                                              const chat_constraint_request& request) {
-    const json structural_tag = chat_structural_tag(spec, request);
-    if (structural_tag.is_null()) {
+    penalty_spans spans;
+    const json tag_json = structural_tag(spec, request, &spans);
+    if (tag_json.is_null()) {
         return nullptr;
     }
     auto compile = [this](const json& tag) {
@@ -1240,7 +1396,7 @@ std::shared_ptr<decode_constraint> chat_grammar_engine::make(const chat_format_s
             throw std::invalid_argument("cannot build the decoding grammar: " + client_message(e.what()));
         }
     };
-    xgrammar::CompiledGrammar grammar = compile(structural_tag);
+    xgrammar::CompiledGrammar grammar = compile(tag_json);
 
     // thinking turned off keeps reasoning out of the grammar, so no spelling of the
     // opener can be sampled; a thinking-only model is still made to open it
@@ -1251,7 +1407,8 @@ std::shared_ptr<decode_constraint> chat_grammar_engine::make(const chat_format_s
         with_reasoning = compile(chat_structural_tag(spec, reasoning_request));
     }
     try {
-        return std::make_shared<xgrammar_constraint>(grammar, with_reasoning, prefill_skip(spec), impl_->vocab_size);
+        return std::make_shared<xgrammar_constraint>(grammar, with_reasoning, prefill_skip(spec), impl_->vocab_size,
+                                                     std::move(spans));
     } catch (const std::exception& e) {
         throw std::invalid_argument("cannot start the decoding grammar: " + client_message(e.what()));
     }

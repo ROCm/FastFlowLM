@@ -97,7 +97,7 @@ All three push the model away from tokens it has just generated. They change the
 - **`frequency_penalty`** grows with each repeat, so it acts on loops: the same phrase over and over.
 - **`repetition_penalty`** below 1 *rewards* repeats, and the server warns that it can make the model loop.
 
-Penalties also act on reasoning tokens, and on tokens that a `tool_choice` or `response_format` grammar requires. They can make a required token less likely, but they never let the model leave the grammar.
+Penalties also act on reasoning tokens. They are paused inside a tool call and inside a `response_format` body, where the grammar dictates the text and repeated keys, indentation or names are expected. The paused tokens still enter the [penalty window](#-the-penalty-window), so text after a call is penalised as before. A call the model only quotes in its reasoning is penalised like the rest of the reasoning.
 
 The [log probabilities](https://fastflowlm.com/docs/instructions/server/openapi/#-example-token-log-probabilities) a response reports are taken **before** any penalty is applied.
 

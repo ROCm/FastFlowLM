@@ -185,7 +185,7 @@ void Sampler::softmax_with_topp_minp(float top_p_threshold, float min_p_threshol
 }
 
 void Sampler::sampler_penalty_apply() {
-    if ((this->repeat_last_n == 0) ||
+    if (this->penalties_paused || (this->repeat_last_n == 0) ||
         (this->rep_penalty == 1.0f && this->freq_penalty == 0.0f && this->pre_penalty == 0.0f)) {
         return;
     }
@@ -212,7 +212,7 @@ void Sampler::sampler_penalty_apply() {
 }
 
 void Sampler::sampler_penalty_apply_sparse() {
-    if ((this->repeat_last_n == 0) ||
+    if (this->penalties_paused || (this->repeat_last_n == 0) ||
         (this->rep_penalty == 1.0f && this->freq_penalty == 0.0f && this->pre_penalty == 0.0f)) {
         return;
     }
@@ -458,7 +458,7 @@ void Sampler::ring_buffer_update_sparse(int sampled_index) {
 /// \return the sampled token
 int Sampler::sample_greedy(buffer<bf16>& x, const std::vector<uint32_t>* allowed, sample_logprobs_t* logprobs) {
     const bool penalties_active =
-        (this->repeat_last_n != 0) &&
+        !this->penalties_paused && (this->repeat_last_n != 0) &&
         (this->rep_penalty != 1.0f || this->freq_penalty != 0.0f || this->pre_penalty != 0.0f);
 
     float best = -std::numeric_limits<float>::infinity();
