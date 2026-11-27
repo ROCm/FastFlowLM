@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -150,6 +151,10 @@ inline nlohmann::json parse_file(const std::filesystem::path& file, const char* 
 /// \param family details.family: which frontend runs the package
 /// \param platform the NPU platform id this process runs on (e.g. "aie2p");
 ///        a format that is bound to a generation needs it, the others ignore it
+/// \param think_override true or false sets the entry's thinking flag; nullopt
+///        reads it from the chat template
+/// \param tools_override true or false sets the entry's tools flag; nullopt
+///        reads it from the chat template
 /// \return the tag parts, the backend and the entry; the entry's "name" is the
 ///         folder's absolute path, so the model path resolves to the folder itself
 /// \throws std::runtime_error naming what is wrong with the folder
@@ -159,7 +164,9 @@ inline nlohmann::json parse_file(const std::filesystem::path& file, const char* 
 ///       without flm_version counts as current.
 inline LocalModelEntry build_local_model_entry(const std::filesystem::path& folder,
                                                const std::string& family,
-                                               const std::string& platform) {
+                                               const std::string& platform,
+                                               std::optional<bool> think_override = std::nullopt,
+                                               std::optional<bool> tools_override = std::nullopt) {
     namespace fs = std::filesystem;
     using local_detail::is_file;
 
@@ -233,9 +240,12 @@ inline LocalModelEntry build_local_model_entry(const std::filesystem::path& fold
             // an unreadable tokenizer_config.json is the tokenizer's to report; here it says nothing
         }
     }
-    const bool thinks = chat_template.find("enable_thinking") != std::string::npos ||
-                        chat_template.find("<think>") != std::string::npos;
-    const bool tools = chat_template.find("tools") != std::string::npos;
+    // A user override (--think / --tools) wins over what the template suggests; the
+    // template is only a guess, and a comment that mentions "tools" would fool it.
+    const bool thinks = think_override.value_or(
+        chat_template.find("enable_thinking") != std::string::npos ||
+        chat_template.find("<think>") != std::string::npos);
+    const bool tools = tools_override.value_or(chat_template.find("tools") != std::string::npos);
 
     LocalModelEntry out;
     out.backend = format.backend;

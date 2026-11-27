@@ -340,6 +340,13 @@ flm run   --model-dir C:\models\Qwen3.8-27B --family qwen3.5
 - **What FLM checks.** `genai_config.json`, `config.json`, `tokenizer.json`, and every model file `genai_config.json` names (`.onnx` and `.onnx.data`); `tokenizer_config.json`, `chat_template.jinja` and `processor_config.json` are used when present. FLM lists every missing file at once and starts nothing.
 - **How it runs.** FLM builds a catalog entry in memory from the folder. The tag is `<folder name>-oga-hipep:local` (lower case, other characters become `-`). Vision comes from `genai_config.json`; thinking and tools come from the chat template (`chat_template.jinja`, or `chat_template` in `tokenizer_config.json`). `/v1/models` and `/api/tags` list that tag; send it as `model`. `--ctx-len` and `--port` keep their usual defaults (the context length is the package's own limit, at most 32768).
 - **Nothing is downloaded or changed.** FLM never pulls, verifies, repairs or deletes files in a `--model-dir` folder, and `model_list.json` is not modified. `--model-dir` works with `run` and `serve` only, and not together with a model tag.
+- **`--think` and `--tools` override the template.** The chat template is only a guess: a template that mentions `tools` in a comment would turn tools on, and FLM cannot tell. Pass `--think on|off` or `--tools on|off` to set the flag yourself; leave it out and FLM reads the template as above. Both only work with `--model-dir`.
+  - **What they do.** They only pass the value through: it becomes the model's thinking or tools flag. What the model does with it is decided by that model's frontend, as it already is for catalog models.
+
+```shell
+flm serve --model-dir C:\models\Qwen3.8-27B --family qwen3.5 --tools off
+flm run   --model-dir C:\models\Qwen3.8-27B --family qwen3.5 --think on --tools on
+```
 
 ---
 
