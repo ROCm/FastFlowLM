@@ -16,6 +16,8 @@
 #include "chat_logprobs.hpp"
 #include "protocol_openai_chat.hpp"
 #include "protocol_responses.hpp"
+#include "anthropic_request.hpp"
+#include "protocol_anthropic.hpp"
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
@@ -253,13 +255,15 @@ static bool image_url_payload(const json& part, ImageReader& reader, std::string
 ///@brief `raw`: where to keep the batches of any `image_raw` parts (null: the model takes none, so such a part is an
 /// error). A bad image or image part (and an image outside a user message) sets `error`, and the result must not be used
 static json normalize_template(json messages, std::vector<std::shared_ptr<const raw_rgb8_batch_t>>* raw = nullptr,
-                               std::string* error = nullptr, const raw_rgb8_limits_t& raw_limits = raw_rgb8_limits_t()) {
+                               std::string* error = nullptr, const raw_rgb8_limits_t& raw_limits = raw_rgb8_limits_t(),
+                               bool use_source_paths = false) {
     json template_message = json::array();
     size_t raw_frames = 0;
     size_t raw_bytes = 0;
     ImageReader image_reader;
     auto fail = [&](size_t m, size_t c, const std::string& why) {
-        if (error) *error = "messages[" + std::to_string(m) + "].content[" + std::to_string(c) + "]: " + why;
+        const std::string fallback = "messages[" + std::to_string(m) + "].content[" + std::to_string(c) + "]";
+        if (error) *error = (use_source_paths ? messages[m]["content"][c].value("_source_path",fallback) : fallback) + ": " + why;
         return template_message;
     };
 
@@ -1503,6 +1507,27 @@ static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, 
     return true;
 }
 
+void RestHandler::handle_anthropic_messages(const json& request, std::function<void(const json&)> send,
+                                            StreamResponseCallback stream, std::shared_ptr<CancellationToken> cancel) {
+    try {
+        auto converted = flm::anthropic::convert(request);
+        if (!converted.first_image.empty()) {
+            std::string tag = converted.chat.at("model");
+            tag = tag == "model-faker" ? current_model_tag : supported_models.rectify_model_tag(tag);
+            if (supported_models.is_model_supported(tag) &&
+                !model_list::capabilities_of(supported_models.get_model_info(tag).second).vision) {
+                throw flm::anthropic::request_error(converted.first_image, "this model does not accept images");
+            }
+        }
+        const bool wire_stream = converted.chat.value("stream", false);
+        converted.chat["stream"] = true; // capture block order in JSON as well as SSE
+        flm::anthropic::sink sink(send, std::move(stream), wire_stream, converted.show_local_thinking);
+        run_chat_turn(converted.chat, sink, std::move(cancel), converted.thinking_budget, true);
+    } catch (const flm::anthropic::request_error& e) {
+        send(flm::error_model::make_error(400, e.what()));
+    }
+}
+
 void RestHandler::handle_openai_responses(const json& request,
                                          std::function<void(const json&)> send_response,
                                          StreamResponseCallback send_streaming_response,
@@ -1523,7 +1548,7 @@ void RestHandler::handle_openai_responses(const json& request,
 ///@param sink receives the turn: its start, its deltas when streamed, its end, or an error
 ///@param cancellation_token set when the client goes away
 void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
-                                std::shared_ptr<CancellationToken> cancellation_token) {
+                                std::shared_ptr<CancellationToken> cancellation_token, int thinking_budget, bool use_source_paths) {
     auto bad_request = [&sink](const std::string& message, const std::string& param = std::string()) {
         sink.on_error({400, "invalid_request_error", message, param, std::nullopt});
     };
@@ -1591,6 +1616,18 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             pre_is_inkling = (family == "inkling-2");
             pre_is_gpt_oss = (family == "gpt-oss");
             pre_is_hy_memory = (family == "hy-memory");
+            if (thinking_budget > 0) {
+                bool supported = false;
+                if (family == "qwen3") {
+                    try {
+                        supported = flm::backend::resolve_model_backend(info, backend).backend == flm::backend::kFlmBackendId;
+                    } catch (const std::runtime_error&) { /* backend unavailable with this selection */ }
+                }
+                if (!supported) {
+                    bad_request("manual thinking budgets require the Qwen3 NPU backend", "thinking.budget_tokens");
+                    return;
+                }
+            }
         }
         std::optional<std::string> resolved_effort;
         std::string effort_error;
@@ -1616,6 +1653,10 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             return;
         }
 
+        if (thinking_budget > 0 && !auto_chat_engine->supports_manual_thinking_budget()) {
+            bad_request("manual thinking budgets require the Qwen3 NPU backend", "thinking.budget_tokens");
+            return;
+        }
         // Recheck against the loaded frontend in case a pull changed the selected catalog entry.
         const bool is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
         const bool is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
@@ -1655,7 +1696,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             // raw RGB8 frames only go to MiniCPM-V; any other model gets a clear 400 rather than a dropped image
             const bool takes_raw = dynamic_cast<MiniCPM_V*>(auto_chat_engine.get()) != nullptr;
             std::string raw_error;
-            current_messages = normalize_template(current_messages, takes_raw ? &raw_rgb8 : nullptr, &raw_error, this->raw_rgb8_limits);
+            current_messages = normalize_template(current_messages, takes_raw ? &raw_rgb8 : nullptr, &raw_error, this->raw_rgb8_limits, use_source_paths);
             if (!raw_error.empty()) {
                 bad_request(raw_error);
                 return;
@@ -1684,6 +1725,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
 
         // see if we can use prompt cache
         chat_meta_info_t meta_info;
+        meta_info.thinking_budget = thinking_budget;
         bool can_use_prompt_cache = false;
         if (auto_chat_engine->single_turn) {
             // reject multi-turn requests: any assistant message in the history
@@ -1850,27 +1892,27 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             chat_turn_start start;
             start.prompt_tokens = meta_info.prompt_tokens;
             start.cached_prompt_tokens = meta_info.cached_prompt_tokens;
-            if (meta_info.logprobs_top_n >= 0) {
-                // each flush is placed before the parser sees it, so a content delta finds its tokens
-                logprobs = std::make_unique<chat_logprobs_aligner>(auto_chat_engine.get(), meta_info.logprobs);
-                start.content_logprobs = [&logprobs](const std::string& content) { return logprobs->take_content(content); };
-                ostream.start(output_prefill(), [&logprobs](const std::string& written) { logprobs->on_flush(written); });
-            }
-            else {
-                ostream.start(output_prefill());
-            }
-            sink.on_start(start);
-            header_print("FLM", "Start generating...");
             try {
+                if (meta_info.logprobs_top_n >= 0) {
+                    // each flush is placed before the parser sees it, so a content delta finds its tokens
+                    logprobs = std::make_unique<chat_logprobs_aligner>(auto_chat_engine.get(), meta_info.logprobs);
+                    start.content_logprobs = [&logprobs](const std::string& content) { return logprobs->take_content(content); };
+                    ostream.start(output_prefill(), [&logprobs](const std::string& written) { logprobs->on_flush(written); });
+                }
+                else {
+                    ostream.start(output_prefill());
+                }
+                sink.on_start(start);
+                header_print("FLM", "Start generating...");
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token->cancelled(); });
             } catch (const ModelRequestError& error) {
                 sink.on_error(model_error(error));
                 if (error.session_cleared()) this->prompt_cache.reset();
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
+                sink.on_error(engine_exception_error(e));
                 return;
             }
             if (meta_info.stop_reason == CANCEL_DETECTED) {

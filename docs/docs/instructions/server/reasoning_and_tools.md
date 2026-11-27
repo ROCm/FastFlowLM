@@ -25,6 +25,7 @@ This page covers how that output looks with and without streaming, how to turn t
 
 # 📑 Table of Contents
 
+- [Anthropic Messages clients](#anthropic-messages-clients)
 - [Supported Model Formats](#-supported-model-formats)
 - [Non-Streaming Responses](#-non-streaming-responses)
 - [Streaming Responses](#-streaming-responses)
@@ -34,6 +35,38 @@ This page covers how that output looks with and without streaming, how to turn t
 - [Use Case: Parallel Tool Calls](#-use-case-parallel-tool-calls)
 - [Rules Worth Knowing](#-rules-worth-knowing)
 - [Troubleshooting](#-troubleshooting)
+
+---
+
+## Anthropic Messages clients
+
+Point the Anthropic SDK's **base URL** at `http://127.0.0.1:52625` (or the port used by `flm serve`), without `/v1`. The SDK appends `/v1/messages`. Use an installed FLM model tag; the server does not translate Claude model names. If the SDK requires an API key, use a placeholder for local serving.
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(base_url="http://127.0.0.1:52625", api_key="local")
+with client.messages.stream(
+    model="qwen3:4b",
+    max_tokens=2048,
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    messages=[{"role": "user", "content": "What is 17 times 23?"}],
+) as stream:
+    message = stream.get_final_message()
+```
+
+| Request field | Local behavior |
+|---|---|
+| `model`, `messages`, `max_tokens` | Required. `max_tokens` caps the whole output, including thinking. Top-level `system` takes a string or text blocks. Use `user` and `assistant` roles. End with a user turn: final assistant prefill is not supported. |
+| Text and images | A vision model accepts inline base64 image blocks before the text of a user turn. Image-after-text ordering cannot be represented and returns 400. Remote URL sources, documents and unknown blocks return a field-specific 400. |
+| `tools`, `tool_choice` | Client-executed tools with `input_schema`; `auto`, `any`, `tool` by name, `none`, and `disable_parallel_tool_use`. Return text results with the original `tool_use_id`; unknown, duplicated or missing IDs are refused. `eager_input_streaming` is accepted as a hint. FLM streams text and thinking as they arrive. It buffers each tool input until the block closes, then sends its JSON fragments; on a length stop it withholds the last open tool, even if the parser could turn the unfinished input into valid JSON. Server tools and `is_error:true` results are not supported. |
+| `thinking` | On Qwen3 with the `flm` NPU backend, `enabled` requires an integer `budget_tokens` of at least 1024 and less than `max_tokens`. When a thinking block reaches its budget, FLM feeds its closing token back to the model and continues decoding the answer within the **original** total limit. A natural close may occur sooner. Leave enough total tokens for the visible answer. If a tool grammar is already invalid or rejects the forced close, the turn fails at the budget boundary instead of continuing unconstrained. Unsupported backends, invalid budgets and `adaptive` return 400 before streaming. `disabled` requests the model's no-thinking mode. Omitting `thinking` keeps the model default and sets no manual budget. |
+| Thinking output | Without `display`, FLM returns the model's local reasoning text. `display:"omitted"` returns an empty thinking block. For `"summarized"`, FLM also leaves the block empty: there is no local summarizer, and FLM does not send raw reasoning as a summary. Local signatures are empty; nonempty foreign signatures and redacted blocks cannot be replayed. |
+| `stream`, `temperature`, `top_p`, `top_k` | Forwarded to the shared chat turn. Streams have named events and end with `message_stop`, not `[DONE]`. A failure after streaming begins is an `error` event. |
+| `cache_control`, `metadata`, `service_tier` | Accepted but ignored. FLM manages its local cache: `input_tokens` excludes `cache_read_input_tokens`, and cache creation is reported as zero. |
+| `stop_sequences` | Nonempty custom sequences are refused; FLM cannot report which matched. |
+
+`anthropic-version`, `anthropic-beta`, `x-api-key` and `Authorization` are optional for local serving. Sending a beta header does not enable hosted features. `/v1/messages/count_tokens` is not part of this route.
 
 ---
 

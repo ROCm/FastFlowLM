@@ -143,6 +143,14 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
     }
     assert(this->last_token != -1);
     stop_reason_t reason = EOT_DETECTED;
+    bool in_thinking = false;
+    int thinking_tokens = 0;
+    auto count_thinking = [&](int token) {
+        if (meta_info.thinking_budget <= 0) return;
+        if (token == think_start_id) in_thinking = true;
+        else if (token == think_end_id) in_thinking = false;
+        else if (in_thinking && !this->is_eos(token)) ++thinking_tokens;
+    };
 
     this->profiler_list[DECODING_TIME].reset();
     this->profiler_list[TKOEN_DECODE_TIME].reset();
@@ -223,6 +231,7 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
         }
     }
 
+    count_thinking(last_sampled_token);
     if (this->total_tokens >= decode_cap){
         reason = MAX_LENGTH_REACHED;
     }
@@ -243,7 +252,19 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
         this->profiler_list[DECODING_TIME].stop(1);
 
         this->profiler_list[SAMPLING_TIME].start();
-        int sampled_token = this->_sample(y, meta_info);
+        // The forced delimiter follows the same history, stream and KV path as a natural close.
+        if (in_thinking && thinking_tokens >= meta_info.thinking_budget) {
+            sampled_token = think_end_id;
+            this->_force_token(meta_info, sampled_token);
+            if (meta_info.constraint && meta_info.constraint->failed()) {
+                this->clear_context();
+                throw ModelRequestError(500, true, "The tool grammar is invalid at the thinking budget boundary",
+                                        "model_error", "thinking.budget_tokens");
+            }
+        } else {
+            sampled_token = this->_sample(y, meta_info);
+        }
+        count_thinking(sampled_token);
         this->profiler_list[SAMPLING_TIME].stop(1);
         this->total_tokens++;
         last_sampled_token = sampled_token;
@@ -286,6 +307,8 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
         header_print("WARNING", "Max length reached, stopping generation...");
     }
     std::cout << std::endl;
+    if (meta_info.thinking_budget > 0)
+        header_print("FLM", "Thinking tokens: " + std::to_string(thinking_tokens) + "/" + std::to_string(meta_info.thinking_budget));
     this->print_raw_output(result);
     return result;
 }

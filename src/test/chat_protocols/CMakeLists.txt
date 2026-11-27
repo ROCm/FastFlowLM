@@ -12,6 +12,7 @@ set(FLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../..")
 
 add_executable(test_chat_protocols
     test_chat_protocols.cpp
+    test_anthropic.cpp
     "${FLM_SOURCE_DIR}/common/chat/chat_args.cpp"
     "${FLM_SOURCE_DIR}/common/chat/chat_continue.cpp"
     "${FLM_SOURCE_DIR}/common/chat/chat_format.cpp"

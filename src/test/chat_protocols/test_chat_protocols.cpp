@@ -365,9 +365,10 @@ int flush_hook() {
 }
 }  // namespace
 
+int test_anthropic();
 int main(int argc, char* argv[]) {
     const std::string golden_path = argc > 1 ? argv[1] : std::string(GOLDEN_DIR) + "/chat_completions.txt";
-    int failures = 0;
+    int failures = test_anthropic();
     try {
         const auto golden = blocks(read_file(golden_path));
         std::vector<std::pair<std::string, std::string>> actual;

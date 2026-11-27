@@ -37,6 +37,7 @@ public:
     std::string generate_with_prompt(chat_meta_info_t& meta_info, lm_uniform_input_t& input, int length_limit, std::ostream& os = std::cout) override;
     std::string apply_chat_template(nlohmann::ordered_json& messages, nlohmann::ordered_json tools = nlohmann::ordered_json::object(), bool continue_final_message = false) override;
     bool supports_continue_final_message() const override { return true; }
+    bool supports_manual_thinking_budget() const override { return backend_id() == flm::backend::kFlmBackendId; }
     bool thinking_enabled() const override {
         return this->enable_think;
     }
