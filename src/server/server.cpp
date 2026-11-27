@@ -7,6 +7,7 @@
  *  \version 0.9.24
  */
 #include "server.hpp"
+#include "device_load.hpp"
 #include "rest_handler.hpp"
 #include "utils/json_log.hpp"
 #include "utils/log_privacy.hpp"
@@ -286,9 +287,9 @@ void HttpSession::abort_open_stream(flm::error_model::Protocol proto, const flm:
     if (stream_finished_.load()) {
         return;
     }
-    if (proto == flm::error_model::Protocol::OpenAI) {
-        write_streaming_response(json(flm::error_model::stream_error_frame(proto, err)), false);
-        write_streaming_response(json("data: [DONE]\n\n"), true);
+    // The client gets the error in the stream's own format, and the stream is ended, not cut off
+    if (const auto frames = flm::error_model::stream_abort_frames(proto, err)) {
+        write_streaming_response(json(*frames), true);
     } else {
         close_connection();
     }
@@ -423,7 +424,7 @@ void HttpSession::handle_request(bool cors) {
     res_.keep_alive(req_.keep_alive());
 
     // Handle the request through the server. Nothing may escape into ioc.run(): answer 500
-    // (or, mid-stream, drop the connection) instead of leaving the client without a reply.
+    // (or, mid-stream, an error frame that ends the stream) instead of leaving the client without a reply.
     bool deferred = false;
     const auto proto = flm::error_model::protocol_for_path(
         std::string_view(req_.target().data(), req_.target().size()));
@@ -1167,6 +1168,20 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             rest_handler->handle_pull(request_json, send_response, send_streaming_response);
         });
     
+    server->register_handler("GET", "/v1/flm/devices",
+        [read = device_load::make_reader(), host = server.get()](const auto&, auto send, auto, auto, auto) {
+            const auto sample = read();
+            const auto row = [](const char* kind, const device_load::Device& d) -> json {
+                return {{"device", kind}, {"name", d.name}, {"utilization_percent", d.usage.total},
+                        {"own_utilization_percent", d.usage.own}, {"memory_shared_bytes", d.shared},
+                        {"memory_dedicated_bytes", d.dedicated}};
+            };
+            const auto [busy, queued] = host->accelerator_status();
+            send(json{{"devices", {row("npu", sample.npu), row("gpu", sample.gpu)}},
+                      {"system_memory_available_bytes", sample.available}, {"sampled_at", sample.sampled_at},
+                      {"server", {{"accelerator_busy", busy}, {"queued_requests", queued}}}});
+        });
+
     // Add OpenAI endpoints
     server->register_handler("GET", "/v1/version",
         [rest_handler](const http::request<http::string_body>& req,
@@ -1237,6 +1252,13 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             rest_handler->handle_openai_chat_completion(request_json, send_response, send_streaming_response, cancellation_token);
         });
     
+    server->register_handler("POST", "/v1/responses",
+        [rest_handler](const http::request<http::string_body>& req, auto send_response,
+                       auto send_streaming_response, std::shared_ptr<HttpSession>, auto cancellation_token) {
+            rest_handler->handle_openai_responses(json::parse(req.body()), std::move(send_response),
+                                                 std::move(send_streaming_response), std::move(cancellation_token));
+        });
+
     server->register_handler("POST", "/v1/audio/transcriptions",
         [rest_handler](const http::request<http::string_body>& req,
             std::function<void(const json&)> send_response,

@@ -15,15 +15,20 @@
 #include "chat_core.hpp"
 #include "chat_logprobs.hpp"
 #include "protocol_openai_chat.hpp"
+#include "protocol_responses.hpp"
 #include "image/image_reader.hpp"
 #include "image/raw_rgb8.hpp"
 #include "base64.hpp"
 #include "chat/message_roles.hpp"
+#include "chat/active_tool_reasoning.hpp"
 #include "chat/positional_tool_results.hpp"
 #include "utils/log_privacy.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include "AutoModel/modeling_gpt_oss.hpp"
+#include "AutoModel/modeling_hy_memory.hpp"
+#include "AutoModel/modeling_inkling2.hpp"
 #include "AutoModel/modeling_minicpm_v.hpp"
 #include "AutoModel/modeling_qwen3_asr.hpp"
 #include "AutoModel/modeling_qwen3_5vl.hpp"
@@ -49,11 +54,23 @@ chat_error model_error(const ModelRequestError& error) {
 }
 
 /// \brief An exception on a chat route: the model's own error, a 400 client type/arg fault, or a 500
-chat_error exception_error(const std::exception& error) {
+/// \param stage where it was caught; see flm::error_model::exception_error
+chat_error staged_exception_error(const std::exception& error, flm::error_model::Stage stage) {
     if (const auto* request_error = dynamic_cast<const ModelRequestError*>(&error))
         return model_error(*request_error);
-    const auto ev = flm::error_model::exception_error(error);
+    const auto ev = flm::error_model::exception_error(error, stage);
     return {ev.status, ev.type, ev.message, ev.param, ev.session_cleared};
+}
+
+/// \brief An exception while the handler reads the request or anywhere in it
+chat_error exception_error(const std::exception& error) {
+    return staged_exception_error(error, flm::error_model::Stage::Request);
+}
+
+/// \brief An exception that escaped prefill, generation or finishing the reply: a JSON access
+///        error there comes from model files or output, not from the request, so it is a 500
+chat_error engine_exception_error(const std::exception& error) {
+    return staged_exception_error(error, flm::error_model::Stage::Engine);
 }
 
 /// \brief insert() returned false without being cancelled: the reason the model gave, if any
@@ -98,6 +115,11 @@ json ModelErrorResponse(const ModelRequestError& error) {
 ///        route's wire protocol (OpenAI on /v1/*, Ollama on /api/*, System One on /v1/systemone).
 json ExceptionResponse(const std::exception& error) {
     return openai_error_json(exception_error(error));
+}
+
+/// \brief ExceptionResponse for an exception that escaped prefill, generation or finishing the reply
+json EngineExceptionResponse(const std::exception& error) {
+    return openai_error_json(engine_exception_error(error));
 }
 
 /// \brief The reply when insert() returned false without being cancelled: the reason the model gave, if any
@@ -727,6 +749,9 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         prefill_chunk_len = chunk;
         positional_tool_results = plan.info.value("positional_tool_results", false)
             && engine->backend_id() == flm::backend::kOgaHipepBackendId;
+        // The history rule is verified for this package, frontend and backend together.
+        active_tool_reasoning = plan.info.value("active_tool_reasoning", false)
+            && dynamic_cast<Qwen3_5VL*>(engine.get()) && engine->backend_id() == flm::backend::kOgaHipepBackendId;
         {
             std::lock_guard lock(model_info_mutex);
             loaded_backend = engine->backend_id();
@@ -895,7 +920,8 @@ void RestHandler::handle_systemone(const std::string& raw_body,
 ///@param options the options JSON object
 ///@param request the request JSON object
 void RestHandler::configure_chat_engine_parameters(const json& options, const json& request,
-                                                   std::optional<bool> nested_think) {
+                                                   std::optional<bool> nested_think,
+                                                   const std::optional<std::string>& reasoning_effort) {
     auto_chat_engine->restore_request_settings();
     if (has_value(request, "temperature")) {
         float temperature = request["temperature"];
@@ -929,9 +955,11 @@ void RestHandler::configure_chat_engine_parameters(const json& options, const js
         bool enable_thinking = request["think"];
         auto_chat_engine->configure_parameter("enable_think", enable_thinking);
     }
-    if (has_value(request, "reasoning_effort")) {
-        std::string reasoning_effort = request["reasoning_effort"];
-        auto_chat_engine->configure_parameter("reasoning_effort", reasoning_effort);
+    if (reasoning_effort.has_value()) {
+        auto_chat_engine->configure_parameter("reasoning_effort", *reasoning_effort);
+    } else if (has_value(request, "reasoning_effort")) {
+        std::string effort = request["reasoning_effort"];
+        auto_chat_engine->configure_parameter("reasoning_effort", effort);
     }
     // chat_template_kwargs.enable_thinking, already checked against the two above
     if (nested_think.has_value()) {
@@ -1052,7 +1080,7 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1060,7 +1088,7 @@ void RestHandler::handle_generate(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1086,7 +1114,7 @@ void RestHandler::handle_generate(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1094,7 +1122,7 @@ void RestHandler::handle_generate(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1186,7 +1214,7 @@ void RestHandler::handle_chat(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1195,7 +1223,7 @@ void RestHandler::handle_chat(const json& request,
                 auto_chat_engine->generate(meta_info, length_limit, ostream,
                     [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1220,7 +1248,7 @@ void RestHandler::handle_chat(const json& request,
                     meta_info, uniformed_input, length_limit, nstream,
                     [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -1443,6 +1471,50 @@ void RestHandler::handle_openai_chat_completion(const json& request,
     run_chat_turn(request, sink, cancellation_token);
 }
 
+/// \brief Validate and resolve `reasoning_effort` for a Chat Completions request.
+/// \note Inkling-2 accepts all seven OpenAI levels verbatim plus numeric strings in [0, 0.99];
+///       gpt-oss rejects "none"; Hy-Memory also takes its own "no_think"; every other model
+///       receives the four canonical FLM levels.
+static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, bool is_gpt_oss,
+                                          bool is_hy_memory, std::optional<std::string>& resolved_effort,
+                                          std::string& error) {
+    resolved_effort.reset();
+    std::optional<std::string> canonical;
+    if (!chat_reasoning_effort_from_openai(request, canonical, error, is_hy_memory)) {
+        const auto it = request.find("reasoning_effort");
+        if (is_inkling && it != request.end() && it->is_string() && Inkling2::valid_effort(it->get<std::string>())) {
+            resolved_effort = it->get<std::string>();
+            return true;
+        }
+        return false;
+    }
+    if (!canonical.has_value()) {
+        return true;
+    }
+    if (is_inkling) {
+        resolved_effort = request.at("reasoning_effort").get<std::string>();
+        return true;
+    }
+    if (is_gpt_oss && *canonical == "none") {
+        error = "reasoning_effort \"none\" is not supported by gpt-oss (use \"low\", \"medium\", or \"high\")";
+        return false;
+    }
+    resolved_effort = std::move(canonical);
+    return true;
+}
+
+void RestHandler::handle_openai_responses(const json& request,
+                                         std::function<void(const json&)> send_response,
+                                         StreamResponseCallback send_streaming_response,
+                                         std::shared_ptr<CancellationToken> cancellation_token) {
+    flm::responses::sink sink(request, std::move(send_response), std::move(send_streaming_response));
+    try {
+        run_chat_turn(flm::responses::to_chat_request(request), sink, cancellation_token);
+    } catch (const flm::responses::request_error& e) {
+        sink.on_error({400, "invalid_request_error", e.what(), e.param, std::nullopt});
+    }
+}
+
 ///@brief Run one chat turn and report it to a sink
 ///@note The one place a chat request is validated, the model loaded and configured, the prompt
 ///      inserted and the answer generated. What the client gets, and in which protocol's shape,
@@ -1496,7 +1568,6 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             bad_request(request_error);
             return;
         }
-
         if (auto error = generation_model_error(model)) {
             const auto& body = error->at("error");
             sink.on_error({body.at("code").get<int>(), body.at("type").get<std::string>(),
@@ -1504,6 +1575,31 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                            std::nullopt});
             return;
         }
+        // Validate reasoning_effort against the selected catalog family before loading can
+        // download a model or unload the currently loaded engine.
+        bool pre_is_inkling = false;
+        bool pre_is_gpt_oss = false;
+        bool pre_is_hy_memory = false;
+        if (model == "model-faker") {
+            pre_is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
+            pre_is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
+            pre_is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
+        } else {
+            const auto info = supported_models.get_model_info(supported_models.rectify_model_tag(model)).second;
+            const std::string family = info.contains("details") && info["details"].is_object()
+                ? info["details"].value("family", std::string()) : std::string();
+            pre_is_inkling = (family == "inkling-2");
+            pre_is_gpt_oss = (family == "gpt-oss");
+            pre_is_hy_memory = (family == "hy-memory");
+        }
+        std::optional<std::string> resolved_effort;
+        std::string effort_error;
+        if (!resolve_chat_reasoning_effort(request, pre_is_inkling, pre_is_gpt_oss, pre_is_hy_memory, resolved_effort,
+                                           effort_error)) {
+            bad_request(effort_error, "reasoning_effort");
+            return;
+        }
+
         auto load_start_time = time_utils::now();
         std::string refusal;
         if (!ensure_model_loaded(model, request_backend, &refusal)) {
@@ -1520,6 +1616,16 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             return;
         }
 
+        // Recheck against the loaded frontend in case a pull changed the selected catalog entry.
+        const bool is_inkling = dynamic_cast<Inkling2*>(auto_chat_engine.get()) != nullptr;
+        const bool is_gpt_oss = dynamic_cast<GPT_OSS*>(auto_chat_engine.get()) != nullptr;
+        const bool is_hy_memory = dynamic_cast<HyMemory*>(auto_chat_engine.get()) != nullptr;
+        if (!resolve_chat_reasoning_effort(request, is_inkling, is_gpt_oss, is_hy_memory, resolved_effort,
+                                           effort_error)) {
+            bad_request(effort_error, "reasoning_effort");
+            return;
+        }
+
         // The Qwen spelling of think, honored by the Qwen3.5 package only; any other model
         // keeps ignoring it. Refused here, before anything streams.
         std::optional<bool> nested_think;
@@ -1533,13 +1639,13 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
             }
         }
 
-        configure_chat_engine_parameters(options, request, nested_think);
+        configure_chat_engine_parameters(options, request, nested_think, resolved_effort);
         apply_sampling_request(*auto_chat_engine, sampling);
 
         std::vector<size_t> original_indices;
         try {
             current_messages = flm::chat::normalize_messages(current_messages, auto_chat_engine->message_roles(),
-                                                              positional_tool_results ? &original_indices : nullptr);
+                                                              (positional_tool_results || active_tool_reasoning) ? &original_indices : nullptr);
         } catch (const flm::chat::message_error& e) {
             bad_request(e.what());
             return;
@@ -1558,6 +1664,9 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
         if (current_messages.empty()) {
             bad_request("'messages' must contain at least one non-empty message", "messages");
             return;
+        }
+        if (active_tool_reasoning) {
+            flm::chat::apply_active_tool_reasoning(current_messages, request.at("messages"), original_indices);
         }
         if (positional_tool_results) {
             if (auto error = flm::chat::order_parallel_tool_results(current_messages, original_indices)) {
@@ -1733,7 +1842,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 }
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1759,7 +1868,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 if (error.session_cleared()) this->prompt_cache.reset();
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1773,7 +1882,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 sink.on_end(turn_end(ostream.finish(), true));
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
         }
@@ -1813,7 +1922,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 }
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -1837,7 +1946,7 @@ void RestHandler::run_chat_turn(const json& request, chat_sink& sink,
                 }
                 return;
             } catch (const std::exception& e) {
-                sink.on_error(exception_error(e));
+                sink.on_error(engine_exception_error(e));
                 this->auto_chat_engine->clear_context();
                 this->prompt_cache.reset();
                 return;
@@ -2123,7 +2232,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(EngineExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2133,7 +2242,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 send_stream_error(ModelErrorResponse(error));
                 return;
             } catch (const std::exception& e) {
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(EngineExceptionResponse(e));
                 this->auto_chat_engine->clear_context();
                 return;
             }
@@ -2141,7 +2250,7 @@ void RestHandler::handle_openai_completion(const json& request,
                 ostream.finalize(meta_info);
             } catch (const std::exception& e) {
                 header_print("ERROR", std::string("Finishing the stream failed: ") + e.what());
-                send_stream_error(ExceptionResponse(e));
+                send_stream_error(EngineExceptionResponse(e));
             }
             log_request_summary(meta_info, this->auto_chat_engine->get_current_context_length(), this->auto_chat_engine->get_max_length());
 
@@ -2166,7 +2275,7 @@ void RestHandler::handle_openai_completion(const json& request,
                     return;
                 }
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;
@@ -2174,7 +2283,7 @@ void RestHandler::handle_openai_completion(const json& request,
             try {
                 auto_chat_engine->generate(meta_info, length_limit, ostream, [&] { return cancellation_token && cancellation_token->cancelled(); });
             } catch (const std::exception& e) {
-                json error_response = ExceptionResponse(e);
+                json error_response = EngineExceptionResponse(e);
                 send_response(error_response);
                 this->auto_chat_engine->clear_context();
                 return;

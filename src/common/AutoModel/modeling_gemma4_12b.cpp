@@ -58,7 +58,7 @@ void Gemma4_12B::load_model(std::string model_path, json model_info, int default
     config.min_p = 0.0;
     config.temperature = 1.0;
     config.rep_penalty = 1.0;
-    config.freq_penalty = 1.0;
+    config.freq_penalty = 0.0f;
     config.pre_penalty = 1.0f;
 
     this->set_sampler(config);

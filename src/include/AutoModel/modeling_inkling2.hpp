@@ -25,9 +25,6 @@ private:
     /// \brief the template's reasoning_effort: a level name, or a number as text
     std::string reasoning_effort = "high";
 
-    /// \brief whether `effort` is a level name or a number in [0, 0.99]
-    static bool valid_effort(const std::string& effort);
-
     ImageReader image_reader_;
 
     /// \brief the most image tokens (cells of 40 x 40 pixels) one image may take; a larger image is scaled down to
@@ -61,6 +58,9 @@ public:
     void restore_model_request_settings() override {
         this->configure_parameter("reasoning_effort", loaded_reasoning_effort);
     }
+    /// \brief whether `effort` is a level name or a number in [0, 0.99]
+    static bool valid_effort(const std::string& effort);
+
     /// \brief enable_think (false = effort "none"), toggle_think, reasoning_effort, plus the base-class ones
     bool configure_parameter(std::string parameter_name, const std::any& value) override;
     using AutoModel::configure_parameter;   // keep the typed template overload visible

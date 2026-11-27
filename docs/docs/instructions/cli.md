@@ -67,6 +67,18 @@ Download a model from HuggingFace without launching it:
 flm pull llama3.2:3b
 ```
 
+To see what a pull would fetch without downloading anything or changing the model store:
+
+```bash
+flm pull qwen3.8-dflash2:27b --dry-run
+```
+
+The preview makes no network requests: it reads the model catalog and the local model store. A build with the ryzenai-corelib backend still asks the NPU driver which NPU generation this machine has, because that decides which catalog entries apply, as for a real pull; without an NPU it previews the AIE2P entries.
+
+The preview lists files to download or reuse under each tag, starting with the required base model. The total is the full manifest size of files to download, in bytes and GiB. A `.part` file may let a real pull resume and transfer less. The estimate excludes retries, protocol overhead, and peak disk usage.
+
+Add `--force` to count the requested tag again without forcing its base. The preview checks pinned or outdated files locally, which can take time for large weights. A package installed for a newer FastFlowLM is listed as kept, since a pull leaves it unchanged. The preview exits without a total if records are missing or source selection requires an online check (including a forced pull that must reselect its preferred source).
+
 This code forces a re-download of the model, overwriting the current version.
 
 ```shell
@@ -312,6 +324,23 @@ flm run  qwen3.5-oga-hipep:9b
 - **Conversation state.** FLM keeps up to four conversations on the GPU, one OGA generator each, so that two chats, or an agent and its sub-agent, that take turns do not replay each other's history. A request goes to the generator holding the longest part of its prompt; with none, a new generator replays the whole prompt, in place of the least recently used one once all are in use. Exact token prefixes continue a generator, so a request does not run its tokens twice. For Qwen3.5, Qwen3.6, Qwen3.8 and gpt-oss, FLM also keeps a checkpoint at the end of each prompt, as on the NPU: a follow-up turn whose prompt starts with the previous prompt rewinds the generator to that checkpoint and runs only the rest, even when the chat template leaves the reasoning of earlier replies out, and the same prompt sent again (a retry, "regenerate") runs no prompt token at all. onnxruntime-genai 0.19 cannot rewind the Gemma 4 packages, so with thinking on a Gemma 4 follow-up replays the conversation; FLM warns at the first refused rewind and does not try again. Any other history, an edited earlier message, and every new or changed image replay the whole conversation (OGA takes images only when it starts a generator), as does every Gemma 4 request that carries an image, changed or not; `usage.prompt_tokens_details.cached_tokens` counts the tokens that were not run again.
 - **How many conversations.** `--prefix-slots N` sets how many generators to keep (default `4`, at most `32`; `0` keeps one, as before). Each holds the KV cache of the full context length: for `qwen3.5-oga-hipep:9b`, about 1.1 GiB at the default 32768 tokens and 4.1 GiB at 131072. The generators beyond the first must fit in `--prefix-cache-mb` (default `4096` MiB), so at a long `--ctx-len` FLM keeps fewer; the load log says how many (`OGA generators: up to N conversation(s) kept`). A new generator is made for each prompt that no kept one holds, and it stays until a later one replaces it, so after a few chats, edited messages or Gemma 4 thinking turns all of them hold their memory. On a machine with 32 GB or less, `--prefix-slots 2` or `--prefix-cache-mb 2048` leaves more for other programs.
 - **Laguna 2.1 context length.** `laguna2.1-oga-hipep` (`33b-a3b`, `118b-a8b`) defaults to 2048 tokens, not 32768. Its packages grow the KV cache by concatenation, and on hip-ep 0.5.3 each token generated at a context length the process has not generated at before takes more GPU memory, freed only when `flm` exits: 6 to 10 MiB below 2048 tokens, 13 to 19 MiB past that; repeating long replies adds 0.6 to 0.9 GiB now and then. On a Radeon 8060S with 96 GB of GPU memory, `118b-a8b` loads at about 58 GiB, and one reply generated to 2048 tokens takes the process to about 78 GiB, to 2560 tokens about 86 GiB, and to 3072 tokens past the 96 GB; `33b-a3b` loads at about 17 GiB and reaches about 34 GiB at 2048 tokens and 66 GiB at 4096. Past the GPU memory, Windows moves GPU memory to system memory and generation slows down; when that runs out too, the GPU stops responding and Windows resets it, and every request fails until `flm` is restarted. So a larger `--ctx-len` risks that, and restarting `flm` gives the memory back.
+
+---
+
+### 📁 Run an OGA Model Folder Without a Catalog Entry (GPU)
+
+Run an OGA model package that is already on disk, and is not in `model_list.json`, with `--model-dir` and `--family`:
+
+```shell
+flm serve --model-dir C:\models\Qwen3.8-27B --family qwen3.5 --ctx-len 32768
+flm run   --model-dir C:\models\Qwen3.8-27B --family qwen3.5
+```
+
+- **The files say what it is.** `genai_config.json` marks an OGA package (backend `oga-hipep`, GPU). A folder without it is refused.
+- **`--family`** names the model family FLM runs the package with (`qwen3.5`, `qwen3.6` and `qwen3.8` OGA packages use `qwen3.5`). It is required with `--model-dir`, and the other way round. If the family cannot run a folder in this build, FLM lists the families that can.
+- **What FLM checks.** `genai_config.json`, `config.json`, `tokenizer.json`, and every model file `genai_config.json` names (`.onnx` and `.onnx.data`); `tokenizer_config.json`, `chat_template.jinja` and `processor_config.json` are used when present. FLM lists every missing file at once and starts nothing.
+- **How it runs.** FLM builds a catalog entry in memory from the folder. The tag is `<folder name>-oga-hipep:local` (lower case, other characters become `-`). Vision comes from `genai_config.json`; thinking and tools come from the chat template (`chat_template.jinja`, or `chat_template` in `tokenizer_config.json`). `/v1/models` and `/api/tags` list that tag; send it as `model`. `--ctx-len` and `--port` keep their usual defaults (the context length is the package's own limit, at most 32768).
+- **Nothing is downloaded or changed.** FLM never pulls, verifies, repairs or deletes files in a `--model-dir` folder, and `model_list.json` is not modified. `--model-dir` works with `run` and `serve` only, and not together with a model tag.
 
 ---
 

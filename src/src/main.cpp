@@ -12,8 +12,10 @@
 #include "model_list.hpp"
 #include "AutoModel/model_backend.hpp"
 #include "AutoModel/model_frontend.hpp"
+#include "AutoModel/local_model_entry.hpp"
 #include "model_downloader.hpp"
 #include "update.hpp"
+#include "AutoModel/local_model_oga.hpp"
 #include "utils/utils.hpp"
 #include "utils/npu_platform.hpp"
 #include "program_args.hpp"
@@ -556,6 +558,46 @@ static BOOL WINAPI end_hipep_process_on_console_event(DWORD event) {
 }
 #endif
 
+///@brief make the folder named by --model-dir a catalog model for this process
+///@param args the parsed arguments; model_tag is set to the new model's tag
+///@param models the catalog the entry is added to
+///@param platform the NPU platform id of this machine, which a package built for one generation is bound to
+///@return false after printing why the folder cannot be run
+///@note The folder's files say which package format it holds and so which backend
+///      runs it (see AutoModel/local_model_*.hpp). The families listed in the
+///      error are those this build can run on that backend: a frontend exists
+///      and the backend is registered for it.
+static bool register_local_model(program_args_t& args, model_list& models, const std::string& platform) {
+    auto& frontends = flm::frontend::FrontendRegistry::instance();
+    auto& backends = flm::backend::BackendRegistry::instance();
+    try {
+        auto local = flm::catalog::build_local_model_entry(args.model_dir, args.family, platform);
+        const std::string backend = local.backend;
+        if (!frontends.has(args.family) || !backends.has(args.family, backend)) {
+            std::string runnable;
+            for (const auto& family : frontends.available()) {
+                if (!backends.has(family, backend)) continue;
+                if (!runnable.empty()) runnable += ", ";
+                runnable += family;
+            }
+            header_print("ERROR", "--family " << args.family << " cannot run this model folder in this build ("
+                                              << backend << ")"
+                                              << (runnable.empty() ? std::string()
+                                                                   : "; families that can: " + runnable));
+            return false;
+        }
+        const std::string folder = local.entry.at("name").get<std::string>();
+        models.add_local_model(local.model_type, local.size, std::move(local.entry));
+        args.model_tag = local.tag;
+        header_print("FLM", "Model folder " << folder << " runs as " << local.tag
+                                             << " (family " << args.family << ", " << backend << ")");
+        return true;
+    } catch (const std::exception& error) {
+        header_print("ERROR", "--model-dir: " << error.what());
+        return false;
+    }
+}
+
 ///@brief run the command line; main ends the process with its result
 ///@param argc the number of arguments
 ///@param argv the arguments
@@ -677,6 +719,13 @@ static int run_flm(int argc, char* argv[]) {
         config_path, models_dir, std::string(utils::platform_id(platform)),
         backend_registry.backend_ids(), frontend_registry.catalog_overlays(),
         frontend_registry.available(), backend_registry.provider_inventory());
+
+    // --model-dir: the folder is the model, so it becomes a catalog entry here and
+    // everything below sees an ordinary tag.
+    if (!parsed_args.model_dir.empty() &&
+        !register_local_model(parsed_args, availble_models, std::string(utils::platform_id(platform)))) {
+        return 1;
+    }
 
     const bool starts_model = parsed_args.command == "run" || parsed_args.command == "serve" ||
                               parsed_args.command == "bench";
@@ -802,6 +851,10 @@ static int run_flm(int argc, char* argv[]) {
 
         // Load the model list with the models directory as the base
         ModelDownloader downloader(availble_models);
+        if (parsed_args.dry_run) {
+            std::cout << downloader.preview_pull(parsed_args.model_tag, parsed_args.modelscope, parsed_args.force_redownload);
+            return 0;
+        }
 
         // Ensure models directory exists
         if (!std::filesystem::exists(models_dir)) {

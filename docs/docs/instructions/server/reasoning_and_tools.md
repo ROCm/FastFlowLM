@@ -13,7 +13,7 @@ FLM's `/v1/chat/completions` endpoint removes that markup for you. Whatever the 
 
 | Field | What it holds |
 |---|---|
-| `reasoning_content` | The model's thinking, without the tags. Left out when the model didn't reason. |
+| `reasoning_content` | The model's thinking, without the tags. Left out when the model didn't reason. See [sending a tool result](#sending-a-tool-result) for when to return it. |
 | `content` | The answer the user should see. `null` when the turn is only tool calls. |
 | `tool_calls` | The function calls the model asked for. Each one has `arguments` as a **JSON string**, whatever syntax the model used. |
 
@@ -209,10 +209,24 @@ def collect_stream(stream):
     message = {"role": "assistant", "content": "".join(content) or None}
     if calls:
         message["tool_calls"] = [calls[i] for i in sorted(calls)]
+        if reasoning:
+            message["reasoning_content"] = "".join(reasoning)
     return message, "".join(reasoning), finish_reason, usage
 ```
 
-`message` can go straight back into `messages` for the next turn. Leave the reasoning out: FLM strips `reasoning_content` from earlier assistant turns before it builds the prompt anyway.
+### Sending a tool result
+
+You can append the returned assistant `message` to `messages`, followed by the tool result. On `qwen3.5-oga-hipep:9b` (GPU), a string `reasoning_content` on that tool-call message is part of the prompt while the model is answering the **same user question**. No extra option is needed. Once there is a new user question the old note drops out. `think` controls the reply being generated, not the history you send.
+
+```python
+# After collect_stream(), append the assistant message once, then one result per call.
+messages.append(message)
+for call in message["tool_calls"]:
+    messages.append({"role": "tool", "tool_call_id": call["id"], "content": results[call["id"]]})
+reply = client.chat.completions.create(model="qwen3.5-oga-hipep:9b", messages=messages)
+```
+
+**Compatibility:** earlier releases stripped the field even during a tool call. Clients that echo whole messages may now use more prompt tokens and reach the context limit sooner. Omit `reasoning_content` if you do not want to include it. Other packages retain their existing behavior.
 
 ### 📊 Usage in streams
 
@@ -238,10 +252,23 @@ client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"thi
 # Turn it back on
 client.chat.completions.create(model="qwen3:4b", messages=msgs, extra_body={"think": True})
 
-# The OpenAI-style knob works too: "none" turns thinking off,
-# "low" / "medium" / "high" turn it on (gpt-oss also uses it as its effort level)
+# The OpenAI-style knob works too: accepts all seven OpenAI levels
 client.chat.completions.create(model="gpt-oss:20b", messages=msgs, reasoning_effort="low")
 ```
+
+On `/v1/chat/completions`, `reasoning_effort` accepts the seven OpenAI levels (`null` or absent leaves the model's default); Hy-Memory also takes its own `no_think` and Inkling-2 a numeric level. Any other string or non-string value is rejected with HTTP 400 (`"param": "reasoning_effort"`) before the engine is touched (streaming requests too):
+
+| `reasoning_effort` | On/off thinking models (Qwen3, Qwen3.5, Gemma4, MiniCPM, LFM3, …) | `gpt-oss` | `hy-memory` | `inkling-2` |
+|---|---|---|---|---|
+| `none` | thinking off | **HTTP 400** (cannot turn reasoning off) | `no_think` | `none` |
+| `minimal` | thinking on (`low`) | `low` | `low` | `minimal` |
+| `low` | thinking on (`low`) | `low` | `low` | `low` |
+| `medium` | thinking on (`medium`) | `medium` | `high` | `medium` |
+| `high` | thinking on (`high`) | `high` | `high` | `high` |
+| `xhigh` | thinking on (`high`) | `high` | `high` | `xhigh` |
+| `max` | thinking on (`high`) | `high` | `high` | `max` |
+| `no_think` | **HTTP 400** | **HTTP 400** | `no_think` | **HTTP 400** |
+| anything else | **HTTP 400** | **HTTP 400** | **HTTP 400** | numeric string in `[0, 0.99]`, else **HTTP 400** |
 
 For the Qwen3.5 models, FLM also reads the switch from the shape Qwen's model card uses, so a client written for another Qwen server works unchanged:
 
@@ -414,6 +441,6 @@ Answer **every** call with its own `tool` message before the next request. To ge
 | Tool markup like `<tool_call>` shows up in `content` | The request had no `tools`, or the model's format is `content_only` (check the `Chat format:` log line). |
 | My client creates one tool call per streamed chunk | Merge deltas by `index`, as in [`collect_stream()`](#-accumulating-a-stream-correctly). |
 | `json.loads(arguments)` fails | You parsed while still streaming, or `finish_reason` is `"length"`: raise `max_tokens`. |
-| `reasoning_content` is empty but I asked for thinking | A previous request sent `think: false` and the setting stuck. Send `think: true` explicitly. |
+| `reasoning_content` is empty but I asked for thinking | The model defaults to thinking off (for example Qwen3 / Qwen3.5 on the NPU or Hy-Memory), or the model doesn't reason. Pass `think: true` or a `reasoning_effort` above `"none"` on the request. |
 | Long pause before the first content token | The model is thinking. Stream it and read `reasoning_content`, or turn thinking off. |
 | `usage` is missing in streams | Pass `stream_options={"include_usage": True}`. |

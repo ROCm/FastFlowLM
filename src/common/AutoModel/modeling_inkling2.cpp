@@ -6,6 +6,7 @@
 /// \note AutoModel wrapper for the Inkling-2-Mini engine (inkling2_npu).
 
 #include "AutoModel/modeling_inkling2.hpp"
+#include "AutoModel/reasoning_effort_levels.hpp"
 #include "models/inkling2/flm/aie2p/inkling2_npu.hpp"
 
 #include <algorithm>
@@ -124,13 +125,7 @@ void Inkling2::setup_tokenizer(std::string model_path) {
 }
 
 bool Inkling2::valid_effort(const std::string& effort) {
-    static const char* names[] = {"none", "minimal", "low", "medium", "high", "xhigh", "max"};
-    for (const char* name : names) {
-        if (effort == name) return true;
-    }
-    char* end = nullptr;
-    const double level = std::strtod(effort.c_str(), &end);
-    return !effort.empty() && end && *end == '\0' && level >= 0.0 && level <= 0.99;
+    return flm::inkling_valid_effort(effort);
 }
 
 /// \note The package's chat_template.jinja is the reference template made to run in minja:
@@ -142,8 +137,9 @@ std::string Inkling2::apply_chat_template(nlohmann::ordered_json& messages, nloh
     opt.polyfill_tool_responses = false;
     inputs.extra_context = this->extra_context;
     // a number goes in as a number: the template prints it ("Thinking effort level: 0.5")
-    if (std::isdigit(static_cast<unsigned char>(this->reasoning_effort[0]))) {
-        inputs.extra_context["reasoning_effort"] = std::strtod(this->reasoning_effort.c_str(), nullptr);
+    double numeric_effort = 0.0;
+    if (flm::parse_inkling_numeric_effort(this->reasoning_effort, numeric_effort)) {
+        inputs.extra_context["reasoning_effort"] = numeric_effort;
     } else {
         inputs.extra_context["reasoning_effort"] = this->reasoning_effort;
     }
