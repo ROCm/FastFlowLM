@@ -342,8 +342,7 @@ flm run   --model-dir C:\models\Qwen3.8-27B --family qwen3.5
 - **How it runs.** FLM builds a catalog entry in memory from the folder. The tag is `<folder name>-oga-hipep:local` (lower case, other characters become `-`). Vision comes from `genai_config.json`; thinking and tools come from the chat template (`chat_template.jinja`, or `chat_template` in `tokenizer_config.json`). `/v1/models` and `/api/tags` list that tag; send it as `model`. `--ctx-len` and `--port` keep their usual defaults (the context length is the package's own limit, at most 32768).
 - **Nothing is downloaded or changed.** FLM never pulls, verifies, repairs or deletes files in a `--model-dir` folder, and `model_list.json` is not modified. `--model-dir` works with `run` and `serve` only, and not together with a model tag.
 - **`--think` and `--tools` override the template.** The chat template is only a guess: a template that mentions `tools` in a comment would turn tools on, and FLM cannot tell. Pass `--think on|off` or `--tools on|off` to set the flag yourself; leave it out and FLM reads the template as above. Both only work with `--model-dir`.
-  - **What they change.** Both set the capabilities that `/v1/models` declares. `--tools` also decides whether `--family qwen2` renders tool definitions into the prompt.
-  - **What they do not change.** For `--family qwen3.5`, tool definitions go into the prompt only for models over about 800 MB, decided by the model's size, and neither flag is read. So for qwen3.5 the flags only change the declaration. Apart from the declaration and the qwen2 prompt check, no other code in FLM's source reads these two fields.
+  - **What they do.** They only pass the value through: it becomes the model's thinking or tools flag. What the model does with it is decided by that model's frontend, as it already is for catalog models.
 
 ```shell
 flm serve --model-dir C:\models\Qwen3.8-27B --family qwen3.5 --tools off
