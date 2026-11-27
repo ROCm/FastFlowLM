@@ -104,13 +104,15 @@ private:
         if (active_==block::tool) {
             // Once an SDK sees tool_use it cannot retract it. Hold only this call until
             // its input is known to be an object; never publish a truncated callable block.
+            // The final parser can close incomplete XML and return valid-looking JSON.
+            if (capped) { active_=block::none; fragments_.clear(); return true; }
             std::string input;
             for (const auto& f : fragments_) input+=f;
             auto args=json::parse(input,nullptr,false);
             if (!args.is_object()) {
-                if (!capped) on_error({500,"server_error","Model produced invalid tool input",{},std::nullopt});
+                on_error({500,"server_error","Model produced invalid tool input",{},std::nullopt});
                 active_=block::none; fragments_.clear();
-                return capped;
+                return false;
             }
             if (streaming_) {
                 start_block();

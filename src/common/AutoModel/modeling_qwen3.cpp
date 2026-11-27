@@ -258,7 +258,7 @@ std::string Qwen3::decode(chat_meta_info_t& meta_info, int length_limit, std::os
             this->_force_token(meta_info, sampled_token);
             if (meta_info.constraint && meta_info.constraint->failed()) {
                 this->clear_context();
-                throw ModelRequestError(500, true, "Cannot close thinking within the active tool grammar",
+                throw ModelRequestError(500, true, "The tool grammar is invalid at the thinking budget boundary",
                                         "model_error", "thinking.budget_tokens");
             }
         } else {

@@ -1,6 +1,11 @@
 """Anthropic Messages acceptance and route-specific errors."""
-import flm_api
+import json
 import os
+from pathlib import Path
+import re
+import urllib.request
+
+import flm_api
 from flm_api import Api, case, expect
 from test_http_safety import call, cors_mode
 
@@ -41,7 +46,10 @@ def messages_manual_budget(api: Api):
     prompt = ("Find the last three digits of 7^777. Work through the modular arithmetic carefully and "
               "independently verify it with a second method in your reasoning. In your final answer, "
               "output ONLY the three digits, no explanation or working.")
+    log_name = os.environ.get("FLM_TEST_MESSAGES_SERVER_LOG")
+    log = Path(log_name) if log_name else None
     def run(n):
+        offset = log.stat().st_size if log else 0
         reply = post(api, max_tokens=4096, temperature=0, messages=[{"role":"user","content":prompt}],
                      thinking={"type":"enabled","budget_tokens":n})
         expect(reply.status==200, f"budget {n} returned {reply.status}")
@@ -49,9 +57,30 @@ def messages_manual_budget(api: Api):
         reason="".join(b["thinking"] for b in blocks if b["type"]=="thinking")
         answer="".join(b["text"] for b in blocks if b["type"]=="text")
         expect(reason and answer and reply.body["usage"]["output_tokens"]>n, "did not return both stages")
-        return reason
-    low,high=run(1024),run(1536)
+        if log:
+            with log.open("rb") as f:
+                f.seek(offset)
+                counts = re.findall(rb"Thinking tokens: (\d+)/(\d+)", f.read())
+            expect(counts and tuple(map(int,counts[-1]))==(n,n), f"expected a binding {n}-token budget: {counts}")
+        return reason,answer,reply.body["stop_reason"]
+    low, answer, stop = run(1024)
+    high, _, _ = run(1536)
     expect(high.startswith(low) and len(high)>len(low), "the numeric budget did not change the reasoning boundary")
+    expect(stop=="end_turn" and "207" in answer[-100:], "small budget did not leave room for the final answer")
+    payload={"model":api.model,"messages":[{"role":"user","content":prompt}],"max_tokens":4096,"temperature":0,
+             "thinking":{"type":"enabled","budget_tokens":1024},"stream":True}
+    req=urllib.request.Request(api.url.removesuffix("/chat/completions")+"/messages",json.dumps(payload).encode(),
+                               {"Content-Type":"application/json"})
+    reasoning=[]; output=[]; stream_stop=None
+    with urllib.request.urlopen(req,timeout=api.timeout) as response:
+        for line in response:
+            if not line.startswith(b"data: "): continue
+            event=json.loads(line[6:])
+            delta=event.get("delta",{})
+            if delta.get("type")=="thinking_delta": reasoning.append(delta["thinking"])
+            if delta.get("type")=="text_delta": output.append(delta["text"])
+            if event["type"]=="message_delta": stream_stop=delta["stop_reason"]
+    expect(("".join(reasoning),"".join(output),stream_stop)==(low,answer,stop),"JSON/SSE budget responses differ")
 
 
 @case

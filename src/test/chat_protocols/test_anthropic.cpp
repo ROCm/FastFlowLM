@@ -125,5 +125,25 @@ int test_anthropic() {
         check(out.find("PRIVATE")==std::string::npos && out.find("\"thinking\":\"\"")!=std::string::npos &&
               out.find("OK")!=std::string::npos, "display never leaks raw reasoning");
     }
+    // The XML parser can synthesize valid JSON from a truncated string; a
+    // parseable object is not evidence the model finished requesting this tool.
+    for (bool streaming : {false,true}) {
+        std::string out;
+        sink capped([&](const json& body){out=body.dump();},
+                    [&](const json& frame,bool){out+=frame.get<std::string>();},streaming);
+        const auto spec=chat_format_make(chat_format_kind::QWEN_XML,true);
+        chat_parse_options options; options.parse_tool_calls=true;
+        chat_stream parser(spec,"",options);
+        capped.on_begin({"m",true}); capped.on_start({});
+        for (const auto& part : parser.update("<tool_call>\n<function=lookup>\n<parameter=name>\nhal",false))
+            capped.on_delta(part);
+        for (const auto& part : parser.update("",true)) capped.on_delta(part);
+        const auto& calls=parser.message().tool_calls;
+        check(calls.size()==1 && json::parse(calls[0].arguments,nullptr,false).is_object(),"parser healed cut XML");
+        chat_turn_end e; e.message=&parser.message(); e.finish=chat_finish::LENGTH;
+        capped.on_end(e);
+        check(out.find("tool_use")==std::string::npos && out.find("max_tokens")!=std::string::npos,
+              "never publish a healed final tool on a capped turn");
+    }
     return failures;
 }
