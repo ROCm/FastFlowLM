@@ -32,4 +32,5 @@ from .minicpm_v_35b import MiniCPM_V_35B_A3B
 from .dflash import DFlash
 from .qwen38_dflash2 import Qwen38DFlash2
 from .qwen3_asr import Qwen3ASR
-__all__ = ['Qwen3VL', 'Llama', 'LFM2', 'LFM3', 'Qwen3', 'Qwen2', 'Qwen2VL', 'Gemma3', 'Gemma4', 'Gemma4_12B', 'Phi4', 'GPTOSS', 'Nanbeige', 'Qwen35', 'Qwen35_2B', 'Qwen35_9B', 'Qwen35_08B', 'Qwen35_27B', 'Qwen35Omni', 'QWEN35_A3B', 'HunyuanDense', 'Qwen38_27B', 'MiniCPM_V_1B', 'MiniCPM_OCR_1B', 'DFlash', 'Qwen38DFlash2','MiniCPM_V_35B_A3B', 'HyMemory30BA3B', 'Qwen3ASR']
+from .inkling2 import Inkling2Loop
+__all__ = ['Qwen3VL', 'Llama', 'LFM2', 'LFM3', 'Qwen3', 'Qwen2', 'Qwen2VL', 'Gemma3', 'Gemma4', 'Gemma4_12B', 'Phi4', 'GPTOSS', 'Nanbeige', 'Qwen35', 'Qwen35_2B', 'Qwen35_9B', 'Qwen35_08B', 'Qwen35_27B', 'Qwen35Omni', 'QWEN35_A3B', 'HunyuanDense', 'Qwen38_27B', 'MiniCPM_V_1B', 'MiniCPM_OCR_1B', 'DFlash', 'Qwen38DFlash2','MiniCPM_V_35B_A3B', 'HyMemory30BA3B', 'Qwen3ASR', 'Inkling2Loop']

@@ -277,6 +277,8 @@ void Gemma4e::load_model(std::string model_path, json model_info, int default_co
     this->sampler.reset();
 
     this->enable_tool = (model_info["size"] > 800000000)? true : false;
+    this->accepts_images = model_info.value("vlm", false);
+    this->accepts_audio = model_info.value("asr", false);
 
     sampler_config config;
     config.top_k = 64;
@@ -442,18 +444,30 @@ bool Gemma4e::insert(chat_meta_info_t& meta_info, lm_uniform_input_t& input, std
         header_print("WARNING", "No messages or prompt provided");
         return false;
     }
-    // On OGA the package's processor takes the images, and there is no audio. A ModelRequestError,
-    // not the engine_config() error: the handlers turn only the former into an HTTP 400.
+    // On OGA the package's processor takes the images, and there is no audio. A text-only entry takes
+    // neither, so an extension engine behind it never sees a payload it cannot read. A ModelRequestError,
+    // not the engine_config() or payload error: the handlers turn only the former into an HTTP 400.
     const bool oga = this->backend_id() == flm::backend::kOgaHipepBackendId;
-    if (oga) {
-        bool audios = !input.audios.empty();
-        for (const auto& message : input.messages)
-            audios = audios || (message.contains("audios") && !message["audios"].empty());
-        if (audios) {
-            throw ModelRequestError(400, false,
-                "the loaded backend '" + this->backend_id() + "' does not accept audio input",
-                "invalid_request_error");
-        }
+    bool images = !input.images.empty();
+    bool audios = !input.audios.empty();
+    for (const auto& message : input.messages) {
+        images = images || (message.contains("images") && !message["images"].empty());
+        audios = audios || (message.contains("audios") && !message["audios"].empty());
+    }
+    if (audios && oga) {
+        throw ModelRequestError(400, false,
+            "the loaded backend '" + this->backend_id() + "' does not accept audio input",
+            "invalid_request_error");
+    }
+    if (images && !this->accepts_images) {
+        throw ModelRequestError(400, false,
+            "the loaded model does not accept image input: its catalog entry does not set \"vlm\"",
+            "invalid_request_error");
+    }
+    if (audios && !this->accepts_audio) {
+        throw ModelRequestError(400, false,
+            "the loaded model does not accept audio input: its catalog entry does not set \"asr\"",
+            "invalid_request_error");
     }
 #if defined(FLM_ENABLE_OGA_HIPEP)
     std::vector<std::string> oga_image_bytes;

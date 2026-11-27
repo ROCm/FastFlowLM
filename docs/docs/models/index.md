@@ -37,3 +37,4 @@ has_children: true
 - [Nemotron Bolt DFlash](nemotron3.5-bolt-dflash/)
 - [Flash Models](flash/)
 - [Confucius4-R2T2](r2t2/)
+- [Inkling](inkling/) (FLM v1.0.14 or later)

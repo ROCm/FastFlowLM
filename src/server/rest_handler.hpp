@@ -106,6 +106,9 @@ public:
                                       std::function<void(const json&)> send_response,
                                       StreamResponseCallback send_streaming_response,
                                       std::shared_ptr<CancellationToken> cancellation_token = nullptr);
+    void handle_openai_responses(const json& request, std::function<void(const json&)> send_response,
+                                StreamResponseCallback send_streaming_response,
+                                std::shared_ptr<CancellationToken> cancellation_token);
     void handle_openai_audio_transcriptions(const json& request,
                                       std::function<void(const json&)> send_response,
                                       StreamResponseCallback send_streaming_response,
@@ -131,7 +134,8 @@ private:
     void ensure_embed_model_loaded(const std::string& model_tag);
     void ensure_decision_model_loaded(const std::string& model_tag);
     void configure_chat_engine_parameters(const json& options, const json& request,
-                                          std::optional<bool> nested_think = std::nullopt);
+                                          std::optional<bool> nested_think = std::nullopt,
+                                          const std::optional<std::string>& reasoning_effort = std::nullopt);
     /// \brief Run one chat turn, whatever protocol asked for it, and report it to the sink
     void run_chat_turn(const json& request, chat_sink& sink,
                        std::shared_ptr<CancellationToken> cancellation_token);
@@ -179,5 +183,6 @@ private:
     std::string backend;
     flm::backend::BackendSelection loaded_selection;
     bool positional_tool_results = false;
+    bool active_tool_reasoning = false;
     PromptCache prompt_cache;
 };

@@ -67,6 +67,18 @@ Download a model from HuggingFace without launching it:
 flm pull llama3.2:3b
 ```
 
+To see what a pull would fetch without downloading anything or changing the model store:
+
+```bash
+flm pull qwen3.8-dflash2:27b --dry-run
+```
+
+The preview makes no network requests: it reads the model catalog and the local model store. A build with the ryzenai-corelib backend still asks the NPU driver which NPU generation this machine has, because that decides which catalog entries apply, as for a real pull; without an NPU it previews the AIE2P entries.
+
+The preview lists files to download or reuse under each tag, starting with the required base model. The total is the full manifest size of files to download, in bytes and GiB. A `.part` file may let a real pull resume and transfer less. The estimate excludes retries, protocol overhead, and peak disk usage.
+
+Add `--force` to count the requested tag again without forcing its base. The preview checks pinned or outdated files locally, which can take time for large weights. A package installed for a newer FastFlowLM is listed as kept, since a pull leaves it unchanged. The preview exits without a total if records are missing or source selection requires an online check (including a forced pull that must reselect its preferred source).
+
 This code forces a re-download of the model, overwriting the current version.
 
 ```shell
@@ -279,6 +291,18 @@ A model that comes from a `--model-extension` catalog always runs on the backend
 Asking for a backend this build does not ship fails at load with a message listing what is actually available. There is no silent fallback to another engine or to the CPU. Note that a release is built for one NPU generation: on hardware it was not built for, `run`, `serve` and `bench` refuse up front, and `flm validate` still reports what it found.
 
 > A build carries the engines for one generation only, so there is no flag that moves it to the other catalog entry — that is a different build of FLM.
+
+#### core: an 8-bit KV cache
+
+A core model keeps its KV cache in BF16 unless you ask for corelib's 8-bit layout, about 60 % of the bytes, which leaves room for a longer context:
+
+```shell
+flm serve qwen3.6-moe-core:35b-a3b --kv-cache-bits 8
+```
+
+`--kv-cache-bits` takes 8 or 16 and wins over `FLM_KV_CACHE_BITS`; with neither the cache is BF16. It applies to every core model the process loads. corelib expects to lose a little accuracy against BF16; in its own measurements Qwen3.6 at 2048 tokens agrees on 96.9 % of greedy tokens with BF16, against 97.9 % for DD's BF16 attention, and Phi-4-mini loses the most, 93.8 % against 99.0 % at 8192. Qwen3.6 decodes level or faster from about 2048 tokens; for head-64 and head-128 models (Qwen3, Llama, Phi-4-mini) a short prompt prefills slower, every 8-bit pass running on NPU direct.
+
+An 8-bit cache needs NPU direct (see the core model card): `flm` refuses it at load when corelib runs without NPU direct, rather than run the attention off the NPU, and says so when corelib keeps no 8-bit cache for a model. `Backend detail:` ends in `8-bit KV cache)` when it is on.
 
 #### oga-hipep: OGA models on the GPU
 

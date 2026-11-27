@@ -18,6 +18,7 @@
 #include "models/gpt_oss/flm/aie2p/gpt_oss_npu.hpp"
 #include "models/hunyuan/flm/aie2p/hunyuan_npu.hpp"
 #include "models/hy_mem/flm/aie2p/hy_mem_npu.hpp"
+#include "models/inkling2/flm/aie2p/inkling2_npu.hpp"
 #include "models/lfm2/flm/aie2p/lfm2_npu.hpp"
 #include "models/lfm3/flm/aie2p/lfm3_npu.hpp"
 #include "models/llama/flm/aie2p/llama_npu.hpp"
@@ -92,6 +93,7 @@ void register_builtin_backends(BackendRegistry& registry) {
     RegisterFlm<gemma4_12b_npu>(registry, "gemma4-12b");
     RegisterFlm<hunyuan_npu>(registry, "hunyuan");
     RegisterFlm<hy_mem_npu>(registry, "hy-memory");
+    RegisterFlm<inkling2_npu>(registry, "inkling-2");
     RegisterFlm<gpt_oss_npu>(registry, "gpt-oss");
     RegisterFlm<lfm2_npu>(registry, "lfm2");
     RegisterFlm<lfm2_npu>(registry, "lfm2.5-tk");

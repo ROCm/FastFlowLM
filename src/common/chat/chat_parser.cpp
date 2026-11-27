@@ -244,10 +244,14 @@ std::string decode_json_string_prefix(const std::string& s, size_t quote) {
 }
 
 /// \brief Parse one {"name": .., "arguments": ..} object starting at pos
+/// \param args_key the key that holds the arguments besides "arguments" and "parameters"
+/// \param header_name the call's name as given before the object, which then wins over its
+///        "name" (empty: the object names the call)
 /// \return index past the object, or npos if the text ends inside it
-size_t parse_hermes_object(const std::string& s, size_t pos, std::vector<chat_tool_call>& calls) {
-    std::string name;
-    bool have_name = false;
+size_t parse_hermes_object(const std::string& s, size_t pos, std::vector<chat_tool_call>& calls,
+                           const char* args_key = nullptr, const std::string& header_name = "") {
+    std::string name = header_name;
+    bool have_name = !header_name.empty();
     std::string arguments;
     bool have_args = false;
     size_t end = npos;
@@ -273,7 +277,9 @@ size_t parse_hermes_object(const std::string& s, size_t pos, std::vector<chat_to
         if (p >= s.size()) break;
         size_t value_end = chat_json_value_end(s, p);
 
-        if (key == "name") {
+        if (key == "name" && !header_name.empty()) {
+            // the header named the call first; a stream must not rename it
+        } else if (key == "name") {
             if (value_end == npos || s[p] != '"') break;
             try {
                 name = json::parse(s.substr(p, value_end - p)).get<std::string>();
@@ -281,7 +287,7 @@ size_t parse_hermes_object(const std::string& s, size_t pos, std::vector<chat_to
             } catch (const json::exception&) {
                 break;
             }
-        } else if (key == "arguments" || key == "parameters") {
+        } else if (key == "arguments" || key == "parameters" || (args_key != nullptr && key == args_key)) {
             have_args = true;
             if (s[p] == '"') {
                 // arguments sent as a JSON encoded string
@@ -666,6 +672,7 @@ void parse_tool_block(const chat_format_spec& spec, const std::string& body, boo
             break;
         case chat_format_kind::CONTENT_ONLY:
         case chat_format_kind::HARMONY:
+        case chat_format_kind::INKLING:
             break;
     }
 }
@@ -943,12 +950,122 @@ chat_msg parse_harmony(const std::string& text, bool is_partial, const chat_pars
     return msg;
 }
 
+
+// ---------------------------------------------------------------- inkling
+
+const std::string INKLING_MESSAGE = "<|message_model|>";
+const std::string INKLING_CONTENT = "<|content_";
+const std::string INKLING_MARKER_END = "|>";
+const std::string INKLING_END = "<|end_message|>";
+const std::string INKLING_END_SAMPLING = "<|content_model_end_sampling|>";
+
+/// \brief One tool call message: {"name":"f","args":{..}}
+/// \param header the text between <|message_model|> and the content marker: the tool's name
+void parse_inkling_call(const std::string& body, const std::string& header, bool closed,
+                        std::vector<chat_tool_call>& calls) {
+    const size_t p = skip_ws(body, 0);
+    if (p < body.size() && body[p] == '{') {
+        const size_t before = calls.size();
+        parse_hermes_object(body, p, calls, "args", header);
+        if (calls.size() > before) {
+            return;
+        }
+    }
+    // no JSON object (yet): a named call stands as soon as its header does
+    if (!header.empty()) {
+        add_call(calls, header, closed ? "{}" : "");
+    }
+}
+
+chat_msg parse_inkling(const std::string& text, bool is_partial, const chat_parse_options& options) {
+    chat_msg msg;
+    text_parts reasoning;
+    text_parts content;
+
+    // every message is <|message_model|>[header]<|content_KIND|>body<|end_message|>
+    size_t pos = 0;
+    while (true) {
+        pos = skip_ws(text, pos);
+        if (starts_with_at(text, pos, INKLING_END_SAMPLING)) {
+            pos += INKLING_END_SAMPLING.size();
+            continue;
+        }
+        if (pos >= text.size()) {
+            break;
+        }
+        const bool opened = starts_with_at(text, pos, INKLING_MESSAGE);
+        const size_t header_begin = opened ? pos + INKLING_MESSAGE.size() : pos;
+        size_t marker = text.find(INKLING_CONTENT, header_begin);
+        const size_t next_message = text.find(INKLING_MESSAGE, header_begin);
+        if (marker != npos && next_message < marker) {
+            marker = npos; // a message with no content: what follows is the next one
+        }
+        if (marker == npos) {
+            if (!opened) {
+                // text outside any message is the answer's
+                std::string rest = text.substr(pos, next_message == npos ? npos : next_message - pos);
+                if (is_partial && next_message == npos) {
+                    rest = cut_partial_marker(rest, {&INKLING_MESSAGE, &INKLING_CONTENT, &INKLING_END_SAMPLING});
+                }
+                content.add(rest);
+            }
+            if (next_message == npos) {
+                break; // a header still forming, or the end
+            }
+            pos = next_message;
+            continue;
+        }
+        if (!opened) {
+            content.add(text.substr(pos, marker - pos));
+        }
+        const std::string header = opened ? trim(text.substr(header_begin, marker - header_begin)) : "";
+        const size_t kind_begin = marker + INKLING_CONTENT.size();
+        const size_t kind_end = text.find(INKLING_MARKER_END, kind_begin);
+        if (kind_end == npos) {
+            break; // the content marker is still forming
+        }
+        const std::string kind = text.substr(kind_begin, kind_end - kind_begin);
+        const size_t body_begin = kind_end + INKLING_MARKER_END.size();
+
+        const std::string* which = nullptr;
+        const size_t body_end = find_first(text, body_begin, {&INKLING_END, &INKLING_MESSAGE, &INKLING_END_SAMPLING}, &which);
+        const bool closed = body_end != npos || !is_partial;
+        std::string body = text.substr(body_begin, (body_end == npos ? text.size() : body_end) - body_begin);
+        if (body_end == npos && is_partial) {
+            body = cut_partial_marker(body, {&INKLING_END, &INKLING_MESSAGE, &INKLING_END_SAMPLING});
+        }
+
+        if (kind == "thinking") {
+            reasoning.add(body);
+        } else if (kind == "invoke_tool_json") {
+            if (options.parse_tool_calls) {
+                parse_inkling_call(body, header, closed, msg.tool_calls);
+            }
+        } else if (kind == "text" || kind == "tool_error" || kind == "invoke_tool_text") {
+            content.add(body);
+        }
+        // other kinds (an image, the tool declaration) are not part of an answer
+
+        if (body_end == npos) {
+            break;
+        }
+        pos = which == &INKLING_END ? body_end + INKLING_END.size() : body_end;
+    }
+
+    msg.reasoning = reasoning.join(!is_partial);
+    msg.content = content.join(!is_partial);
+    return msg;
+}
+
 } // namespace
 
 chat_msg chat_parse(const chat_format_spec& spec, const std::string& text, bool is_partial,
                     const chat_parse_options& options) {
     if (spec.kind == chat_format_kind::HARMONY) {
         return parse_harmony(text, is_partial, options);
+    }
+    if (spec.kind == chat_format_kind::INKLING) {
+        return parse_inkling(text, is_partial, options);
     }
     return parse_tagged(spec, text, is_partial, options);
 }

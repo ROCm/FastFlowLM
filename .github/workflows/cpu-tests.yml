@@ -203,6 +203,34 @@ jobs:
           cmake --build build-prompt-reuse -j"$(nproc)"
           ctest --test-dir build-prompt-reuse --output-on-failure
 
+  # Unified error model (src/server/error_model.hpp): protocol writers (OpenAI / Ollama / System One),
+  # M4 prefill resolution, M6 model_error mapping, Q7 session_cleared, exception mapping, and UTF-8 safe dumps.
+  error-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and run the error model test
+        run: |
+          cmake -S src/test/error_model -B build-error-model -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-error-model -j"$(nproc)"
+          ctest --test-dir build-error-model --output-on-failure
+
+  # Accelerator counters: sum processes on one engine; distinguish different engines of the same type.
+  device-load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check device load aggregation and unsupported-host behavior
+        run: |
+          cmake -S src/test/device_load -B build-device-load -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-device-load --parallel
+          ctest --test-dir build-device-load --output-on-failure
+
   # HTTP request checks (src/server/http_guard.hpp): route normalization, which routes take the NPU queue
   # (read from server.cpp), Origin/Host policy, CORS headers and required fields. CPU only, no Boost.
   http-guard:

@@ -46,6 +46,7 @@ inline void print_help(po::options_description& general) {
     std::cout << "\tflm check llama3.2:1b" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --ctx-len 8192" << std::endl;
     std::cout << "\tflm run phi4-mini-it:4b --backend flm_npu" << std::endl;
+    std::cout << "\tflm serve qwen3.6-moe-core:35b-a3b --kv-cache-bits 8" << std::endl;
     std::cout << "\tflm serve llama3.2:1b --prefill-chunk-len 8192" << std::endl;
     std::cout << "\tflm serve qwen3.5:2b --prefix-slots 16 --prefix-cache-mb 4096" << std::endl;
     std::cout << "\tflm serve qwen3.5:2b --prefix-min-gain 256" << std::endl;
@@ -94,6 +95,8 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Set the server address (for serve command)")
             ("port,p", po::value<int>(&parsed_args.port)->default_value(-1), 
              "Set the server port number (for serve command)")
+            ("dry-run", po::bool_switch(&parsed_args.dry_run),
+             "Preview pull offline; bytes exclude retries, protocol overhead and peak disk usage")
             ("force", po::bool_switch(&parsed_args.force_redownload),
              "Force re-download even if model exists (for pull command)")
             ("modelscope", po::value<bool>(&parsed_args.modelscope)->default_value(false)->implicit_value(true),
@@ -108,6 +111,8 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
              "Set context length")
             ("backend", po::value<std::string>(&parsed_args.backend)->default_value(""),
              "Execution backend to run the model on (default: the model's own). Overrides FLM_BACKEND")
+            ("kv-cache-bits", po::value<int>(&parsed_args.kv_cache_bits)->default_value(0),
+             "Core backend KV cache: 8 (8-bit, AIE4 with NPU direct) or 16 (BF16); 0: FLM_KV_CACHE_BITS, else 16")
             ("model-extension",
              po::value<std::vector<std::string>>(
                  &parsed_args.model_extensions)->composing(),
@@ -193,11 +198,23 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
         resolve_model_arg(asr_arg, parsed_args.asr, parsed_args.asr_tag);
         resolve_model_arg(embed_arg, parsed_args.embed, parsed_args.embed_tag);
 
+        if (parsed_args.kv_cache_bits != 0 && parsed_args.kv_cache_bits != 8 &&
+            parsed_args.kv_cache_bits != 16) {
+            std::cerr << "Error: --kv-cache-bits is " << parsed_args.kv_cache_bits
+                      << "; the KV cache bits are 8 or 16" << std::endl;
+            return false;
+        }
+
         // Help has highest priority
         if (vm.count("help")) {
             print_help(general);
             parsed_args.command = "help";
             return true;
+        }
+
+        if (parsed_args.dry_run && (parsed_args.command != "pull" || vm.count("version"))) {
+            std::cerr << "Error: --dry-run is only supported with pull" << std::endl;
+            return false;
         }
 
         if (vm.count("version")) {
@@ -307,7 +324,7 @@ bool parse_options(int argc, char *argv[], program_args_t& parsed_args) {
 
         // Validate command-specific requirements
         if (parsed_args.command == "run" || parsed_args.command == "pull" || parsed_args.command == "remove" || parsed_args.command == "check") {
-            if (parsed_args.model_tag.empty()) {
+            if (parsed_args.model_tag.empty() || (parsed_args.dry_run && !vm.count("model_tag"))) {
                 std::cerr << "Error: Model tag is required for command '" << parsed_args.command << "'" << std::endl;
                 return false;
             }

@@ -42,16 +42,6 @@ int resolve_context_length(const nlohmann::ordered_json& model_info,
 
 }  // namespace
 
-
-ModelRequestError::ModelRequestError(
-    int http_code, bool session_cleared, std::string message, std::string type)
-    : std::runtime_error(std::move(message)),
-      http_code_(http_code), session_cleared_(session_cleared), type_(std::move(type)) {}
-
-int ModelRequestError::http_code() const noexcept { return http_code_; }
-bool ModelRequestError::session_cleared() const noexcept { return session_cleared_; }
-const std::string& ModelRequestError::type() const noexcept { return type_; }
-
 AutoModel::AutoModel(flm_rt::device* npu_device_inst, std::string current_model) {
     this->npu_device_inst = npu_device_inst;
     this->current_model = current_model;
@@ -782,9 +772,16 @@ const flm::chat::message_role_support& AutoModel::message_roles() {
 
 std::string AutoModel::_render_chat_template(minja::chat_template_inputs& inputs, bool continue_final_message,
                                              const minja::chat_template_options& options) {
+    const auto template_label = [&]() -> std::string {
+        return this->current_model.empty() ? "chat template" : this->current_model + " chat template";
+    };
     if (!continue_final_message) {
         inputs.add_generation_prompt = true;
-        return this->chat_tmpl->apply(inputs, options);
+        try {
+            return this->chat_tmpl->apply(inputs, options);
+        } catch (const minja::TemplateException& e) {
+            throw ModelRequestError(400, false, template_label() + ": " + e.what(), "invalid_request_error");
+        }
     }
     if (inputs.messages.empty() || inputs.messages.back().value("role", "") != "assistant") {
         throw ModelRequestError(400, false, "continue_final_message requires the last message to have role \"assistant\"",
@@ -801,6 +798,8 @@ std::string AutoModel::_render_chat_template(minja::chat_template_inputs& inputs
         // the output parser looks for an open reasoning block in this turn only, not in what the user wrote earlier
         this->continued_turn_ = std::move(continued.turn);
         return continued.prompt;
+    } catch (const minja::TemplateException& e) {
+        throw ModelRequestError(400, false, template_label() + ": " + e.what(), "invalid_request_error");
     } catch (const std::invalid_argument& e) {
         throw ModelRequestError(400, false, e.what(), "invalid_request_error");
     }

@@ -6,7 +6,10 @@
 #include "utils/utils.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -17,6 +20,15 @@
 
 namespace flm::core {
 namespace {
+
+std::atomic<int> requested_kv_cache_bits{0};
+
+KvCache KvCacheOf(int bits, const char* source) {
+    if (bits == 16) return KvCache::kBf16;
+    if (bits == 8) return KvCache::k8Bit;
+    throw std::invalid_argument(std::string(source) + " is " + std::to_string(bits) +
+                                "; the KV cache bits are 8 or 16");
+}
 
 nlohmann::json ReadJson(const std::filesystem::path& path) {
     flm::file_access::ObserveOpen(path);
@@ -159,6 +171,7 @@ public:
                                          << spec.reliable_context << ": "
                                          << spec.unreliable_reason);
         context_length_ = length;
+        kv_cache_ = ResolveKvCache();
 
         auto tokens = ReadPackageTokens(spec, context);
         eos_ids_ = std::move(tokens.eos);
@@ -166,7 +179,13 @@ public:
         const auto gguf = RequireGguf(context.model_info, context.model_path, name);
 
         runtime_ = corelib::CorelibRuntime::GetOrCreate(utils::get_executable_directory());
-        auto engine = std::make_unique<CorelibModel>(spec.model, gguf, runtime_, length);
+        // Without NPU direct corelib still runs an 8-bit session, its attention
+        // on the GPU or the host: the silent slowness the core backend refuses.
+        if (kv_cache_ == KvCache::k8Bit && !runtime_->npu_direct())
+            throw std::runtime_error(name + " core: an 8-bit KV cache needs NPU direct, "
+                                            "which this corelib runs without");
+        auto engine =
+            std::make_unique<CorelibModel>(spec.model, gguf, runtime_, length, kv_cache_);
         engine->clear_context();
         engine_ = std::move(engine);
     }
@@ -176,7 +195,10 @@ public:
     causal_lm& engine() override { return *engine_; }
     std::string id() const override { return flm::backend::kCoreBackendId; }
     std::string detail() const override {
-        return runtime_ ? runtime_->loaded_library_path().string() : std::string();
+        if (!runtime_) return {};
+        return runtime_->loaded_library_path().string() +
+               (runtime_->npu_direct() ? " (NPU direct" : " (no NPU direct") +
+               (kv_cache_ == KvCache::k8Bit ? ", 8-bit KV cache)" : ")");
     }
     std::uint32_t max_decode_length() const override { return context_length_ - 1; }
     bool supports_preemption() const override { return false; }
@@ -190,6 +212,7 @@ public:
 
 private:
     std::uint32_t context_length_{};
+    KvCache kv_cache_{KvCache::kBf16};
     std::vector<int> eos_ids_;
     std::optional<int> bos_id_;
     // Declared before the engine so it is destroyed after it: corelib objects
@@ -205,6 +228,25 @@ flm::backend::BackendFactory Factory(BackendSpec spec) {
                -> std::unique_ptr<flm::backend::ModelBackend> {
         return std::make_unique<CorelibBackend>(spec, context);
     };
+}
+
+void SetRequestedKvCacheBits(int bits) {
+    if (bits != 0) (void)KvCacheOf(bits, "--kv-cache-bits");
+    requested_kv_cache_bits = bits;
+}
+
+KvCache ResolveKvCache() {
+    if (const int bits = requested_kv_cache_bits; bits != 0)
+        return KvCacheOf(bits, "--kv-cache-bits");
+    const char* configured = std::getenv("FLM_KV_CACHE_BITS");
+    if (!configured || !*configured) return KvCache::kBf16;
+    const std::string text(configured);
+    int bits = 0;
+    const auto [end, failed] = std::from_chars(text.data(), text.data() + text.size(), bits);
+    if (failed != std::errc() || end != text.data() + text.size())
+        throw std::invalid_argument("FLM_KV_CACHE_BITS is '" + text +
+                                    "'; the KV cache bits are 8 or 16");
+    return KvCacheOf(bits, "FLM_KV_CACHE_BITS");
 }
 
 }  // namespace flm::core
