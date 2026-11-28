@@ -836,6 +836,8 @@ bool WebServer::handle_request(http::request<http::string_body>& req,
     const std::string path = flm::http_guard::route_path(std::string_view(req.target().data(), req.target().size()));
     std::string key = std::string(req.method_string()) + " " + path;
     auto it = routes.find(key);
+    if (it == routes.end() && req.method() == http::verb::get && !flm::http_guard::model_detail_id(path).empty())
+        it = routes.find("GET /v1/models");
     if (it == routes.end()) {
         // No route: respond 404 synchronously in the path's wire protocol.
         apply_error_response(res, flm::error_model::protocol_for_path(path),
@@ -1199,9 +1201,19 @@ std::unique_ptr<WebServer> create_lm_server(model_list& models, ModelDownloader&
             std::function<void(const json&, bool)> send_streaming_response,
             std::shared_ptr<HttpSession> session,
             std::shared_ptr<CancellationToken> cancellation_token) {
-                json request_json;
-                rest_handler->handle_models_openai(request_json, send_response, send_streaming_response);
+                std::string_view target(req.target().data(), req.target().size());
+                send_response(rest_handler->model_inventory(target));
         });
+
+    server->register_handler("GET", "/health",
+        [rest_handler](const auto&, auto reply, auto, auto, auto) { reply(rest_handler->health()); });
+
+    for (const char* path : {"/tokenize", "/detokenize", "/apply-template"}) {
+        server->register_handler("POST", path,
+            [rest_handler, path](const auto& req, auto reply, auto, auto, auto) {
+                reply(rest_handler->prompt_diagnostic(path, json::parse(req.body())));
+            });
+    }
 
     server->register_handler("POST", "/v1/embeddings",
         [rest_handler](const http::request<http::string_body>& req,

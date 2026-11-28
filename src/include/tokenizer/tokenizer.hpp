@@ -60,6 +60,7 @@ public:
     /// \param tokens the tokens
     /// \return the decoded text
     std::string decode(const std::vector<int>& tokens);
+    size_t vocab_size() const { return tokenizer->GetVocabSize(); }
 
     /// \brief Run time decoder
     /// \param answer_token the answer token

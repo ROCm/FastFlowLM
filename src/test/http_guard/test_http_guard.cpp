@@ -46,6 +46,10 @@ void test_route_path() {
     CHECK(route_path("/") == "/");
     CHECK(route_path("") == "/");
     CHECK(route_path("/?x") == "/");
+    CHECK(model_detail_id("/v1/models/qwen3%3A4b") == "qwen3:4b");
+    CHECK(model_detail_id("/v1/models/qwen3:4b") == "qwen3:4b");
+    CHECK(model_detail_id("/v1/models/a/b").empty());
+    CHECK(model_detail_id("/v1/models/").empty());
 }
 
 /// Every POST route whose handler runs the model must be in requires_npu_access, so it takes the

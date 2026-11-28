@@ -13,6 +13,16 @@
 /************              Qwen3 family            **************/
 Qwen3::Qwen3(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3") {}
 
+std::unique_ptr<AutoModel> Qwen3::make_prompt_renderer() const {
+    auto host = std::make_unique<Qwen3>(nullptr);
+    host->chat_tmpl = std::make_unique<minja::chat_template>(
+        chat_tmpl->source(), chat_tmpl->bos_token(), chat_tmpl->eos_token());
+    host->extra_context = extra_context;
+    host->enable_think = enable_think;
+    host->enable_tool = enable_tool;
+    return host;
+}
+
 void Qwen3::load_model(std::string model_path, json model_info, int default_context_length, bool enable_preemption, const std::string& backend) {
     this->_shared_load_backend(model_path, model_info, default_context_length, enable_preemption, backend);
     this->setup_tokenizer(model_path);

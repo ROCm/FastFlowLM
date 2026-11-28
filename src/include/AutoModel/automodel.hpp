@@ -670,6 +670,10 @@ public:
 	///       Tokenizer object across the stable ABI.
 	virtual std::vector<int> encode_text(const std::string& text);
 
+	/// A private host-only renderer for diagnostics, or null if this frontend cannot reproduce
+	/// its prompt without a live engine. No device, cache or per-request state is shared.
+	virtual std::unique_ptr<AutoModel> make_prompt_renderer() const { return {}; }
+
 	/// \brief Path used by the host grammar engine for this tokenizer.
 	virtual std::string tokenizer_json_path() const;
 
