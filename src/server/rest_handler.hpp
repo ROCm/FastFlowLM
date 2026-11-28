@@ -69,9 +69,9 @@ public:
                       std::function<void(const json&)> send_response,
                       StreamResponseCallback send_streaming_response);
     
-    void handle_models_openai(const json& request,
-                            std::function<void(const json&)> send_response,
-                            StreamResponseCallback send_streaming_response);
+    json model_inventory(std::string_view target);
+    json health();
+    json prompt_diagnostic(std::string_view path, const json& request);
 
     void handle_ps(const json& request,
                     std::function<void(const json&)> send_response,
@@ -158,6 +158,13 @@ private:
     model_list& supported_models;
     ModelDownloader& downloader;
     std::mutex model_info_mutex;
+    struct DiagnosticFrontend {
+        std::mutex mutex; // the private tokenizer and template have mutable working storage
+        std::unique_ptr<AutoModel> renderer;
+        std::unique_ptr<Tokenizer> tokenizer;
+        bool default_think;
+    };
+    std::shared_ptr<DiagnosticFrontend> diagnostic_frontend;
     std::string current_model_tag = "model-faker";
     std::string loaded_backend;
     std::string default_model_tag;

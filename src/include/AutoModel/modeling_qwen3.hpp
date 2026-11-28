@@ -29,6 +29,7 @@ private:
 
 public:
     Qwen3(flm_rt::device* npu_device_inst);
+    std::unique_ptr<AutoModel> make_prompt_renderer() const override;
 
     void load_model(std::string model_path, json model_inf, int default_context_length = -1, bool enable_preemption = false, const std::string& backend = "") override;
     //void toggle_enable_think() override;

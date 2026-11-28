@@ -9,6 +9,7 @@
 #include "rest_handler.hpp"
 #include "error_model.hpp"
 #include "http_guard.hpp"
+#include "prompt_tokens.hpp"
 #include "wstream_buf.hpp"
 #include "streaming_ostream.hpp"
 #include "streaming_ostream_openai.hpp"
@@ -735,6 +736,7 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
             std::lock_guard lock(model_info_mutex);
             current_model_tag = "model-faker";
             loaded_backend.clear();
+            diagnostic_frontend.reset();
         }
         auto_chat_engine.reset();
         prompt_cache.reset();
@@ -752,12 +754,25 @@ bool RestHandler::ensure_model_loaded(const std::string& model_tag,
         // The history rule is verified for this package, frontend and backend together.
         active_tool_reasoning = plan.info.value("active_tool_reasoning", false)
             && dynamic_cast<Qwen3_5VL*>(engine.get()) && engine->backend_id() == flm::backend::kOgaHipepBackendId;
+        std::shared_ptr<DiagnosticFrontend> host;
+        try {
+            if (auto renderer = engine->make_prompt_renderer()) {
+                auto view = std::make_shared<DiagnosticFrontend>();
+                view->default_think = renderer->thinking_enabled();
+                view->renderer = std::move(renderer);
+                view->tokenizer = std::make_unique<Tokenizer>(path);
+                host = std::move(view);
+            }
+        } catch (const std::exception&) {
+            header_print("WARNING", "Prompt diagnostics unavailable for this model");
+        }
         {
             std::lock_guard lock(model_info_mutex);
             loaded_backend = engine->backend_id();
             current_model_tag = std::move(plan.tag);
+            auto_chat_engine = std::move(engine);
+            diagnostic_frontend = std::move(host);
         }
-        auto_chat_engine = std::move(engine);
         loaded_selection = std::move(plan.selection);
         return true;
     } catch (const flm::backend::NpuUnavailable& e) {
@@ -1316,19 +1331,54 @@ void RestHandler::handle_version(const json& request,
     send_response(response);
 }
 
-///@brief Handle the models request (open ai)
-///@param request the request
-///@param send_response the send response
-///@param send_streaming_response the send streaming response
-void RestHandler::handle_models_openai(const json& request,
-    std::function<void(const json&)> send_response,
-    StreamResponseCallback send_streaming_response) {
-    try {
-        send_response(supported_models.get_all_models_openai(this->ctx_length));
+/// Catalog metadata does not require a live engine or a model download.
+json RestHandler::model_inventory(std::string_view target) {
+    const auto raw_id = flm::http_guard::model_detail_id(flm::http_guard::route_path(target));
+    const auto id = raw_id.empty() ? raw_id : supported_models.rectify_model_tag(raw_id);
+    bool installed_only = false;
+    auto q = target.find('?');
+    if (q != target.npos) {
+        auto query = target.substr(q + 1);
+        while (!query.empty()) {
+            const auto end = query.find('&');
+            const auto field = query.substr(0, end);
+            if (field == "installed=true") installed_only = true;
+            else if (field == "installed=false") installed_only = false;
+            else if (field == "installed" || field.starts_with("installed="))
+                return flm::error_model::make_error(400, "installed must be true or false", "installed");
+            if (end == query.npos) break;
+            query.remove_prefix(end + 1);
+        }
     }
-    catch (const std::exception& e) {
-        send_response(flm::error_model::make_error(500, e.what()));
+    auto catalog = supported_models.get_all_models_openai(ctx_length);
+    auto& rows = catalog.at("data");
+    for (auto& row : rows) {
+        const auto& tag = row.at("id").get_ref<const std::string&>();
+        if (!id.empty() && id != tag) continue;
+        bool installed = false;
+        try {
+            installed = downloader.is_model_downloaded(tag, true, true) == ModelDownloader::ModelStatus::Ready;
+        } catch (const nlohmann::json::exception&) {
+            // A partial or malformed package is not usable. Keep the other entries visible.
+        } catch (const std::runtime_error&) {
+            // The package may have disappeared between the presence check and opening its config.
+        }
+        row["installed"] = installed;
+        if (!id.empty()) return row;
     }
+    if (!raw_id.empty()) return UnknownModelResponse(raw_id);
+    if (installed_only)
+        rows.erase(std::remove_if(rows.begin(), rows.end(), [](const auto& r) {
+            return r.at("installed") == false;
+        }), rows.end());
+    return catalog;
+}
+
+json RestHandler::health() {
+    std::lock_guard lock(model_info_mutex);
+    if (current_model_tag == "model-faker")
+        return flm::error_model::make_error(503, "No chat model is ready");
+    return json{{"status", "ok"}};
 }
 
 ///@brief Handle the ps request
@@ -1501,6 +1551,86 @@ static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, 
     }
     resolved_effort = std::move(canonical);
     return true;
+}
+
+json RestHandler::prompt_diagnostic(std::string_view path, const json& request) {
+    using flm::error_model::make_error;
+    if (!request.is_object()) return make_error(400, "Expected a JSON object");
+    const bool has_model = has_value(request, "model");
+    if (has_model && !request.at("model").is_string())
+        return make_error(400, "Expected a model ID", "model");
+    std::shared_ptr<DiagnosticFrontend> host;
+    std::string tag;
+    {
+        std::lock_guard lock(model_info_mutex);
+        host = diagnostic_frontend;
+        tag = current_model_tag;
+    }
+    if (has_model) {
+        const auto& name = request.at("model").get_ref<const std::string&>();
+        const auto canonical = supported_models.rectify_model_tag(name);
+        if (!supported_models.is_model_supported(canonical)) return UnknownModelResponse(name);
+        if (canonical != tag) return make_error(409, "The requested model is not resident", "model");
+    }
+    if (tag == "model-faker") return make_error(503, "No chat model is ready");
+    if (!host) return make_error(501, "Prompt diagnostics are not supported for this frontend", "model");
+    std::lock_guard lock(host->mutex);
+    if (path != "/apply-template") return flm::prompt_tokens(path, request, *host->tokenizer);
+
+    for (const auto& item : request.items()) {
+        const auto& key = item.key();
+        if (key != "model" && key != "messages" && key != "tools" && key != "tool_choice" &&
+            key != "think" && key != "reasoning_effort" && key != "continue_final_message")
+            return make_error(400, "Unsupported template-preview option", key);
+    }
+    auto msgs = request.find("messages");
+    if (msgs == request.end() || !msgs->is_array() || msgs->empty())
+        return make_error(400, "Expected a nonempty array of messages", "messages");
+    for (const auto& message : *msgs) {
+        if (!message.is_object() || !message.contains("role") || !message.at("role").is_string())
+            return make_error(400, "Expected a chat message with a role", "messages");
+        if (has_value(message, "images") || has_value(message, "audios"))
+            return make_error(400, "Only text content can be previewed", "messages");
+        const auto content = message.find("content");
+        if (content == message.end() || content->is_string() || content->is_null()) continue;
+        if (!content->is_array()) return make_error(400, "Expected text content", "messages");
+        for (const auto& part : *content) {
+            if (!part.is_object() || !part.contains("type") || part.at("type") != "text" ||
+                !part.contains("text") || !part.at("text").is_string())
+                return make_error(400, "Only text content can be previewed", "messages");
+        }
+    }
+    auto tools = value_or(request, "tools", json::array());
+    if (!tools.is_array()) return make_error(400, "Expected a tools array", "tools");
+    std::string error;
+    chat_constraint_request constraint;
+    if (!chat_constraint_request_from_openai(request, tools, constraint, error))
+        return make_error(400, error, "tool_choice");
+    if (constraint.tool_choice == chat_tool_choice::NONE) tools.clear();
+    if (!tools.empty() && !host->renderer->tools_enabled())
+        return make_error(400, "This model does not render tool definitions", "tools");
+    bool continued = false;
+    if (!continue_request_from_openai(request, *msgs, constraint, continued, error))
+        return make_error(400, error, "continue_final_message");
+    std::optional<std::string> effort;
+    if (!resolve_chat_reasoning_effort(request, false, false, false, effort, error))
+        return make_error(400, error, "reasoning_effort");
+    if (has_value(request, "think") && !request.at("think").is_boolean())
+        return make_error(400, "Expected a boolean", "think");
+    auto& renderer = *host->renderer;
+    if (continued && (renderer.single_turn || !renderer.supports_continue_final_message()))
+        return make_error(400, "This model cannot continue the final message", "continue_final_message");
+    renderer.configure_parameter("enable_think", value_or(request, "think", host->default_think));
+    if (effort) renderer.configure_parameter("reasoning_effort", *effort);
+    try {
+        auto messages = normalize_template(flm::chat::normalize_messages(*msgs, renderer.message_roles()));
+        if (messages.empty()) return make_error(400, "No nonempty messages", "messages");
+        if (continued && !(error = continue_final_message_error(messages)).empty())
+            return make_error(400, error, "continue_final_message");
+        return json{{"prompt", renderer.apply_chat_template(messages, tools, continued)}};
+    } catch (const flm::chat::message_error& e) {
+        return make_error(400, e.what(), "messages");
+    }
 }
 
 void RestHandler::handle_openai_responses(const json& request,

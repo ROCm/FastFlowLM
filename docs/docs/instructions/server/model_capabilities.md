@@ -15,6 +15,33 @@ A client that lets you add your own endpoint (VS Code's custom endpoint, the pi 
 
 ## What the listing returns
 
+The default list includes catalog entries even if their weights are not installed.
+Each entry's `installed` flag says whether the package is locally ready, not whether
+it is loaded or will fit on a device. Use `GET /v1/models?installed=true` to filter
+the list, or `GET /v1/models/{id}` for one catalog entry. Neither request loads a model.
+
+### Check readiness and inspect a prompt
+
+`GET /health` returns `200 {"status":"ok"}` while a chat model is ready, even if it
+is generating. A listening server without a ready chat model returns 503.
+
+On the built-in Qwen3 frontend (for example, `qwen3:4b`), send these POST requests to
+the same server **without** a `/v1` prefix:
+
+| Path | Example request | Response |
+|---|---|---|
+| `/apply-template` | `{"messages":[{"role":"user","content":"Hello"}],"think":false}` | `{"prompt":"..."}`: the text formatted for the model, before tokenization or any cache trimming. Accepts text messages, `tools`, `tool_choice`, `think`, `reasoning_effort`, and `continue_final_message`. |
+| `/tokenize` | `{"content":"Hello","with_pieces":true}` | `{"tokens":[...]}`: IDs by default, or `{id,piece}` records. A piece split inside a UTF-8 character is a byte array. |
+| `/detokenize` | `{"tokens":[9707]}` | `{"content":"..."}` decoded from the whole sequence. IDs depend on the tokenizer. |
+
+Use the `prompt` string as `/tokenize`'s `content` to inspect the logical input IDs.
+This is not a count of tokens the accelerator must recompute. All three routes can take
+an explicit `model`. They inspect the resident model only: an unknown ID returns 404,
+a known nonresident ID returns 409, and a frontend without diagnostics returns 501.
+Media and unsupported template options return 400. The tokenizer uses `add_special=false`
+and `parse_special=true`; other settings are rejected. Each encode or decode accepts at
+most 65,536 token IDs. These requests neither generate a reply nor change conversation state.
+
 ```bash
 curl http://127.0.0.1:52625/v1/models
 ```
@@ -27,6 +54,7 @@ Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and t
   "object": "model",
   "created": 1795270650,
   "owned_by": "FastFlowLM",
+  "installed": true,
   "backend": "flm",
   "device": "npu",
   "capabilities": ["completion", "tools", "vision", "thinking"],
@@ -41,6 +69,7 @@ Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and t
 
 | Field | Meaning |
 |---|---|
+| `installed` | The package and any required base are present and compatible on this machine. This does not mean the model is in memory. |
 | `capabilities` | What the model is for. `completion` comes first for every chat model. The other words: `tools` (the model is shown the tools a request offers), `vision` (takes images), `audio` (takes audio), `thinking` (can reason before it answers), `embedding`. |
 | `context_length` | The context, in tokens, that the server asks for when it loads this model: the value of `--ctx-len` when the server was started with it, otherwise the model's default. A single-turn model (a dedicated translation model, for example) always keeps its own. Present for chat models. |
 | `architecture.input_modalities` | `text`, plus `image` and `audio` when the model takes them. A transcription-only model lists `audio` alone and has no `completion`. |

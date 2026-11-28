@@ -30,7 +30,7 @@ Tokenizer::Tokenizer(const std::string& model_path) {
         #else
         std::cerr << "Cannot open " << model_path + "/tokenizer.json" << std::endl;
         #endif
-        exit(1);
+        throw std::runtime_error("Could not open tokenizer.json");
     }
     std::string data;
     fs.seekg(0, std::ios::end);

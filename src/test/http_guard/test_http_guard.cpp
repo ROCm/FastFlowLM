@@ -46,6 +46,10 @@ void test_route_path() {
     CHECK(route_path("/") == "/");
     CHECK(route_path("") == "/");
     CHECK(route_path("/?x") == "/");
+    CHECK(model_detail_id("/v1/models/qwen3%3A4b") == "qwen3:4b");
+    CHECK(model_detail_id("/v1/models/qwen3:4b") == "qwen3:4b");
+    CHECK(model_detail_id("/v1/models/a/b").empty());
+    CHECK(model_detail_id("/v1/models/").empty());
 }
 
 /// Every POST route whose handler runs the model must be in requires_npu_access, so it takes the
@@ -61,11 +65,11 @@ void test_engine_routes_take_npu_queue() {
     const std::set<std::string> engine = {"handle_generate", "handle_chat", "handle_embeddings",
         "handle_openai_chat_completion", "handle_openai_responses", "handle_openai_completion", "handle_openai_audio_transcriptions",
         "handle_systemone"};
-    const std::set<std::string> no_engine = {"handle_show", "handle_ps", "handle_models", "handle_models_openai",
+    const std::set<std::string> no_engine = {"handle_show", "handle_ps", "handle_models", "model_inventory", "health", "prompt_diagnostic",
         "handle_version", "handle_pull", "handle_systemone_models"};
 
     const std::regex reg(R"re(register_handler\(\s*"(GET|POST)"\s*,\s*("([^"]+)"|path))re");
-    const std::regex call(R"(rest_handler->(handle_\w+))");
+    const std::regex call(R"(rest_handler->(\w+)\()");
     const std::regex for_paths(R"re(for\s*\(\s*const\s+char\s*\*\s*path\s*:\s*\{([^}]*)\})re");
     const std::regex literal(R"re("([^"]+)")re");
 
@@ -103,6 +107,8 @@ void test_engine_routes_take_npu_queue() {
                 ++engine_routes;
                 if (!requires_npu_access(method, path)) std::printf("  %s %s calls %s but skips the NPU queue\n", method.c_str(), path.c_str(), handler.c_str());
                 CHECK(requires_npu_access(method, path));
+            } else if (no_engine.count(handler)) {
+                CHECK(!requires_npu_access(method, path));
             }
         }
     }

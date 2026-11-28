@@ -38,6 +38,24 @@ inline std::string route_path(std::string_view target) {
     return path;
 }
 
+/// Return the one catalog tag following /v1/models/. SDKs can escape the colon in a tag.
+inline std::string model_detail_id(std::string_view path) {
+    constexpr std::string_view prefix = "/v1/models/";
+    if (!path.starts_with(prefix)) return {};
+    path.remove_prefix(prefix.size());
+    if (path.find('/') != path.npos) return {};
+    std::string id;
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (path.substr(i, 3) == "%3A" || path.substr(i, 3) == "%3a") {
+            id += ':';
+            i += 2;
+        } else {
+            id += path[i];
+        }
+    }
+    return id;
+}
+
 /// Routes that run the model and so must take the NPU lock or queue. Every POST route whose
 /// handler reaches the engine belongs here; src/test/http_guard checks server.cpp against it.
 inline bool requires_npu_access(const std::string& method, const std::string& path) {

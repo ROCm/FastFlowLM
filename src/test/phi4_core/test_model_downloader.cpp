@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <set>
 #include <sstream>
 #include <string>
@@ -529,6 +530,8 @@ void TestPreferredSourceResolvesByWhatIsOnDisk() {
 
     fixture.models.choose_source(kPreferredTag, false);
     TEST_REQUIRE(fixture.resolved_files() == kBaseFiles);
+    // An independent inventory reader must still describe the files on disk.
+    TEST_REQUIRE(std::async(std::launch::async, [&] { return fixture.resolved_files(); }).get() == kPreferredFiles);
     fixture.models.choose_source("pref-model", std::nullopt);
     TEST_REQUIRE(fixture.resolved_files() == kPreferredFiles);
 }
@@ -659,6 +662,20 @@ struct BaseModelFixture {
         Write(dep_path() / "draft.bin", "draft-weights");
     }
 };
+
+void TestInvalidPackageVersionIsNotInstalled() {
+    BaseModelFixture fixture("invalid-package-version");
+    ModelDownloader downloader(fixture.models);
+    for (const char* version : {"", "1.2", "not-a-version"}) {
+        fixture.InstallBase(version);
+        TEST_REQUIRE(downloader.is_model_downloaded(kBaseTag, true, true) ==
+                     ModelDownloader::ModelStatus::Outdated);
+    }
+    TEST_REQUIRE(downloader.pull_model(kBaseTag));
+    TEST_REQUIRE(downloader.is_model_downloaded(kBaseTag, true, true) == ModelDownloader::ModelStatus::Ready);
+    fixture.InstallBase("99999999999999.0.0");
+    TEST_REQUIRE(downloader.is_model_downloaded(kBaseTag, true, true) == ModelDownloader::ModelStatus::Incompatible);
+}
 
 /// \brief run f with std::cout captured
 template <typename F>
@@ -1106,6 +1123,7 @@ int main() {
     RunTest(TestPullAbortsWhenBaseCannotBePulled, "pull aborts without base");
     RunTest(TestStatusNeedsBothPackages, "status needs both packages");
     RunTest(TestCheckReportsAnIncompleteBase, "check reports incomplete base");
+    RunTest(TestInvalidPackageVersionIsNotInstalled, "invalid package version is not installed");
     RunTest(TestRemovingBaseWarnsAndRemovingDependantKeepsBase, "rm semantics");
     RunTest(TestRemovingAModelRemovesTheFoldersOfItsFiles, "rm removes the folders of its files");
     RunTest(TestOnlyFoldersInsideTheModelDirectoryAreRemoved, "rm stays inside the model directory");

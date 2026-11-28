@@ -5,6 +5,8 @@
 /// \version 0.9.24
 /// \note This class is used to manage the model list.
 #pragma once
+#include <mutex>
+#include <thread>
 #include "AutoModel/backend_contract.hpp"
 #include "AutoModel/context_length.hpp"
 #include "AutoModel/model_catalog_overlay.hpp"
@@ -562,7 +564,8 @@ class model_list {
         ///       pull the files on disk are what say which source was pulled.
         void choose_source(const std::string& tag, std::optional<bool> preferred) {
             const std::string new_tag = this->rectify_model_tag(tag);
-            if (preferred) this->source_choice_[new_tag] = *preferred;
+            std::lock_guard lock(source_choice_mutex_);
+            if (preferred) this->source_choice_[new_tag] = {std::this_thread::get_id(), *preferred};
             else this->source_choice_.erase(new_tag);
         }
 
@@ -581,7 +584,16 @@ class model_list {
         std::string model_root_path;
         std::string platform_;
         /// \brief the source a pull has settled on, by tag
-        std::map<std::string, bool> source_choice_;
+        std::map<std::string, std::pair<std::thread::id, bool>> source_choice_;
+        // Discovery runs outside the accelerator queue while a pull may pin a source.
+        inline static std::mutex source_choice_mutex_;
+        std::optional<bool> source_choice(const std::string& tag) const {
+            std::lock_guard lock(source_choice_mutex_);
+            const auto it = source_choice_.find(tag);
+            // A pull uses its selected source; a simultaneous inventory read describes the files on disk.
+            if (it == source_choice_.end() || it->second.first != std::this_thread::get_id()) return std::nullopt;
+            return it->second.second;
+        }
         /// \brief the backend ids this build links
         /// \note Spelled as plain strings rather than reached through
         ///       flm::backend: AutoModel/model_backend.hpp pulls in causal_lm
@@ -721,9 +733,8 @@ class model_list {
             entry.erase(preferred);
 
             bool use_preferred;
-            if (const auto chosen = this->source_choice_.find(tag);
-                chosen != this->source_choice_.end()) {
-                use_preferred = chosen->second;
+            if (const auto chosen = source_choice(tag)) {
+                use_preferred = *chosen;
             } else {
                 const auto own = files_only_in(overlay, entry);
                 const auto root = std::filesystem::path(this->model_root_path) /
