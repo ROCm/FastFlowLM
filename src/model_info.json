@@ -3799,8 +3799,8 @@
         {
             "type": "file",
             "path": "tokenizer.json",
-            "size": 32169626,
-            "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+            "size": 32155733,
+            "sha256": "ab26b2add729e6f645bd869f228f14190a06615538f3be6f7786f33d13d78ad2"
         },
         {
             "type": "file",
@@ -3831,8 +3831,8 @@
         {
             "type": "file",
             "path": "tokenizer.json",
-            "size": 32169626,
-            "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+            "size": 32156428,
+            "sha256": "91d9cf86906f78e197021fda88214d448e5c120665d0243a8e776e046986c6bc"
         },
         {
             "type": "file",
