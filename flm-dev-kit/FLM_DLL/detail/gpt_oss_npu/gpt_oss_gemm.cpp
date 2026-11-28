@@ -88,12 +88,19 @@ void GPT_OSS_Gemm::generate_seq(npu_sequence *seq, uint32_t M, uint32_t K, uint3
         valid_A_MT_shimtile_index, seq, shim_tiles
     );
 
-    int max_C_remain =  0;
-    for( auto li: list_C_shim_queue){
-        max_C_remain = std::max(max_C_remain, li);
+    // Drain every queue, not just C. Each task pushed above issues a completion token, and a token
+    // that is never waited on stays with the shim DMA after the command ends. With one column block
+    // and one M block (k_proj/v_proj at L = 256) B ends with 2 in flight while C has 1, so a C-bounded
+    // loop left one MM2S channel-1 token per shim per run; after ~255 such runs the next k/v command
+    // timed out (#1172).
+    int max_remain = 0;
+    for (size_t shim_index = 0; shim_index < total_cols; shim_index++) {
+        max_remain = std::max(max_remain, list_A_shim_queue.at(shim_index));
+        max_remain = std::max(max_remain, list_B_shim_queue.at(shim_index));
+        max_remain = std::max(max_remain, list_C_shim_queue.at(shim_index));
     }
 
-    for(size_t k = 0; k< max_C_remain; k++){
+    for(size_t k = 0; k< max_remain; k++){
         for(size_t shim_index = 0; shim_index < total_cols; shim_index++){
 
             if(list_A_shim_queue.at(shim_index) > 0){
