@@ -174,6 +174,9 @@ extern "C" {
         // serial VADD tree, where the triangular form keeps only the 6 that can
         // land above the fp32 mantissa floor, through a MAC chain.
         const bf16_limb::limbs3<vec_len> alpha_l = bf16_limb::split_f32_3(alpha_vec);
+        // S_out_chunk is a single buffer: the core DMA still sends the previous head's state from it until it
+        // releases this lock, so take it before the loop below writes the new state
+        _lock_acquire(CT_S_O_out_prod_lock,1);
         AIE_PREPARE_FOR_PIPELINING
         AIE_LOOP_RANGE(dK, dK)
         for(int col = 0; col < dK; col++ ){
@@ -199,8 +202,6 @@ extern "C" {
         _lock_release(CT_V_prod_lock, 1);
         _lock_release(CT_Q_prod_lock, 1);
         _lock_release(CT_S_IN_prod_lock, 1);
-
-        _lock_acquire(CT_S_O_out_prod_lock,1);
 
         // store o buffer; o = S_t @ Q was accumulated in the loop above
         AIE_PREPARE_FOR_PIPELINING
