@@ -14,6 +14,7 @@
 Qwen3::Qwen3(flm_rt::device* npu_device_inst) : AutoModel(npu_device_inst, "Qwen3") {}
 
 std::unique_ptr<AutoModel> Qwen3::make_prompt_renderer() const {
+    if (!chat_tmpl) return {};
     auto host = std::make_unique<Qwen3>(nullptr);
     host->chat_tmpl = std::make_unique<minja::chat_template>(
         chat_tmpl->source(), chat_tmpl->bos_token(), chat_tmpl->eos_token());

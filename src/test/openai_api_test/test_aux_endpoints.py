@@ -20,6 +20,8 @@ def discovery(api: Api):
     installed = get("/v1/models?installed=true")["data"]
     expect([r["id"] for r in installed] == [r["id"] for r in catalog if r["installed"]],
            "filter and item flags disagree")
+    status, _, body = call(api, "GET", "/v1/models?installed=maybe")
+    expect(status == 400 and body["error"]["param"] == "installed", str(body))
     row = catalog[0]
     detail = get("/v1/models/" + quote(row["id"], safe=""))
     expect({k: v for k, v in detail.items() if k != "created"} ==
@@ -45,6 +47,9 @@ def resident_prompt(api: Api):
 
     prompt = post("/apply-template", messages=[{"role": "user", "content": "Hello 世界!"}])["prompt"]
     expect("Hello 世界!" in prompt, prompt)
+    nulls = post("/apply-template", messages=[{"role": "user", "content": "Hello 世界!"}],
+                 tools=None, think=None, model=None)["prompt"]
+    expect(nulls == prompt, "null options changed the prompt")
     if api.model == "qwen3:4b":
         messages = [{"role": "developer", "content": "Be brief."}, {"role": "user", "content": "Hello"}]
         tool = {"type": "function", "function": {"name": "diagnostic_lookup",
@@ -55,10 +60,18 @@ def resident_prompt(api: Api):
         expect("Be brief." in shown, "lost developer instruction")
     text = "Hello 世界! 🤗"
     tokens = post("/tokenize", content=text)["tokens"]
+    expect(post("/tokenize", content=text, with_pieces=None, parse_special=None,
+                add_special=None)["tokens"] == tokens, "null flags changed token IDs")
     pieces = post("/tokenize", content=text, with_pieces=True)["tokens"]
     expect(tokens and [p["id"] for p in pieces] == tokens, str(pieces))
     expect(post("/detokenize", tokens=tokens)["content"] == text, str(tokens))
+    for fields, param in (({"tool_choice": "bad", "messages": [{"role": "user", "content": "hi"}]}, "tool_choice"),
+                          ({"messages": [{"role": "user", "content": [{"type": 123, "text": "hi"}]}]}, "messages"),
+                          ({"messages": [{"role": "user", "content": "hi", "images": ["unused"]}]}, "messages")):
+        status, _, body = call(api, "POST", "/apply-template", fields)
+        expect(status == 400 and body["error"]["param"] == param, str(body))
     for path, fields in (("/tokenize", {"parse_special": False, "content": "hello"}),
+                         ("/tokenize", {"add_special": True, "content": "hello"}),
                          ("/detokenize", {"tokens": [-1]}),
                          ("/apply-template", {"messages": [{"role": "user", "content":
                              [{"type": "image_url", "image_url": {"url": "unused"}}]}]})):

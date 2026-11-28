@@ -54,6 +54,7 @@ Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and t
   "object": "model",
   "created": 1795270650,
   "owned_by": "FastFlowLM",
+  "installed": true,
   "backend": "flm",
   "device": "npu",
   "capabilities": ["completion", "tools", "vision", "thinking"],
@@ -68,6 +69,7 @@ Each entry keeps the OpenAI fields (`id`, `object`, `created`, `owned_by`) and t
 
 | Field | Meaning |
 |---|---|
+| `installed` | The package and any required base are present and compatible on this machine. This does not mean the model is in memory. |
 | `capabilities` | What the model is for. `completion` comes first for every chat model. The other words: `tools` (the model is shown the tools a request offers), `vision` (takes images), `audio` (takes audio), `thinking` (can reason before it answers), `embedding`. |
 | `context_length` | The context, in tokens, that the server asks for when it loads this model: the value of `--ctx-len` when the server was started with it, otherwise the model's default. A single-turn model (a dedicated translation model, for example) always keeps its own. Present for chat models. |
 | `architecture.input_modalities` | `text`, plus `image` and `audio` when the model takes them. A transcription-only model lists `audio` alone and has no `completion`. |

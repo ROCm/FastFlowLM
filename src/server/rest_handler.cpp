@@ -1556,8 +1556,8 @@ static bool resolve_chat_reasoning_effort(const json& request, bool is_inkling, 
 json RestHandler::prompt_diagnostic(std::string_view path, const json& request) {
     using flm::error_model::make_error;
     if (!request.is_object()) return make_error(400, "Expected a JSON object");
-    const auto explicit_tag = request.find("model");
-    if (explicit_tag != request.end() && !explicit_tag->is_string())
+    const bool has_model = has_value(request, "model");
+    if (has_model && !request.at("model").is_string())
         return make_error(400, "Expected a model ID", "model");
     std::shared_ptr<DiagnosticFrontend> host;
     std::string tag;
@@ -1566,13 +1566,11 @@ json RestHandler::prompt_diagnostic(std::string_view path, const json& request) 
         host = diagnostic_frontend;
         tag = current_model_tag;
     }
-    if (explicit_tag != request.end()) {
-        const auto& name = explicit_tag->get_ref<const std::string&>();
+    if (has_model) {
+        const auto& name = request.at("model").get_ref<const std::string&>();
         const auto canonical = supported_models.rectify_model_tag(name);
-        if (canonical != tag) {
-            if (!supported_models.is_model_supported(canonical)) return UnknownModelResponse(name);
-            return make_error(409, "The requested model is not resident", "model");
-        }
+        if (!supported_models.is_model_supported(canonical)) return UnknownModelResponse(name);
+        if (canonical != tag) return make_error(409, "The requested model is not resident", "model");
     }
     if (tag == "model-faker") return make_error(503, "No chat model is ready");
     if (!host) return make_error(501, "Prompt diagnostics are not supported for this frontend", "model");
@@ -1591,21 +1589,23 @@ json RestHandler::prompt_diagnostic(std::string_view path, const json& request) 
     for (const auto& message : *msgs) {
         if (!message.is_object() || !message.contains("role") || !message.at("role").is_string())
             return make_error(400, "Expected a chat message with a role", "messages");
+        if (has_value(message, "images") || has_value(message, "audios"))
+            return make_error(400, "Only text content can be previewed", "messages");
         const auto content = message.find("content");
         if (content == message.end() || content->is_string() || content->is_null()) continue;
         if (!content->is_array()) return make_error(400, "Expected text content", "messages");
         for (const auto& part : *content) {
-            if (!part.is_object() || part.value("type", "") != "text" ||
+            if (!part.is_object() || !part.contains("type") || part.at("type") != "text" ||
                 !part.contains("text") || !part.at("text").is_string())
                 return make_error(400, "Only text content can be previewed", "messages");
         }
     }
-    auto tools = request.value("tools", json::array());
+    auto tools = value_or(request, "tools", json::array());
     if (!tools.is_array()) return make_error(400, "Expected a tools array", "tools");
     std::string error;
     chat_constraint_request constraint;
     if (!chat_constraint_request_from_openai(request, tools, constraint, error))
-        return make_error(400, error, "tools");
+        return make_error(400, error, "tool_choice");
     if (constraint.tool_choice == chat_tool_choice::NONE) tools.clear();
     if (!tools.empty() && !host->renderer->tools_enabled())
         return make_error(400, "This model does not render tool definitions", "tools");
@@ -1615,10 +1615,12 @@ json RestHandler::prompt_diagnostic(std::string_view path, const json& request) 
     std::optional<std::string> effort;
     if (!resolve_chat_reasoning_effort(request, false, false, false, effort, error))
         return make_error(400, error, "reasoning_effort");
-    if (request.contains("think") && !request.at("think").is_boolean())
+    if (has_value(request, "think") && !request.at("think").is_boolean())
         return make_error(400, "Expected a boolean", "think");
     auto& renderer = *host->renderer;
-    renderer.configure_parameter("enable_think", request.value("think", host->default_think));
+    if (continued && (renderer.single_turn || !renderer.supports_continue_final_message()))
+        return make_error(400, "This model cannot continue the final message", "continue_final_message");
+    renderer.configure_parameter("enable_think", value_or(request, "think", host->default_think));
     if (effort) renderer.configure_parameter("reasoning_effort", *effort);
     try {
         auto messages = normalize_template(flm::chat::normalize_messages(*msgs, renderer.message_roles()));

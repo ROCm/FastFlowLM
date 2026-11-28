@@ -37,12 +37,16 @@ inline nlohmann::ordered_json prompt_tokens(std::string_view path, const nlohman
     if (!req.contains("content") || !req.at("content").is_string())
         return error_model::make_error(400, "Expected text in content", "content");
     for (const char* key : {"with_pieces", "add_special", "parse_special"}) {
-        if (req.contains(key) && !req.at(key).is_boolean())
+        if (req.contains(key) && !req.at(key).is_null() && !req.at(key).is_boolean())
             return error_model::make_error(400, "Expected a boolean", key);
     }
-    if (req.value("add_special", false))
+    const auto flag = [&](const char* key, bool fallback) {
+        const auto it = req.find(key);
+        return it == req.end() || it->is_null() ? fallback : it->get<bool>();
+    };
+    if (flag("add_special", false))
         return error_model::make_error(400, "Adding special tokens is not supported", "add_special");
-    if (!req.value("parse_special", true))
+    if (!flag("parse_special", true))
         return error_model::make_error(400, "Disabling special-token parsing is not supported", "parse_special");
     const auto& text = req.at("content").get_ref<const std::string&>();
     if (text.size() > 1024 * 1024)
@@ -50,7 +54,7 @@ inline nlohmann::ordered_json prompt_tokens(std::string_view path, const nlohman
     const auto ids = tokenizer.encode(text);
     if (ids.size() > max_ids)
         return error_model::make_error(400, "Text exceeds the 65536-token diagnostic limit", "content");
-    if (!req.value("with_pieces", false)) return json{{"tokens", ids}};
+    if (!flag("with_pieces", false)) return json{{"tokens", ids}};
     auto pieces = json::array();
     for (auto id : ids) {
         std::string bytes;
