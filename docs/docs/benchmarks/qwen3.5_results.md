@@ -11,7 +11,7 @@ This section reports the performance of Qwen 3.5 on NPU with FastFlowLM (FLM).
 
 > **Note:** 
 > - Results are based on FastFlowLM v0.9.38.  
-> - Qwen3.5-4B prefill and image input are faster from v1.0.15: see [Test System 2](#test-system-2-qwen35-4b-from-v1015) below.  
+> - Qwen3.5-4B prefill, decoding and image input are faster from v1.0.15: see [Test System 2](#test-system-2-qwen35-4b-from-v1015) below.  
 > - Under FLM's default NPU power mode (Performance)    
 > - Newer versions may deliver improved performance.
 > - Fine-tuned models show performance comparable to their base models.   
@@ -81,7 +81,15 @@ Prefill time-to-first-token (TTFT) for Qwen3.5-4B on NPU (FastFlowLM) with diffe
 
 AMD Ryzen™ AI MAX+ PRO 395 (Strix Halo) with 128 GB DRAM, Linux, FLM's default NPU power mode (Performance). Before is the build just before these changes (same as v1.0.14 for this model); both columns were measured on this machine, the same day, in the same way.
 
-From v1.0.15, Qwen3.5-4B runs its prefill matrix multiplications on the bfp16 NPU kernel (up/gate and GLU in one dispatch), the gated delta rule in chunks, and the short convolution, delta rule and attention inside the matrix-multiplication hardware context (control-packet switches instead of context switches). The vision tower runs its attention and patch embedding the same way.
+From v1.0.15, Qwen3.5-4B runs its prefill matrix multiplications on the bfp16 NPU kernel (up/gate and GLU in one dispatch), the gated delta rule in chunks, and the short convolution, delta rule and attention inside the matrix-multiplication hardware context (control-packet switches instead of context switches). The vision tower runs its attention and patch embedding the same way. Decoding uses a 4-bit (q4_k) output projection (about half the bytes of the 8-bit one), runs it inside the decoder layers' hardware context, and overlaps the layer weight transfers.
+
+**Decoding Speed (TPS, starting @ different context lengths)**
+
+| **Qwen3.5-4B** | **1k** | **2k** | **4k** | **8k** | **16k** | **32k** |
+|----------------|--------:|--------:|--------:|--------:|---------:|---------:|
+| Before (v1.0.14) | 15.05 | 14.76 | 14.25 | 13.30 | 11.75 | 9.53 |
+| v1.0.15 | 18.78 | 18.34 | 17.56 | 16.13 | 13.89 | 10.88 |
+| Speed-up | 1.25× | 1.24× | 1.23× | 1.21× | 1.18× | 1.14× |
 
 **Prefill Speed (TPS, with different prompt lengths)**
 
@@ -101,6 +109,6 @@ A 1k-token prompt now answers in 0.88 s instead of 1.82 s.
 | v1.0.15 | 2.1 | 4.8 | 9.6 | 30.7 |
 | Speed-up | 1.55× | 1.43× | 1.33× | 1.21× |
 
-> - Prefill: `flm bench qwen3.5:4b -c 32768`, mean of 3 runs.
+> - Decoding and prefill: `flm bench qwen3.5:4b -c 32768`, mean of 3 runs.
 > - Images: one photo cropped to 16:9 and scaled to each resolution (JPEG), the prompt “Describe this image.”, `flm serve -r 0` (no pre-resize), prefix cache off; streamed time to the first token, median of 5 runs after a warm-up.
-> - The answers do not change beyond quantization noise (top-100 KL divergence against the previous build: mean 0.007).
+> - The answers do not change beyond quantization noise (top-100 KL divergence against v1.0.14: mean 0.008).
