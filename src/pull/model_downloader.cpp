@@ -7,6 +7,10 @@
 #include "model_downloader.hpp"
 #include "utils/utils.hpp"
 #include "download_model.hpp"
+#include <array>
+#include <charconv>
+#include <optional>
+#include <string_view>
 #include <sstream>
 #include <iomanip>
 #include <fstream>
@@ -286,24 +290,31 @@ ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const st
             ? std::string("0.0.0")
             : version->get<std::string>();
     }
-    int l_l, m_l, r_l; //left, middle, right on local version
-    int l_r, m_r, r_r; //left, middle, right on requried version
-    int l_f, m_f, r_f; //left, middle, right on flm version
-    sscanf(__FLM_VERSION__, "%d.%d.%d", &l_f, &m_f, &r_f);
-    sscanf(flm_version.c_str(), "%d.%d.%d", &l_l, &m_l, &r_l);
-    sscanf(flm_min_version.c_str(), "%d.%d.%d", &l_r, &m_r, &r_r);
-    uint32_t local_version_u32 = l_l * 1000000 + m_l * 1000 + r_l;
-    uint32_t required_version_u32 = l_r * 1000000 + m_r * 1000 + r_r;
-    uint32_t flm_version_u32 = l_f * 1000000 + m_f * 1000 + r_f;
-
-    if (local_version_u32 > flm_version_u32) {
+    // An incomplete local config can be observed during a pull. Do not compare
+    // uninitialized components or overflow when checking such an installation.
+    const auto triplet = [](std::string_view s) -> std::optional<std::array<unsigned, 3>> {
+        std::array<unsigned, 3> parts{};
+        for (size_t i = 0; i < parts.size(); ++i) {
+            const auto [end, error] = std::from_chars(s.data(), s.data() + s.size(), parts[i]);
+            if (error != std::errc{}) return std::nullopt;
+            s.remove_prefix(static_cast<size_t>(end - s.data()));
+            if (i + 1 < parts.size()) {
+                if (s.empty() || s.front() != '.') return std::nullopt;
+                s.remove_prefix(1);
+            }
+        }
+        return parts;
+    };
+    const auto local = triplet(flm_version), required = triplet(flm_min_version), runtime = triplet(__FLM_VERSION__);
+    if (!local || !required || !runtime) return ModelStatus::Incompatible;
+    if (*local > *runtime) {
         if (!sub_process_mode) {
             header_print("WARNING", "Local model " + model_tag + " version: " + flm_version + " > " + __FLM_VERSION__);
             header_print("WARNING", "Please update FLM to the latest version.");
         }
         return ModelStatus::Incompatible;
     }
-    if (local_version_u32 < required_version_u32) {
+    if (*local < *required) {
         if (!sub_process_mode) {
             header_print("WARNING", "Local model " + model_tag + " version: " + flm_version + " < " + flm_min_version);
             // header_print("FLM", "Re-pulling latest model...");

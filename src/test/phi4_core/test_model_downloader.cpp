@@ -660,6 +660,16 @@ struct BaseModelFixture {
     }
 };
 
+void TestInvalidPackageVersionIsNotInstalled() {
+    BaseModelFixture fixture("invalid-package-version");
+    ModelDownloader downloader(fixture.models);
+    for (const char* version : {"", "1.2", "not-a-version", "99999999999999.0.0"}) {
+        fixture.InstallBase(version);
+        TEST_REQUIRE(downloader.is_model_downloaded(kBaseTag, true, true) ==
+                     ModelDownloader::ModelStatus::Incompatible);
+    }
+}
+
 /// \brief run f with std::cout captured
 template <typename F>
 std::string Captured(F&& f) {
@@ -1106,6 +1116,7 @@ int main() {
     RunTest(TestPullAbortsWhenBaseCannotBePulled, "pull aborts without base");
     RunTest(TestStatusNeedsBothPackages, "status needs both packages");
     RunTest(TestCheckReportsAnIncompleteBase, "check reports incomplete base");
+    RunTest(TestInvalidPackageVersionIsNotInstalled, "invalid package version is not installed");
     RunTest(TestRemovingBaseWarnsAndRemovingDependantKeepsBase, "rm semantics");
     RunTest(TestRemovingAModelRemovesTheFoldersOfItsFiles, "rm removes the folders of its files");
     RunTest(TestOnlyFoldersInsideTheModelDirectoryAreRemoved, "rm stays inside the model directory");

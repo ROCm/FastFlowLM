@@ -24,6 +24,9 @@ def discovery(api: Api):
     detail = get("/v1/models/" + quote(row["id"], safe=""))
     expect({k: v for k, v in detail.items() if k != "created"} ==
            {k: v for k, v in row.items() if k != "created"}, "detail differs from list")
+    family = row["id"].split(":", 1)[0]
+    expect(get("/v1/models/" + quote(family, safe=""))["id"].startswith(family + ":"),
+           "family alias does not resolve to a catalog ID")
     status, _, body = call(api, "GET", "/v1/models/no-such-wp11-model")
     expect(status == 404 and body["error"]["param"] == "model", str(body))
 

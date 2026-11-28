@@ -1331,12 +1331,10 @@ void RestHandler::handle_version(const json& request,
     send_response(response);
 }
 
-///@brief Handle the models request (open ai)
-///@param request the request
-///@param send_response the send response
-///@param send_streaming_response the send streaming response
+/// Catalog metadata does not require a live engine or a model download.
 json RestHandler::model_inventory(std::string_view target) {
-    const auto id = flm::http_guard::model_detail_id(flm::http_guard::route_path(target));
+    const auto raw_id = flm::http_guard::model_detail_id(flm::http_guard::route_path(target));
+    const auto id = raw_id.empty() ? raw_id : supported_models.rectify_model_tag(raw_id);
     bool installed_only = false;
     auto q = target.find('?');
     if (q != target.npos) {
@@ -1357,10 +1355,18 @@ json RestHandler::model_inventory(std::string_view target) {
     for (auto& row : rows) {
         const auto& tag = row.at("id").get_ref<const std::string&>();
         if (!id.empty() && id != tag) continue;
-        row["installed"] = downloader.is_model_downloaded(tag, false, true) == ModelDownloader::ModelStatus::Ready;
+        bool installed = false;
+        try {
+            installed = downloader.is_model_downloaded(tag, true, true) == ModelDownloader::ModelStatus::Ready;
+        } catch (const nlohmann::json::exception&) {
+            // A partial or malformed package is not usable. Keep the other entries visible.
+        } catch (const std::runtime_error&) {
+            // The package may have disappeared between the presence check and opening its config.
+        }
+        row["installed"] = installed;
         if (!id.empty()) return row;
     }
-    if (!id.empty()) return UnknownModelResponse(id);
+    if (!raw_id.empty()) return UnknownModelResponse(raw_id);
     if (installed_only)
         rows.erase(std::remove_if(rows.begin(), rows.end(), [](const auto& r) {
             return r.at("installed") == false;
@@ -1560,10 +1566,13 @@ json RestHandler::prompt_diagnostic(std::string_view path, const json& request) 
         host = diagnostic_frontend;
         tag = current_model_tag;
     }
-    if (explicit_tag != request.end() && *explicit_tag != tag) {
+    if (explicit_tag != request.end()) {
         const auto& name = explicit_tag->get_ref<const std::string&>();
-        if (!supported_models.is_model_supported(name)) return UnknownModelResponse(name);
-        return make_error(409, "The requested model is not resident", "model");
+        const auto canonical = supported_models.rectify_model_tag(name);
+        if (canonical != tag) {
+            if (!supported_models.is_model_supported(canonical)) return UnknownModelResponse(name);
+            return make_error(409, "The requested model is not resident", "model");
+        }
     }
     if (tag == "model-faker") return make_error(503, "No chat model is ready");
     if (!host) return make_error(501, "Prompt diagnostics are not supported for this frontend", "model");

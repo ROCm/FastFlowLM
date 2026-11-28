@@ -32,7 +32,7 @@ inline nlohmann::ordered_json prompt_tokens(std::string_view path, const nlohman
                 return error_model::make_error(400, "Token ID is outside the vocabulary", "tokens");
             ids.push_back(token.get<int>());
         }
-        return json{{"content", tokenizer.decode(ids)}};
+        return json{{"content", ids.empty() ? std::string() : tokenizer.decode(ids)}};
     }
     if (!req.contains("content") || !req.at("content").is_string())
         return error_model::make_error(400, "Expected text in content", "content");
