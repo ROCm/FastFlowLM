@@ -1,5 +1,6 @@
 # special_token_ids: the BOS id comes from the tokenizer when tokenizer_config.json states another (#1171).
-# Builds FastFlowLM's Tokenizer with tokenizers-cpp (needs cargo and the third_party/tokenizers-cpp submodule). No NPU.
+# Builds FastFlowLM's Tokenizer with tokenizers-cpp (needs cargo and the third_party/tokenizers-cpp submodule). No NPU:
+# the stubs directory shadows the device runtime, as in src/test/ignore_eos.
 #   cmake -S src/test/special_token_ids -B build-special-token-ids && cmake --build build-special-token-ids
 #   ctest --test-dir build-special-token-ids
 cmake_minimum_required(VERSION 3.22)
@@ -15,6 +16,7 @@ add_executable(test_special_token_ids
     test_special_token_ids.cpp
     "${FLM_SOURCE_DIR}/common/tokenizer/tokenizer.cpp")
 target_include_directories(test_special_token_ids PRIVATE
+    "${FLM_SOURCE_DIR}/test/model_frontend/stubs"
     "${FLM_SOURCE_DIR}/include"
     "${FLM_SOURCE_DIR}/../third_party/tokenizers-cpp/include")
 target_link_libraries(test_special_token_ids PRIVATE tokenizers_cpp)
