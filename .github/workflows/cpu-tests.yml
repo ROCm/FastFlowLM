@@ -456,6 +456,55 @@ jobs:
       - name: Check the exact-retry family lists against the catalog
         run: python3 src/test/openai_api_test/check_exact_retry_families.py
 
+  # The Gemma 4 frontend over a stub engine; no NPU. Only test_gemma4_frontend: the other src/test/gemma4_core
+  # tests need a product build.
+  gemma4-frontend-windows:
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            git submodule update --init --depth 1 third_party/xgrammar third_party/tokenizers-cpp &&
+              git -C third_party/xgrammar submodule update --init --depth 1 3rdparty/dlpack && exit 0
+            echo "Submodule fetch failed (attempt ${attempt}), retrying..."
+            sleep 10
+          done
+          exit 1
+      # Restore only, as in oga-hipep-windows.
+      - name: Restore build dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\dev
+          key: windows-deps-${{ hashFiles('.github/script/ci/setup_windows_deps.ps1', '.github/windows-deps/**') }}
+      - name: Set up build dependencies
+        shell: powershell
+        run: .github\script\ci\setup_windows_deps.ps1
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      # No $ErrorActionPreference = "Stop": configure warns on stderr about the targets it skips.
+      - name: Build and run the Gemma 4 frontend test
+        shell: powershell
+        run: |
+          cmake -S src/test/gemma4_core -B build-gemma4-frontend -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBOOST_INCLUDE_DIR=C:\dev\boost_1_88_0 `
+            -DXRT_INCLUDE_DIR=C:\dev\XRT\src\runtime_src\core\include `
+            -DXRT_LIB_DIR=C:\dev\xrtNPUfromDLL
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-gemma4-frontend --target test_gemma4_frontend --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Also matches the _WAS_NOT_BUILT placeholder, so a skipped target fails the job.
+          ctest --test-dir build-gemma4-frontend --output-on-failure --no-tests=error `
+            -R '^test_gemma4_frontend(_WAS_NOT_BUILT)?$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   # The oga-hipep backend (src/common/oga, src/include/oga) against a fake OGA C API: generator reuse and
   # rewind, images, package discovery, runtime install and uninstall; and the Qwen3.5 / GPT-OSS frontends that
   # drive it. Windows only; no GPU, NPU or model (Test Windows HIPEP in build-and-test.yml runs the real one).

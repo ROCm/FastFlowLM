@@ -72,8 +72,15 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/test_gemma4_frontend.cpp")
             _ENABLE_EXTENDED_ALIGNED_STORAGE WIN32_LEAN_AND_MEAN NOMINMAX)
         target_compile_options(test_gemma4_frontend PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/wd4005 /wd4244>)
-        target_link_directories(test_gemma4_frontend PRIVATE "${XRT_INCLUDE_DIR}/../lib")
+        set(XRT_LIB_DIR "${XRT_INCLUDE_DIR}/../lib" CACHE PATH "Directory containing xrt_coreutil")
+        target_link_directories(test_gemma4_frontend PRIVATE "${XRT_LIB_DIR}")
         target_link_libraries(test_gemma4_frontend PRIVATE xrt_coreutil flm_xgrammar)
+        if(MSVC)
+            # xrt_coreutil.dll comes with the NPU driver, which a CI runner lacks; the
+            # test never calls into it, so load it only on first use.
+            target_link_libraries(test_gemma4_frontend PRIVATE delayimp)
+            target_link_options(test_gemma4_frontend PRIVATE "/DELAYLOAD:xrt_coreutil.dll")
+        endif()
         add_test(NAME test_gemma4_frontend COMMAND test_gemma4_frontend)
     else()
         # LOUD AT CONFIGURE, AND RED AT CTEST -- the convention every block
