@@ -296,7 +296,8 @@ ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const st
         std::array<unsigned, 3> parts{};
         for (size_t i = 0; i < parts.size(); ++i) {
             const auto [end, error] = std::from_chars(s.data(), s.data() + s.size(), parts[i]);
-            if (error != std::errc{}) return std::nullopt;
+            if (error == std::errc::result_out_of_range) parts[i] = std::numeric_limits<unsigned>::max();
+            else if (error != std::errc{}) return std::nullopt;
             s.remove_prefix(static_cast<size_t>(end - s.data()));
             if (i + 1 < parts.size()) {
                 if (s.empty() || s.front() != '.') return std::nullopt;
@@ -306,7 +307,8 @@ ModelDownloader::ModelStatus ModelDownloader::check_model_compatibility(const st
         return parts;
     };
     const auto local = triplet(flm_version), required = triplet(flm_min_version), runtime = triplet(__FLM_VERSION__);
-    if (!local || !required || !runtime) return ModelStatus::Incompatible;
+    if (!required || !runtime) return ModelStatus::Incompatible;
+    if (!local) return ModelStatus::Outdated; // an ordinary pull can repair the local config
     if (*local > *runtime) {
         if (!sub_process_mode) {
             header_print("WARNING", "Local model " + model_tag + " version: " + flm_version + " > " + __FLM_VERSION__);

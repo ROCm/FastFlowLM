@@ -6,6 +6,7 @@
 /// \note This class is used to manage the model list.
 #pragma once
 #include <mutex>
+#include <thread>
 #include "AutoModel/backend_contract.hpp"
 #include "AutoModel/context_length.hpp"
 #include "AutoModel/model_catalog_overlay.hpp"
@@ -564,7 +565,7 @@ class model_list {
         void choose_source(const std::string& tag, std::optional<bool> preferred) {
             const std::string new_tag = this->rectify_model_tag(tag);
             std::lock_guard lock(source_choice_mutex_);
-            if (preferred) this->source_choice_[new_tag] = *preferred;
+            if (preferred) this->source_choice_[new_tag] = {std::this_thread::get_id(), *preferred};
             else this->source_choice_.erase(new_tag);
         }
 
@@ -583,14 +584,15 @@ class model_list {
         std::string model_root_path;
         std::string platform_;
         /// \brief the source a pull has settled on, by tag
-        std::map<std::string, bool> source_choice_;
+        std::map<std::string, std::pair<std::thread::id, bool>> source_choice_;
         // Discovery runs outside the accelerator queue while a pull may pin a source.
         inline static std::mutex source_choice_mutex_;
         std::optional<bool> source_choice(const std::string& tag) const {
             std::lock_guard lock(source_choice_mutex_);
             const auto it = source_choice_.find(tag);
-            if (it == source_choice_.end()) return std::nullopt;
-            return it->second;
+            // A pull uses its selected source; a simultaneous inventory read describes the files on disk.
+            if (it == source_choice_.end() || it->second.first != std::this_thread::get_id()) return std::nullopt;
+            return it->second.second;
         }
         /// \brief the backend ids this build links
         /// \note Spelled as plain strings rather than reached through
