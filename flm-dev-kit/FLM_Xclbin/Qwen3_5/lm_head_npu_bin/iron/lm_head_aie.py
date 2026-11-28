@@ -25,19 +25,22 @@ class ModelArch(IntEnum):
     QWEN3_5_2B = auto()
     QWEN3_5_4B = auto()
     QWEN3_5_9B = auto()
+    QWEN3_5_4B_Q4K = auto()
 
 ModelArchNames: dict[ModelArch, str] = {
     ModelArch.QWEN3_5_0_8B: "QWEN3_5_0_8B",
     ModelArch.QWEN3_5_2B  : "QWEN3_5_2B",
     ModelArch.QWEN3_5_4B  : "QWEN3_5_4B",
-    ModelArch.QWEN3_5_9B  : "QWEN3_5_9B"
+    ModelArch.QWEN3_5_9B  : "QWEN3_5_9B",
+    ModelArch.QWEN3_5_4B_Q4K: "QWEN3_5_4B_Q4K"
 }
 
 DIM_TABLE = {
     ModelArch.QWEN3_5_0_8B: 1024,
     ModelArch.QWEN3_5_2B:   2048,
     ModelArch.QWEN3_5_4B:   2560,
-    ModelArch.QWEN3_5_9B:   4096
+    ModelArch.QWEN3_5_9B:   4096,
+    ModelArch.QWEN3_5_4B_Q4K: 2560
 }
 
 
@@ -52,7 +55,10 @@ def lm_head_top(model_name: str):
     
     MODEL_DIM: int = DIM_TABLE[ModelArch[model_name]]
 
-    W_BLOCK_SIZE = int(Q4NX_COL_BLOCK_SIZE * Q4NX_ROW_BLOCK_SIZE * 8.5 // 8 // 2)
+    # one 32x256 weight block in bf16 units: q8_0 = 8.5 bits per weight; the _Q4K model
+    # types carry the lm_head re-quantized to FLM q4_k, 4.625 bits per weight (4736 B)
+    BITS_PER_WEIGHT = 4.625 if model_name.endswith("_Q4K") else 8.5
+    W_BLOCK_SIZE = int(Q4NX_COL_BLOCK_SIZE * Q4NX_ROW_BLOCK_SIZE * BITS_PER_WEIGHT // 8 // 2)
 
     w_dtype = np.dtype[bfloat16]
     x_dtype = np.dtype[bfloat16]
@@ -103,7 +109,7 @@ def lm_head_top(model_name: str):
 if __name__ == '__main__':
     model_type = "QWEN3_5_0_8B"
     if len(sys.argv) != 2:
-        print("Usage: python flowArch_aie.py <model_type>, Options: QWEN3_5_0_8B, QWEN3_5_2B, QWEN3_5_4B, QWEN3_5_9B")
+        print("Usage: python flowArch_aie.py <model_type>, Options: QWEN3_5_0_8B, QWEN3_5_2B, QWEN3_5_4B, QWEN3_5_9B, QWEN3_5_4B_Q4K")
         print("Use default model type: QWEN3_5_0_8B")
     else:
         model_type = sys.argv[1]

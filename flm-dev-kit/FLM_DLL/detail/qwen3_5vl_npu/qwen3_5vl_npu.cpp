@@ -10,8 +10,15 @@
 #include <cstdio>
 #define DP_NOW() std::chrono::steady_clock::now()
 #define DP_US(a,b) std::chrono::duration<double,std::micro>((b)-(a)).count()
+#include <cstdlib>
+// profile-only knobs (QWEN35_DECODE_PROF builds): SPLIT runs the layers one call each, timed per layer kind;
+// LMX2 runs lm_head a second time (same hw_context, idempotent); WARM runs set_layer_rtp alone before the runlist
+static bool dp_env(const char* n){ const char* v = std::getenv(n); return v && v[0] == '1'; }
+static const bool DP_SPLIT = dp_env("QWEN35_DPROF_SPLIT"), DP_LMX2 = dp_env("QWEN35_DPROF_LMX2"), DP_WARM = dp_env("QWEN35_DPROF_WARM");
+static std::chrono::steady_clock::time_point dp_last_end{};
 #endif
 #include "qwen3_5vl_npu_detail.hpp"
+#include "lm_head_q4k.hpp"
 #include "metrices.hpp"
 #include "utils/error_measure.hpp"
 #include "npu_sequences/GateDeltaNetPrefillRuntimeSequence.hpp"
@@ -55,7 +62,25 @@ qwen3_5vl_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, qw
         this->layers_run = layer_app_manager->create_runlist();
     }
 
-    lm_head_app_manager = npu->register_xclbin(utils::path_join(config.exec_path, "xclbins", config.model_name, "lm_head.xclbin"));
+    // lm_head_q4k.xclbin reads the tied lm_head re-quantized to q4_k at load: 4.625 instead of 8.5 bits per weight, and
+    // decode's lm_head is bandwidth bound. Used when the model's xclbin folder has it; QWEN35_LMHEAD_Q8=1 keeps lm_head.xclbin.
+    {
+        const std::string xdir = utils::path_join(config.exec_path, "xclbins", config.model_name);
+        const std::string q4k_lm_head = utils::path_join(xdir, "lm_head_q4k.xclbin");
+        const char* keep_q8 = std::getenv("QWEN35_LMHEAD_Q8");
+        lm_head_q4k = std::filesystem::exists(q4k_lm_head) && !(keep_q8 && keep_q8[0] == '1');
+        // with qwen3_5_decode.switches (built against layer.xclbin and the q4_k lm_head, see qwen3_5vl_launch.hpp) the
+        // q4_k lm_head runs in the layer context: two warm switches per token instead of two context switches.
+        // Runlists need preemption off; QWEN35_DECODE_NO_SWITCH=1 keeps lm_head in its own context.
+        if (lm_head_q4k && !npu->is_preemption_enabled() &&
+            dll.ensure(layer_app_manager, utils::path_join(xdir, "qwen3_5_decode.switches"))) {
+            header_print("qwen3.5", "decode lm_head shares the layer hardware context (control-packet switches)");
+            lm_head_app_manager = layer_app_manager;
+        }
+        else {
+            lm_head_app_manager = npu->register_xclbin(lm_head_q4k ? q4k_lm_head : utils::path_join(xdir, "lm_head.xclbin"));
+        }
+    }
     this->lm_head = lm_head_app_manager->create_app();
 
     // allocate all buffers
@@ -99,7 +124,7 @@ qwen3_5vl_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, qw
     }
 
     x = layer.create_bo_buffer<bf16>(desc.D * 2);
-    lm_head_weights = layer.create_bo_buffer<u8>(desc.get_lm_head_w_size());
+    lm_head_weights = layer.create_bo_buffer<u8>(desc.get_lm_head_w_size(lm_head_q4k ? flm_q4k : flm_q80));
     logits = layer.create_bo_buffer<bf16>(desc.vocab_size_padded);
     logits_valid = buffer<bf16>(logits.data(), desc.vocab_size);
 
@@ -110,7 +135,7 @@ qwen3_5vl_npu::Impl::Impl(LM_Config config, npu_xclbin_manager *npu_instance, qw
     pctx = std::make_unique<qwen3_5vl_prefill_context>(npu, &desc, sequence.get(), config);
 
     lm_head = this->lm_head_app_manager->create_app();
-    this->sequence->gen_lm_head_seq(lm_head.seq(), desc.vocab_size_padded, desc.D);
+    this->sequence->gen_lm_head_seq(lm_head.seq(), desc.vocab_size_padded, desc.D, lm_head_q4k ? flm_q4k : flm_q80);
     this->lm_head_run = lm_head.create_run(this->logits, this->lm_head_weights, this->x);
 
     this->sequence->gen_layer_seq(this->linear_layer.seq(), 0, false, false);
@@ -155,8 +180,19 @@ void qwen3_5vl_npu::Impl::load_weights(Q4NX& q4nx){
     {
         buffer<u8> lm_head_w;
         q4nx.load_weights(lm_head_w, "lm_head.weight");
-
-        desc.reorder_cpy_lm_head(this->lm_head_weights.data(), lm_head_w, desc.D, flm_q80, 4);
+        if (lm_head_q4k) {
+            namespace lq = qwen3_5vl_lm_head_q4k;
+            const int64_t nb = lm_head_w.size() / lq::Q80_BLOCK;
+            buffer<u8> lm_head_q4(nb * lq::Q4K_BLOCK);
+            #pragma omp parallel for schedule(dynamic, 64)
+            for (int64_t b = 0; b < nb; b++) {
+                lq::q80_to_q4k(lm_head_w.data() + b * lq::Q80_BLOCK, lm_head_q4.data() + b * lq::Q4K_BLOCK);
+            }
+            desc.reorder_cpy_lm_head(this->lm_head_weights.data(), lm_head_q4, desc.D, flm_q4k, 4);
+        }
+        else {
+            desc.reorder_cpy_lm_head(this->lm_head_weights.data(), lm_head_w, desc.D, flm_q80, 4);
+        }
         this->lm_head_weights.sync_to_device();
     }
 
@@ -211,6 +247,33 @@ void qwen3_5vl_npu::Impl::set_context_length(int L, int new_general_token_idx){
     this->_set_rope_rms_weights(new_general_token_idx);
 }
 
+void qwen3_5vl_npu::Impl::lm_head_start(){
+#if !defined(FLM_USE_HRX)
+    if (dll.ready) {
+        // lm_head's arguments never change: the window is built once and executed every token
+        if (!this->lm_head_window) {
+            std::vector<qwen3_5vl_launch::hop> hops(1);
+            hops[0].to = "layer_then_lm";
+            hops[0].runs.push_back(this->lm_head.create_run(this->logits, this->lm_head_weights, this->x));
+            this->lm_head_window = dll.build(layer_app_manager, hops, "lm_then_layer");
+        }
+        this->lm_head_window.execute();
+        return;
+    }
+#endif
+    this->lm_head_run.start();
+}
+
+void qwen3_5vl_npu::Impl::lm_head_wait(){
+#if !defined(FLM_USE_HRX)
+    if (dll.ready) {
+        flm::npu::wait_for_completion(this->lm_head_window, "lm_head_window");
+        return;
+    }
+#endif
+    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+}
+
 buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 #ifdef QWEN35_DECODE_PROF
     auto t0 = DP_NOW();
@@ -220,6 +283,32 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 
 #ifdef QWEN35_DECODE_PROF
     auto t1 = DP_NOW();
+    // gap: host time between the previous forward's return and this call (sampling, detok, framework)
+    const double dp_gap = dp_last_end.time_since_epoch().count() ? DP_US(dp_last_end, t0) : 0.0;
+    double dp_warm = 0, dp_k[4] = {0, 0, 0, 0};   // set_layer_rtp, first linear, linear (sum), attn (sum)
+    if (DP_WARM) {
+        set_layer_rtp();
+        dp_warm = DP_US(t1, DP_NOW());
+        t1 = DP_NOW();
+    }
+    if (DP_SPLIT) {
+        auto a = DP_NOW();
+        set_layer_rtp();
+        auto b = DP_NOW(); dp_k[0] += DP_US(a, b); a = b;
+        for (uint32_t i = 0; i < desc.num_hidden_layers; i++){
+            int k;
+            if (is_attn_layer(i)){
+                this->layer(this->x, this->proj_weights[i], this->rms_weights[i], this->rope_rms_weights[i], this->kv_caches[i]); k = 3;
+            }
+            else if (is_first_linear_layer(i)) {
+                this->first_linear_layer(this->x, this->proj_weights[i], this->rms_weights[i], this->rope_rms_weights[i], this->kv_caches[i]); k = 1;
+            }
+            else {
+                this->linear_layer(this->x, this->proj_weights[i], this->rms_weights[i], this->rope_rms_weights[i], this->kv_caches[i]); k = 2;
+            }
+            b = DP_NOW(); dp_k[k] += DP_US(a, b); a = b;
+        }
+    } else
 #endif
     if (!this->npu->is_preemption_enabled()){
         this->layers_run.execute();
@@ -244,7 +333,7 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
     auto t2 = DP_NOW();
 #endif
     this->x.sync_to_device();
-    this->lm_head_run.start();
+    this->lm_head_start();
 #ifdef QWEN35_DECODE_PROF
     auto t3 = DP_NOW();
 #endif
@@ -252,7 +341,7 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 #ifdef QWEN35_DECODE_PROF
     auto t4 = DP_NOW();
 #endif
-    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+    this->lm_head_wait();
 #ifdef QWEN35_DECODE_PROF
     auto t5 = DP_NOW();
 #endif
@@ -260,6 +349,15 @@ buffer<bf16> qwen3_5vl_npu::Impl::forward(int ids){
 #ifdef QWEN35_DECODE_PROF
     auto t6 = DP_NOW();
     fprintf(stderr, "DECPROF embed %.0f layers %.0f xsync+lmstart %.0f setctx(host) %.0f lm_wait %.0f logits_sync %.0f total %.0f us\n", DP_US(t0,t1), DP_US(t1,t2), DP_US(t2,t3), DP_US(t3,t4), DP_US(t4,t5), DP_US(t5,t6), DP_US(t0,t6));
+    double dp_lm2 = 0;
+    if (DP_LMX2) {
+        auto a = DP_NOW();
+        this->lm_head_start();
+        this->lm_head_wait();
+        dp_lm2 = DP_US(a, DP_NOW());
+    }
+    fprintf(stderr, "DECPROF2 gap %.0f warm_rtp %.0f rtp %.0f lin1 %.0f lin %.0f attn %.0f lm2 %.0f us\n", dp_gap, dp_warm, dp_k[0], dp_k[1], dp_k[2], dp_k[3], dp_lm2);
+    dp_last_end = DP_NOW();
 #endif
     return this->logits_valid;
 }
@@ -292,8 +390,8 @@ buffer<bf16> qwen3_5vl_npu::Impl::_prefill_with_mv(std::vector<int>& ids, void* 
         this->set_context_length(this->current_context_length + 1, this->general_token_idx + 1);
         std::cout << "Token " << i << " done!" << std::endl;
     }
-    this->lm_head_run.start();
-    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+    this->lm_head_start();
+    this->lm_head_wait();
     this->logits.sync_from_device();
 
     utils::print_matrix(logits_valid, desc.vocab_size);
@@ -464,8 +562,8 @@ buffer<bf16> qwen3_5vl_npu::Impl::get_v_cache(int layer_idx, int idx){
 buffer<bf16> qwen3_5vl_npu::Impl::get_logits(buffer<bf16>& predict){
     memcpy(this->x.data(), predict.data(), desc.D * sizeof(bf16));
     this->x.sync_to_device();
-    this->lm_head_run.start();
-    flm::npu::wait_for_completion(this->lm_head_run, "lm_head_run");
+    this->lm_head_start();
+    this->lm_head_wait();
     this->logits.sync_from_device();
     return this->logits_valid;
 }
@@ -664,12 +762,14 @@ qwen3_5vl_npu::qwen3_5vl_npu(LM_Config config, npu_xclbin_manager *npu_instance,
 }
 
 buffer<bf16> qwen3_5vl_npu::forward(int ids){
+    // the decode lm_head window is a warm switch too (qwen3_5vl_launch.hpp)
+    qwen3_5vl_array_lock array(this->_impl->dll.ready);
     return this->_impl->forward(ids);
 }
 
 buffer<bf16> qwen3_5vl_npu::prefill(std::vector<int>& ids, void* payload){
     // warm switches need the array to themselves from the first layer to the last (qwen3_5vl_launch.hpp)
-    qwen3_5vl_array_lock array((this->_impl->pctx && this->_impl->pctx->ll.ready) ||
+    qwen3_5vl_array_lock array(this->_impl->dll.ready || (this->_impl->pctx && this->_impl->pctx->ll.ready) ||
                                (this->_impl->qwen3_5vl_image_encoder && this->_impl->qwen3_5vl_image_encoder->vll.ready));
     try {
         buffer<bf16> result = this->_impl->prefill(ids, payload);
