@@ -7,6 +7,7 @@
 
 #include "AutoModel/automodel.hpp"
 #include "AutoModel/context_length.hpp"
+#include "tokenizer/special_token_ids.hpp"
 #include "modules/top_k.hpp"
 #include "chat/chat_continue.hpp"
 #include "npu_utils/npu_utils.hpp"
@@ -151,7 +152,7 @@ nlohmann::json AutoModel::_shared_setup_tokenizer(std::string model_path) {
             exit(1);
         }
         else {
-            this->bos_token_id = tokenizer_config["bos_token_id"].get<int>();
+            this->bos_token_id = this->_checked_bos_token_id(tokenizer_config);
         }
     }
     else {
@@ -180,6 +181,19 @@ nlohmann::json AutoModel::_shared_setup_tokenizer(std::string model_path) {
     this->extra_context["user_system_prompt"] = this->user_system_prompt;
     this->_detect_chat_format(tokenizer_config["chat_template"].get<std::string>());
     return tokenizer_config;
+}
+
+int AutoModel::_checked_bos_token_id(const nlohmann::json& tokenizer_config) {
+    const int configured = tokenizer_config["bos_token_id"].get<int>();
+    if (!this->tokenizer) return configured;
+    std::string warning;
+    const int id = special_token_ids::checked_bos_id(
+        tokenizer_config["bos_token"], configured,
+        [this](const std::string& text) { return this->tokenizer->token_to_id(text); }, &warning);
+    if (!warning.empty()) {
+        header_print("WARNING", warning);
+    }
+    return id;
 }
 
 void AutoModel::_detect_chat_format(const std::string& template_src) {

@@ -1,0 +1,25 @@
+{
+ "version": "1.0",
+ "truncation": null,
+ "padding": null,
+ "added_tokens": [
+  {"id": 15, "content": "<|startoftext|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
+  {"id": 16, "content": "<|return|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true}
+ ],
+ "normalizer": null,
+ "pre_tokenizer": {"type": "ByteLevel", "add_prefix_space": false, "trim_offsets": true, "use_regex": true},
+ "post_processor": null,
+ "decoder": {"type": "ByteLevel", "add_prefix_space": true, "trim_offsets": true, "use_regex": true},
+ "model": {
+  "type": "BPE",
+  "dropout": null,
+  "unk_token": null,
+  "continuing_subword_prefix": null,
+  "end_of_word_suffix": null,
+  "fuse_unk": false,
+  "byte_fallback": false,
+  "ignore_merges": false,
+  "vocab": {"!": 0, "\"": 1, "#": 2, "$": 3, "%": 4, "Ġ": 5, "m": 6, "k": 7, "d": 8, "i": 9, "r": 10, "s": 11, "h": 12, ".": 13, "Ċ": 14},
+  "merges": []
+ }
+}
