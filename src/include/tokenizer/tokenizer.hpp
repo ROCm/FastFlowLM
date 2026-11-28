@@ -74,6 +74,10 @@ public:
     ///        that are not byte-level, and for ids outside the vocabulary.
     size_t token_byte_length(int id);
 
+    /// \brief The id of a token text (vocabulary or added token), or -1 if the tokenizer has no such token.
+    /// \note  Inline so the test binaries that stub the other methods still link.
+    int token_to_id(const std::string& token) { return tokenizer ? tokenizer->TokenToId(token) : -1; }
+
 private:
     std::once_flag byte_len_once_;
     std::vector<uint8_t> byte_len_;           //!< per id, built on first use

@@ -271,6 +271,9 @@ protected:
 	bool _shared_is_same_model(const std::string& model_path, const json& model_info) const;
 	void _shared_initialize_legacy_npu(bool enable_preemption);
 	nlohmann::json _shared_setup_tokenizer(std::string model_path);
+	/// \brief tokenizer_config.json's bos_token_id, or the tokenizer's id of bos_token when the two disagree (with a warning)
+	/// \note The tokenizer must be set up; the config must name a bos_token and state an integer bos_token_id
+	int _checked_bos_token_id(const nlohmann::json& tokenizer_config);
 	/// \brief Detect chat_format from the template; the tokenizer and bos id must be set up
 	void _detect_chat_format(const std::string& template_src);
 

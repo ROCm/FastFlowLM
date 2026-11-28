@@ -53,7 +53,7 @@ void Qwen3_5_Omni::setup_tokenizer(std::string model_path) {
         this->has_bos_token ? tokenizer_config["bos_token"] : "",
         tokenizer_config["eos_token"]);
 
-    this->bos_token_id = this->has_bos_token ? tokenizer_config["bos_token_id"].get<int>() : -1;
+    this->bos_token_id = this->has_bos_token ? this->_checked_bos_token_id(tokenizer_config) : -1;
     this->eos_token = tokenizer_config["eos_token"].get<std::string>();
     this->eos_token_ids.clear();
     for (auto& token : tokenizer_config["eos_token_id"]) {
